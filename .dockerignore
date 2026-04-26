@@ -1,0 +1,17 @@
+node_modules
+.next
+out
+dist
+coverage
+playwright-report
+test-results
+data
+backups
+*.db
+*.sqlite
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+README.md

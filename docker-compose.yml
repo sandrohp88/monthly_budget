@@ -1,0 +1,62 @@
+services:
+  app:
+    build: .
+    image: budget-app:latest
+    container_name: budget-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=file:/data/budget.db
+      - NODE_ENV=production
+      - HOSTNAME=0.0.0.0
+      - PORT=3000
+    volumes:
+      - ./data:/data
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: budget-caddy
+    restart: unless-stopped
+    depends_on:
+      - app
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  backup:
+    image: alpine:3.20
+    container_name: budget-backup
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ./data:/data:ro
+      - ./backups:/backups
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache sqlite tzdata > /dev/null
+        cp -n /usr/share/zoneinfo/$$TZ /etc/localtime || true
+        echo "$$TZ" > /etc/timezone
+        echo "0 3 * * * /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1" > /etc/crontabs/root
+        crond -f -l 8
+
+volumes:
+  caddy_data:
+  caddy_config:

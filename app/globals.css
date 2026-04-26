@@ -1,0 +1,167 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================================
+   FINANCE_OS terminal aesthetic — dark mint/black palette, monospace, sharp
+   borders, subtle CRT background. All shadcn-mapped tokens are forwarded
+   below so existing components pick up the new look automatically.
+   ============================================================================ */
+
+@theme {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  --color-danger: hsl(var(--destructive));
+
+  --color-mint: var(--mint);
+  --color-mint-bright: var(--mint-bright);
+  --color-mint-dim: var(--mint-dim);
+  --color-amber: var(--amber);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 1px);
+  --radius-sm: calc(var(--radius) - 2px);
+
+  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, 'Cascadia Mono', monospace;
+}
+
+@layer base {
+  :root {
+    /* Raw FINANCE_OS palette */
+    --bg-0: #0a0e0c;
+    --bg-1: #0f1411;
+    --bg-2: #131a16;
+    --bg-3: #182219;
+    --bg-card: #0d1310;
+
+    --mint: #4ade80;
+    --mint-bright: #5dffa0;
+    --mint-dim: #2d8a4f;
+    --mint-glow: rgba(93, 255, 160, 0.15);
+
+    --amber: #fbbf24;
+    --red: #ef4444;
+    --red-glow: rgba(239, 68, 68, 0.15);
+
+    --text-0: #e8f5ec;
+    --text-1: #b8c5bc;
+    --text-2: #6b7a70;
+    --text-3: #4a5650;
+
+    --border-raw: #1f2a22;
+    --border-2: #2a3a2e;
+
+    /* shadcn token bridge — every token maps to the terminal palette so
+       existing components inherit the look without per-component changes */
+    --background: 134 16% 5%;          /* bg-0 */
+    --foreground: 138 36% 93%;         /* text-0 */
+    --card: 134 18% 6%;                /* bg-card */
+    --card-foreground: 138 36% 93%;
+    --popover: 134 16% 7%;             /* bg-1 */
+    --popover-foreground: 138 36% 93%;
+    --primary: 142 71% 58%;            /* mint */
+    --primary-foreground: 134 16% 5%;  /* bg-0 */
+    --secondary: 134 14% 8%;           /* bg-2 */
+    --secondary-foreground: 138 18% 75%;
+    --muted: 134 14% 8%;
+    --muted-foreground: 137 8% 45%;    /* text-2 */
+    --accent: 134 14% 11%;             /* bg-3 */
+    --accent-foreground: 138 36% 93%;
+    --destructive: 0 84% 60%;          /* red */
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 71% 58%;
+    --warning: 43 96% 56%;             /* amber */
+    --border: 134 14% 14%;             /* border-raw */
+    --input: 134 14% 14%;
+    --ring: 142 51% 36%;               /* mint-dim */
+    --radius: 3px;
+  }
+
+  /* No light theme — terminal is dark only. Force .dark to inherit too. */
+  .dark { color-scheme: dark; }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html, body {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    color: var(--text-0);
+  }
+
+  body {
+    background-color: var(--bg-0);
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(74, 222, 128, 0.06), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 100% 100%, rgba(74, 222, 128, 0.03), transparent 60%);
+    background-attachment: fixed;
+  }
+
+  /* Subtle CRT scanline grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(74, 222, 128, 0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(74, 222, 128, 0.015) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Headings stay tighter and bolder for the terminal feel */
+  h1, h2, h3 { letter-spacing: -0.5px; }
+
+  /* Numeric tabular-nums for any element marked with `tabular` */
+  .tabular { font-variant-numeric: tabular-nums; }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-0); }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-2);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--mint-dim); }
+
+  /* Caret/selection mint */
+  ::selection { background: var(--mint-glow); color: var(--text-0); }
+
+  input, textarea, select { font-family: inherit; }
+
+  @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+  .blink { animation: blink 1.2s infinite; }
+
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .fade-in { animation: fade-in 0.3s ease both; }
+}
+
+/* App container z-index above the scanline overlay */
+[data-app-shell] { position: relative; z-index: 1; }

@@ -1,0 +1,64 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# next.js
+.next
+out
+.swc
+
+# production
+build
+dist
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# testing
+coverage
+playwright-report
+test-results
+
+# env
+.env
+.env.local
+.env.*.local
+
+# sqlite data and backups
+data
+backups
+*.db
+*.sqlite
+*.sqlite-*
+
+# misc
+.DS_Store
+*.pem
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea
+
+# claude code settings
+.claude/
+
+# local-only deploy automation (contains hard-coded server credentials)
+scripts/deploy.py
+scripts/redeploy.py
+scripts/deploy_fix.py
+scripts/probe_server.py
+scripts/probe_udm.py
+scripts/verify_deploy.py
+scripts/final_check.py
+scripts/inner_check.py
+scripts/cleanup_server.py
+scripts/diag.py
+scripts/check_migrations.py
+scripts/fix_migration.py
+scripts/get_logs.py
+scripts/_db_fix.py
+
+# server-issued local CA cert
+caddy-root.crt

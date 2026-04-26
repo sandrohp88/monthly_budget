@@ -1,0 +1,281 @@
+import { describe, expect, it } from "vitest";
+import {
+  computeProjection,
+  describeEvents,
+  findWorstDay,
+  __test__,
+  type Bill,
+  type ProjectionInput,
+} from "./projection";
+
+const baseInput = (): ProjectionInput => ({
+  startingBalanceCents: 100_00,
+  startDate: "2025-01-01",
+  endDate: "2025-12-31",
+  paychecks: [],
+  bills: [],
+  extras: [],
+});
+
+describe("projection engine", () => {
+  it("empty inputs carry the starting balance forward unchanged", () => {
+    const input: ProjectionInput = {
+      ...baseInput(),
+      startDate: "2025-03-01",
+      endDate: "2025-03-05",
+      startingBalanceCents: 12345,
+    };
+    const rows = computeProjection(input);
+    expect(rows).toHaveLength(5);
+    for (const r of rows) {
+      expect(r.incomeCents).toBe(0);
+      expect(r.expenseCents).toBe(0);
+      expect(r.balanceCents).toBe(12345);
+      expect(r.events).toHaveLength(0);
+    }
+  });
+
+  it("monthly bill on day 15 fires every month within the window, never twice", () => {
+    const bill: Bill = {
+      id: "b1",
+      name: "Rent",
+      amountCents: 100_00,
+      frequency: "monthly",
+      dueDay: 15,
+    };
+    const rows = computeProjection({ ...baseInput(), bills: [bill] });
+    const billDays = rows.filter((r) => r.events.some((e) => e.label === "Rent"));
+    expect(billDays).toHaveLength(12);
+    const months = new Set(billDays.map((r) => r.date.slice(0, 7)));
+    expect(months.size).toBe(12);
+    for (const r of billDays) {
+      expect(r.date.endsWith("-15")).toBe(true);
+      expect(r.events.filter((e) => e.label === "Rent")).toHaveLength(1);
+    }
+  });
+
+  it("annual bill on Jul 15 fires only in July across multi-year windows", () => {
+    const bill: Bill = {
+      id: "b2",
+      name: "Domain renewal",
+      amountCents: 20_00,
+      frequency: "annual",
+      dueDay: 15,
+      dueMonth: 7,
+    };
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2024-01-01",
+      endDate: "2026-12-31",
+      bills: [bill],
+    });
+    const hits = rows.filter((r) => r.events.some((e) => e.label === "Domain renewal"));
+    expect(hits.map((r) => r.date)).toEqual(["2024-07-15", "2025-07-15", "2026-07-15"]);
+  });
+
+  it("annual bill with dueDay 31 in Feb clamps to last day of February", () => {
+    const bill: Bill = {
+      id: "b3",
+      name: "Edge bill",
+      amountCents: 1_00,
+      frequency: "annual",
+      dueDay: 31,
+      dueMonth: 2,
+    };
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2023-01-01",
+      endDate: "2025-12-31",
+      bills: [bill],
+    });
+    const hits = rows.filter((r) => r.events.some((e) => e.label === "Edge bill"));
+    expect(hits.map((r) => r.date)).toEqual([
+      "2023-02-28",
+      "2024-02-29",
+      "2025-02-28",
+    ]);
+  });
+
+  it("monthly bill with dueDay 31 clamps in 30-day months and February", () => {
+    const bill: Bill = {
+      id: "b4",
+      name: "Last day",
+      amountCents: 1_00,
+      frequency: "monthly",
+      dueDay: 31,
+    };
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2024-01-01",
+      endDate: "2024-12-31",
+      bills: [bill],
+    });
+    const hits = rows.filter((r) => r.events.some((e) => e.label === "Last day"));
+    expect(hits.map((r) => r.date)).toEqual([
+      "2024-01-31",
+      "2024-02-29",
+      "2024-03-31",
+      "2024-04-30",
+      "2024-05-31",
+      "2024-06-30",
+      "2024-07-31",
+      "2024-08-31",
+      "2024-09-30",
+      "2024-10-31",
+      "2024-11-30",
+      "2024-12-31",
+    ]);
+  });
+
+  it("paycheck and bill on the same day: paycheck applied first, balance reflects both", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-06-01",
+      endDate: "2025-06-02",
+      startingBalanceCents: 0,
+      paychecks: [{ payDate: "2025-06-01", amountCents: 1000_00 }],
+      bills: [
+        {
+          id: "b",
+          name: "Rent",
+          amountCents: 700_00,
+          frequency: "monthly",
+          dueDay: 1,
+        },
+      ],
+    });
+    const day = rows[0]!;
+    expect(day.events.map((e) => e.kind)).toEqual(["paycheck", "bill"]);
+    expect(day.incomeCents).toBe(1000_00);
+    expect(day.expenseCents).toBe(700_00);
+    expect(day.balanceCents).toBe(300_00);
+  });
+
+  it("negative balances are produced correctly", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-01-01",
+      endDate: "2025-01-03",
+      startingBalanceCents: 50_00,
+      bills: [],
+      extras: [{ date: "2025-01-02", description: "Surprise", amountCents: 200_00 }],
+    });
+    expect(rows[0]!.balanceCents).toBe(50_00);
+    expect(rows[1]!.balanceCents).toBe(-150_00);
+    expect(rows[2]!.balanceCents).toBe(-150_00);
+  });
+
+  it("extras hit on the right date and combine with bills", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-04-10",
+      endDate: "2025-04-12",
+      startingBalanceCents: 1000_00,
+      bills: [
+        {
+          id: "b",
+          name: "Internet",
+          amountCents: 60_00,
+          frequency: "monthly",
+          dueDay: 11,
+        },
+      ],
+      extras: [{ date: "2025-04-11", description: "Concert tickets", amountCents: 90_00 }],
+    });
+    const day = rows[1]!;
+    expect(day.date).toBe("2025-04-11");
+    expect(day.events).toHaveLength(2);
+    expect(day.events.map((e) => e.kind)).toEqual(["bill", "extra"]);
+    expect(day.expenseCents).toBe(150_00);
+    expect(day.balanceCents).toBe(850_00);
+    expect(describeEvents(day.events)).toBe("Internet + Concert tickets");
+  });
+
+  it("12-month window produces exactly the right number of daily rows", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-01-01",
+      endDate: "2025-12-31",
+    });
+    expect(rows).toHaveLength(365);
+
+    const leapRows = computeProjection({
+      ...baseInput(),
+      startDate: "2024-01-01",
+      endDate: "2024-12-31",
+    });
+    expect(leapRows).toHaveLength(366);
+
+    const dates = new Set(rows.map((r) => r.date));
+    expect(dates.size).toBe(365);
+    expect(rows[0]!.date).toBe("2025-01-01");
+    expect(rows[rows.length - 1]!.date).toBe("2025-12-31");
+  });
+
+  it("DST boundaries do not affect day count or day labels", () => {
+    // US DST spring-forward: 2025-03-09; fall-back: 2025-11-02
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-03-08",
+      endDate: "2025-03-10",
+    });
+    expect(rows.map((r) => r.date)).toEqual(["2025-03-08", "2025-03-09", "2025-03-10"]);
+
+    const rows2 = computeProjection({
+      ...baseInput(),
+      startDate: "2025-11-01",
+      endDate: "2025-11-03",
+    });
+    expect(rows2.map((r) => r.date)).toEqual(["2025-11-01", "2025-11-02", "2025-11-03"]);
+
+    // Year-long span across both DST boundaries still yields 365 rows
+    const fullYear = computeProjection({
+      ...baseInput(),
+      startDate: "2025-01-01",
+      endDate: "2025-12-31",
+    });
+    expect(fullYear).toHaveLength(365);
+  });
+
+  it("paycheck event uses provided note as label, falling back to 'Paycheck'", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-05-01",
+      endDate: "2025-05-02",
+      startingBalanceCents: 0,
+      paychecks: [
+        { payDate: "2025-05-01", amountCents: 500_00, note: "Bonus" },
+        { payDate: "2025-05-02", amountCents: 500_00, note: "" },
+      ],
+    });
+    expect(rows[0]!.events[0]!.label).toBe("Bonus");
+    expect(rows[1]!.events[0]!.label).toBe("Paycheck");
+  });
+
+  it("findWorstDay returns the row with the lowest balance", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-01-01",
+      endDate: "2025-01-04",
+      startingBalanceCents: 100_00,
+      extras: [
+        { date: "2025-01-02", description: "x", amountCents: 50_00 },
+        { date: "2025-01-03", description: "y", amountCents: 100_00 },
+        { date: "2025-01-04", description: "z", amountCents: -60_00 }, // refund-like
+      ],
+    });
+    const worst = findWorstDay(rows);
+    expect(worst?.date).toBe("2025-01-03");
+    expect(worst?.balanceCents).toBe(-50_00);
+  });
+
+  it("internal helpers handle clamping and parsing edge cases", () => {
+    expect(__test__.daysInMonth(2024, 2)).toBe(29);
+    expect(__test__.daysInMonth(2025, 2)).toBe(28);
+    expect(__test__.daysInMonth(2025, 4)).toBe(30);
+    expect(__test__.clampedBillDate(2025, 2, 31)).toBe("2025-02-28");
+    expect(__test__.clampedBillDate(2024, 2, 31)).toBe("2024-02-29");
+    expect(__test__.formatIsoDate(__test__.parseIsoDate("2025-07-04"))).toBe("2025-07-04");
+    expect(() => __test__.parseIsoDate("not-a-date")).toThrow();
+  });
+});

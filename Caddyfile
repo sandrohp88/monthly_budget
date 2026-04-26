@@ -1,0 +1,18 @@
+# Caddy serves https://$DOMAIN (default: budget.local) with its internal CA.
+# For LAN hostnames (.local, .home, .lan, etc.) tls internal is required so
+# Caddy doesn't attempt an ACME challenge that can never succeed.
+# To use Let's Encrypt instead, replace "tls internal" with your email:
+#   tls you@example.com
+# and point a public DNS A record at this server.
+
+{$DOMAIN:budget.local} {
+	tls internal
+	encode zstd gzip
+	reverse_proxy app:3000
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+	}
+}
