@@ -7,7 +7,11 @@ import {
   createPlaidItem,
   upsertPlaidAccount,
   listPlaidAccountsByItem,
+  getCreditCardByPlaidAccountId,
+  createCreditCard,
 } from "@/lib/repos";
+import { syncCreditCardLiabilitiesForItem } from "@/lib/plaid-sync";
+import { log } from "@/lib/log";
 
 export async function POST(req: Request) {
   const auth = await ensureUser();
@@ -55,6 +59,36 @@ export async function POST(req: Request) {
         balanceCents: balance !== null ? Math.round(balance * 100) : null,
         updatedAt: Date.now(),
       });
+    }
+
+    // Auto-create a credit_cards row for each credit-type account that isn't
+    // already linked to one. Idempotent on re-link (the unique index on
+    // plaid_account_id + the existence check both protect against dupes).
+    // Cycle days here are placeholders — overwritten by the liabilities sync
+    // call below (or the next /api/plaid/sync run if Plaid hiccups).
+    for (const acct of accountsRes.data.accounts) {
+      if (acct.type !== "credit") continue;
+      const existing = await getCreditCardByPlaidAccountId(auth.userId, acct.account_id);
+      if (existing) continue;
+      const displayName = acct.mask ? `${acct.name} ****${acct.mask}` : acct.name;
+      await createCreditCard(auth.userId, {
+        name: displayName,
+        statementDay: 1,
+        dueDay: 21,
+        autoPay: false,
+        isActive: true,
+        plaidAccountId: acct.account_id,
+      });
+    }
+
+    // Best-effort: pull liabilities so the auto-created cards have real cycle
+    // days + most recent statement before the user sees the page. Non-fatal —
+    // the next manual sync will catch up if the bank doesn't support it or
+    // Plaid times out here.
+    try {
+      await syncCreditCardLiabilitiesForItem(auth.userId, item.id, accessToken);
+    } catch (err) {
+      log.warn(`exchange: liabilities pre-fetch skipped: ${(err as Error).message}`);
     }
 
     const accounts = await listPlaidAccountsByItem(item.id);
