@@ -40,12 +40,16 @@ function monthlyEquivalent(b: BillRow): number {
   return b.frequency === "monthly" ? b.amountCents : Math.round(b.amountCents / 12);
 }
 
+export type BillCardOption = { id: string; name: string; isActive: boolean };
+
 export function BillsClient({
   initialBills,
   categories,
+  cards,
 }: {
   initialBills: BillRow[];
   categories: ReadonlyArray<string>;
+  cards: ReadonlyArray<BillCardOption>;
 }) {
   const [bills, setBills] = React.useState<BillRow[]>(initialBills);
   const [categoriesState, setCategoriesState] = React.useState<string[]>(() => [...categories]);
@@ -80,6 +84,12 @@ export function BillsClient({
   const archivedCount = bills.length - activeCount;
 
   const allCategories = Array.from(new Set(bills.map((b) => b.category.toUpperCase()))).sort();
+
+  // Lookup card name by id for the in-row "VIA …" pill
+  const cardById = React.useMemo(
+    () => new Map(cards.map((c) => [c.id, c])),
+    [cards],
+  );
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -257,6 +267,19 @@ export function BillsClient({
                         ARCHIVED
                       </Badge>
                     ) : null}
+                    {b.paidViaCardId ? (
+                      <Badge
+                        variant={cardById.get(b.paidViaCardId)?.isActive ? "secondary" : "muted"}
+                        className="ml-2"
+                        title={
+                          cardById.get(b.paidViaCardId)?.isActive
+                            ? "Paid via this card — skipped from cash projection"
+                            : "Linked card is archived — falling back to cash"
+                        }
+                      >
+                        VIA {cardById.get(b.paidViaCardId)?.name?.toUpperCase() ?? "UNKNOWN"}
+                      </Badge>
+                    ) : null}
                   </TableCell>
                   <TableCell className="text-[var(--text-2)]">{b.category}</TableCell>
                   <TableCell className="text-right">
@@ -307,7 +330,9 @@ export function BillsClient({
             <DialogTitle>ADD BILL</DialogTitle>
           </DialogHeader>
           <BillForm
-            categories={categoriesState} onCategoryAdded={(c) => setCategoriesState((prev) => [...prev, c])}
+            categories={categoriesState}
+            cards={cards}
+            onCategoryAdded={(c) => setCategoriesState((prev) => [...prev, c])}
             onSubmit={create}
             onCancel={() => setCreateOpen(false)}
             submitting={submitting}
@@ -326,7 +351,9 @@ export function BillsClient({
               <SheetBody>
                 <BillForm
                   initial={editing}
-                  categories={categoriesState} onCategoryAdded={(c) => setCategoriesState((prev) => [...prev, c])}
+                  categories={categoriesState}
+                  cards={cards}
+                  onCategoryAdded={(c) => setCategoriesState((prev) => [...prev, c])}
                   onSubmit={update}
                   onCancel={() => setEditing(null)}
                   submitting={submitting}

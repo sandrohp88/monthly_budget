@@ -24,6 +24,7 @@ import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import {
   CardWithStatements,
+  LinkedBillEstimate,
   currentStatementOf,
   daysBetween,
   dueDateFromStatement,
@@ -41,8 +42,24 @@ import type {
 
 type StatementWithCard = CreditCardStatementRow & { cardName: string; cardId: string };
 
-export function CreditCardsClient({ initialCards }: { initialCards: CardWithStatements[] }) {
-  const [cards, setCards] = React.useState<CardWithStatements[]>(initialCards);
+export type CycleEstimate = {
+  window: { start: string; end: string };
+  charges: LinkedBillEstimate[];
+  totalCents: number;
+};
+export type CardWithStatementsAndEstimate = CardWithStatements & {
+  estimate: CycleEstimate | null;
+  linkedBillCount: number;
+};
+
+export function CreditCardsClient({
+  initialCards,
+}: {
+  initialCards: CardWithStatementsAndEstimate[];
+}) {
+  // No setter — the refresh handler does a full reload so the server can
+  // recompute the cycle estimate from fresh bills + statements together.
+  const cards = initialCards;
   const [createCardOpen, setCreateCardOpen] = React.useState(false);
   const [editCard, setEditCard] = React.useState<CreditCardRow | null>(null);
   const [statementCard, setStatementCard] = React.useState<CreditCardRow | null>(null);
@@ -61,13 +78,20 @@ export function CreditCardsClient({ initialCards }: { initialCards: CardWithStat
   const nextDue = [...allOpenStatements].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
   const overdue = allOpenStatements.filter((s) => s.dueDate < today);
 
+  // Sum of expected cycle charges across all active cards
+  const totalExpectedThisCycle = cards
+    .filter((c) => c.card.isActive)
+    .reduce((sum, c) => sum + (c.estimate?.totalCents ?? 0), 0);
+  const totalLinkedBills = cards
+    .filter((c) => c.card.isActive)
+    .reduce((sum, c) => sum + c.linkedBillCount, 0);
+
   // ── refresh after writes ────────────────────────────────────────────────
   const refresh = async () => {
-    const res = await fetch("/api/credit-cards?archived=1");
-    if (res.ok) {
-      const json = await res.json();
-      setCards(json.cards as CardWithStatements[]);
-    }
+    // Server-side estimate isn't recomputed by the cards API alone, so the
+    // simplest correct refresh after a card/statement edit is a full reload.
+    // (The card API doesn't know about bills.)
+    window.location.reload();
   };
 
   // ── card CRUD handlers ──────────────────────────────────────────────────
@@ -95,7 +119,7 @@ export function CreditCardsClient({ initialCards }: { initialCards: CardWithStat
         }
       />
 
-      <TileGrid cols={4}>
+      <TileGrid cols="auto">
         <Tile
           label="ACTIVE CARDS"
           value={activeCards.length}
@@ -107,6 +131,21 @@ export function CreditCardsClient({ initialCards }: { initialCards: CardWithStat
           variant={totalDueCents > 0 ? (overdue.length > 0 ? "red" : "amber") : "mint"}
           delta={`${allOpenStatements.length} unpaid statement${allOpenStatements.length === 1 ? "" : "s"}`}
           badge={overdue.length > 0 ? <Badge variant="destructive">OVERDUE</Badge> : undefined}
+        />
+        <Tile
+          label="EXPECTED THIS CYCLE"
+          value={
+            totalExpectedThisCycle > 0 ? (
+              <Money cents={totalExpectedThisCycle} />
+            ) : (
+              <span className="text-[var(--text-2)] text-base">—</span>
+            )
+          }
+          delta={
+            totalLinkedBills > 0
+              ? `${totalLinkedBills} linked bill${totalLinkedBills === 1 ? "" : "s"}`
+              : "no bills linked yet"
+          }
         />
         <Tile
           label="NEXT PAYMENT"
@@ -152,11 +191,13 @@ export function CreditCardsClient({ initialCards }: { initialCards: CardWithStat
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {activeCards.map(({ card, statements }) => (
+          {activeCards.map(({ card, statements, estimate, linkedBillCount }) => (
             <CreditCardTile
               key={card.id}
               card={card}
               statements={statements}
+              estimate={estimate}
+              linkedBillCount={linkedBillCount}
               today={today}
               onAddStatement={() => setStatementCard(card)}
               onEdit={() => setEditCard(card)}
@@ -225,6 +266,8 @@ export function CreditCardsClient({ initialCards }: { initialCards: CardWithStat
 function CreditCardTile({
   card,
   statements,
+  estimate,
+  linkedBillCount,
   today,
   onAddStatement,
   onEdit,
@@ -233,6 +276,8 @@ function CreditCardTile({
 }: {
   card: CreditCardRow;
   statements: CreditCardStatementRow[];
+  estimate: CycleEstimate | null;
+  linkedBillCount: number;
   today: string;
   onAddStatement: () => void;
   onEdit: () => void;
@@ -402,6 +447,65 @@ function CreditCardTile({
           </>
         )}
       </div>
+
+      {/* expected charges this cycle (from linked bills) */}
+      {linkedBillCount > 0 && estimate ? (
+        <div className="mb-3 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3">
+          <div className="mb-1.5 flex items-center justify-between text-[9px] uppercase tracking-[0.18em] text-[var(--text-3)]">
+            <span>{`// EXPECTED THIS CYCLE`}</span>
+            <span className="text-[var(--text-2)]">
+              <DateLabel iso={estimate.window.start} format="short" />
+              {" – "}
+              <DateLabel iso={estimate.window.end} format="short" />
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between">
+            <span className="text-[20px] font-bold tabular text-[var(--text-0)]">
+              <Money cents={estimate.totalCents} />
+            </span>
+            <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+              {linkedBillCount} BILL{linkedBillCount === 1 ? "" : "S"} LINKED
+            </span>
+          </div>
+          {estimate.charges.length > 0 ? (
+            <details className="mt-2 text-[10px]">
+              <summary className="cursor-pointer text-[var(--text-3)] hover:text-[var(--text-1)] uppercase tracking-[0.12em]">
+                {`// BREAKDOWN (${estimate.charges.length})`}
+              </summary>
+              <table className="mt-1.5 w-full text-[10px] tabular">
+                <tbody>
+                  {estimate.charges
+                    .slice()
+                    .sort((a, b) => a.date.localeCompare(b.date))
+                    .map((c) => (
+                      <tr key={`${c.billId}-${c.date}`} className="border-b border-[var(--border-raw)] last:border-0">
+                        <td className="py-1 pr-2 text-[var(--text-2)] uppercase tracking-tight">
+                          <DateLabel iso={c.date} format="short" />
+                        </td>
+                        <td className="py-1 pr-2 text-[var(--text-1)] truncate max-w-[160px]">
+                          {c.name}
+                        </td>
+                        <td className="py-1 text-right tabular text-[var(--text-0)]">
+                          <Money cents={c.amountCents} />
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </details>
+          ) : (
+            <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+              No bill due-dates fall in this cycle window
+            </div>
+          )}
+          {current && isOpen ? (
+            <ActualVsEstimate
+              actualCents={current.statementBalanceCents}
+              estimatedCents={estimate.totalCents}
+            />
+          ) : null}
+        </div>
+      ) : null}
 
       {/* recent statement history */}
       {statements.length > 1 ? (
@@ -859,6 +963,36 @@ function StatementEditDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// Small inline diff between the real statement balance and the bill-derived
+// estimate. Useful sanity check — large positive deltas mean discretionary
+// spend on top of recurring bills; large negative deltas mean an expected
+// bill didn't post yet (or got paid via cash).
+function ActualVsEstimate({
+  actualCents,
+  estimatedCents,
+}: {
+  actualCents: number;
+  estimatedCents: number;
+}) {
+  if (estimatedCents === 0) return null;
+  const delta = actualCents - estimatedCents;
+  const tone =
+    Math.abs(delta) <= Math.max(500, estimatedCents * 0.05) // within $5 or 5%
+      ? "text-[var(--mint)]"
+      : delta > 0
+        ? "text-[var(--amber)]"
+        : "text-[var(--text-2)]";
+  return (
+    <div className="mt-2 flex items-center justify-between border-t border-[var(--border-raw)] pt-2 text-[10px] uppercase tracking-[0.12em]">
+      <span className="text-[var(--text-3)]">VS CURRENT STATEMENT</span>
+      <span className={cn("tabular", tone)}>
+        {delta >= 0 ? "+" : "−"}
+        <Money cents={Math.abs(delta)} />
+      </span>
+    </div>
   );
 }
 

@@ -76,6 +76,7 @@ app/
   (app)/                   ← authenticated pages, share AppShell layout
     layout.tsx             ← runs migrations, gates auth, wraps with AppShell
     page.tsx               ← dashboard
+    accounts/              ← linked-bank accounts (Plaid) + draft transaction review
     bills/
     credit-cards/
     extras/
@@ -85,6 +86,7 @@ app/
   api/                     ← REST endpoints, all server-only
     {entity}/route.ts      ← list (GET) + create (POST)
     {entity}/[id]/route.ts ← read/update/delete
+    plaid/                 ← link-token, exchange, items, accounts, sync, drafts (see §17)
   login/
   setup/
   layout.tsx               ← root: imports JetBrains Mono, applies dark class
@@ -93,10 +95,11 @@ app/
 components/
   ui/                      ← shadcn-style primitives (button, card, input, dialog, sheet, …)
   app-shell.tsx            ← topbar + sidebar wrapper
-  sidebar.tsx              ← nav with `g d/b/c/p/e/x/s` shortcuts
+  sidebar.tsx              ← nav with `g d/b/a/c/p/e/x/s` shortcuts
   projection-chart.tsx     ← Recharts area chart
   money.tsx, date-label.tsx, money-input.tsx
   category-dialog.tsx      ← shared "add new category" dialog (used in 2 places)
+  plaid-draft-approve-dialog.tsx ← approve a Plaid draft into a real expense
 
 lib/
   db/
@@ -111,6 +114,9 @@ lib/
   auth.ts                  ← NextAuth instance + requireUserId/requireAdmin helpers
   api.ts                   ← ensureUser, readJson, jsonError helpers for routes
   credit-cards.ts          ← cycle date math (clamp Feb 31 → 28, etc.)
+  plaid-client.ts          ← lazy `PlaidApi` singleton (reads PLAID_* env)
+  plaid-crypto.ts          ← AES-256-GCM encrypt/decrypt for access tokens (+ test)
+  plaid-sync.ts            ← cursor-based `transactions/sync` polling + link-token creation
   dates.ts, money.ts, ids.ts, cn.ts, log.ts, rate-limit.ts
 
 scripts/
@@ -230,6 +236,13 @@ Drizzle stores `meta/NNNN_snapshot.json` next to each migration so
 because we don't run `drizzle-kit generate` (see above). If you ever need to
 use it locally, regenerate snapshots in a dev branch and verify nothing
 weird gets emitted before merging.
+
+### Current migrations (in order)
+- `0000_moaning_madrox` — initial schema (users, settings, categories, paychecks, bills, one-time expenses)
+- `0001_add_user_role` — `users.role` column
+- `0002_add_credit_cards` — `credit_cards` + `credit_card_statements` tables
+- `0003_add_bill_paid_via_card` — `bills.paid_via_card_id` (nullable FK to a credit card; see §17)
+- `0004_add_plaid` — `plaid_items`, `plaid_accounts`, `plaid_transaction_drafts` (see §17)
 
 ---
 
@@ -428,6 +441,10 @@ These bit us before. Don't repeat:
 8. **Breaking the auth config edge/node split** breaks the middleware bundle — keep `auth.config.ts` import-pure
 9. **Statement day = due day** is invalid for credit cards (would mean cycle and grace overlap) — API rejects it
 10. **JSX literal `//`** is parsed as a comment by ESLint — wrap in `{"// FOO"}`
+11. **`PLAID_ENCRYPTION_KEY` must be exactly 64 hex chars** — `lib/plaid-crypto.ts` throws otherwise. App boots fine; first Plaid action fails loudly.
+12. **Never store a plaintext Plaid access token in the DB** — encrypt with `encryptToken()` *before* inserting the row (see `app/api/plaid/exchange/route.ts` for the pattern).
+13. **A bill with `paidViaCardId` falls back to cash if the card is archived** — that's intentional (see §17), but means archiving a card silently changes the projection. Watch for it during card cleanup.
+14. **Plaid amounts are dollars (float), not cents** — always `Math.round(amount * 100)` when persisting.
 
 ---
 
@@ -469,7 +486,79 @@ In rough order of "what to try":
 
 ---
 
-## 17. Updating this file
+## 17. Plaid integration (bank linking)
+
+Optional add-on that links real bank accounts via **Plaid** so the app can
+import transactions and use a live balance as the projection's starting point.
+The flow is polling-only — no webhook endpoint, no public callback URL needed.
+
+### Required env vars
+```
+PLAID_CLIENT_ID         from https://dashboard.plaid.com
+PLAID_SECRET            ditto (per-environment)
+PLAID_ENV               sandbox | development | production
+PLAID_ENCRYPTION_KEY    exactly 64 hex chars; generate with `openssl rand -hex 32`
+```
+If `PLAID_ENCRYPTION_KEY` is missing or the wrong length, **`encryptToken` /
+`decryptToken` throw at first use** — the app boots, but any Plaid action fails
+loudly. That's intentional: never silently store unencrypted tokens.
+
+### Token storage
+Access tokens are AES-256-GCM encrypted at rest. The `plaid_items` row stores
+three hex strings — `access_token_enc`, `access_token_iv` (12 bytes),
+`access_token_tag` (16 bytes GCM auth tag). **Plaintext never touches the DB.**
+All encrypt/decrypt happens through `lib/plaid-crypto.ts`.
+
+### Tables (see `lib/db/schema.ts`)
+- **`plaid_items`** — one row per institution login. Holds the encrypted access token + a `cursor` for incremental sync.
+- **`plaid_accounts`** — one row per account under an item (Chase Checking ****4242, etc.). `useAsStartingBalance` opts that account's live balance into the projection.
+- **`plaid_transaction_drafts`** — imported transactions awaiting review. `status` flow: `pending_review → approved | dismissed`. `id` = Plaid's `transaction_id` so upserts are idempotent.
+
+### Routes (`app/api/plaid/`)
+- `POST link-token` — creates a short-lived (~30 min) Link token for the frontend widget
+- `POST exchange` — swaps the public token for a permanent access token, encrypts it, fetches initial accounts
+- `GET/PATCH/DELETE items[/id]` — manage connected institutions
+- `GET/PATCH accounts/[id]` — toggle `syncEnabled` / `useAsStartingBalance`
+- `POST sync` — pulls new/modified transactions for active items (cursor-based)
+- `GET drafts` + `PATCH drafts/[id]` — list / approve / dismiss
+
+### Sync semantics (`lib/plaid-sync.ts`)
+- Uses Plaid's `transactions/sync` cursor API — paginates until `has_more = false`, then persists the cursor.
+- **Pending transactions are skipped on add** (we re-pick them up when they post). Modified ones are upserted (preserve idempotency).
+- Account balances are refreshed on every sync from the same response.
+- Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
+
+### "Use as starting balance" opt-in
+In `lib/projection-server.ts`, if any of the user's accounts has
+`useAsStartingBalance = true`, `getPrimaryLinkedBalance(userId)` returns its
+live balance and that **overrides** `settings.startingBalanceCents` for the
+projection. If none is set, the manual setting wins. The override is
+all-or-nothing — there's no partial blend.
+
+### Bills paid via credit card (`bills.paidViaCardId`)
+Independent of Plaid but landed in the same release. A bill can be flagged as
+"paid by credit card X" — the projection then **skips it as cash** because
+the card's statement payment will carry it (avoids double-counting). If the
+linked card is later archived, the bill **falls back to cash** in the
+projection so a recurring obligation never disappears silently. See the filter
+in `lib/projection-server.ts` (`cashBills`).
+
+### Adding Plaid features — recipe
+1. New repo function in `lib/repos.ts` (always user-scoped).
+2. New Zod schema in `lib/validation.ts`.
+3. New route under `app/api/plaid/...` — `ensureUser()`, `readJson(req, schema)`, then call into `lib/plaid-sync.ts` or `lib/repos.ts`. Never construct a `PlaidApi` directly — go through `getPlaidClient()`.
+4. If a new field needs storing → schema + migration + journal entry per §7.
+5. UI hook in `app/(app)/accounts/accounts-client.tsx`.
+
+### Don't
+- ❌ Don't log access tokens (encrypted or plaintext) — `lib/log.ts` is fine for everything else.
+- ❌ Don't store the plaintext access token even briefly in the DB — encrypt before insert in the same function.
+- ❌ Don't bypass `getPlaidClient()` — it lazy-validates env vars and surfaces clear errors.
+- ❌ Don't add a webhook endpoint without explicit need — sync-on-load is enough for a single-family deploy and avoids exposing a public ingress.
+
+---
+
+## 18. Updating this file
 
 When you discover a non-obvious thing — a gotcha, a convention, a recipe —
 **add it here** in the appropriate section. The next session (you, or another

@@ -26,6 +26,7 @@ export async function POST(req: Request) {
       dueDay: data.dueDay,
       dueMonth: data.dueMonth ?? null,
       autoPay: data.autoPay,
+      paidViaCardId: data.paidViaCardId ? data.paidViaCardId : null,
       notes: data.notes ?? null,
       isActive: true,
     });

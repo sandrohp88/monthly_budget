@@ -22,6 +22,7 @@ export default [
       "data/**",
       "backups/**",
       "next-env.d.ts",
+      "scripts/_*",
     ],
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),

@@ -60,5 +60,8 @@ scripts/fix_migration.py
 scripts/get_logs.py
 scripts/_db_fix.py
 
+# ad-hoc / scratch debug scripts (any scripts/_*.{js,ts,mjs,cjs,py})
+scripts/_*
+
 # server-issued local CA cert
 caddy-root.crt

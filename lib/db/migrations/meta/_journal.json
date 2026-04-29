@@ -22,6 +22,20 @@
       "when": 1777200000000,
       "tag": "0002_add_credit_cards",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1777230000000,
+      "tag": "0003_add_bill_paid_via_card",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1777900000000,
+      "tag": "0004_add_plaid",
+      "breakpoints": true
     }
   ]
 }

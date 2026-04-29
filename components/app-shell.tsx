@@ -9,6 +9,7 @@ import { CurrencyProvider } from "@/components/currency-provider";
 const ROUTE_TO_CRUMB: Record<string, string> = {
   "/": "DASHBOARD",
   "/bills": "BILLS",
+  "/accounts": "ACCOUNTS",
   "/credit-cards": "CREDIT CARDS",
   "/paychecks": "PAYCHECKS",
   "/extras": "ONE-TIME",

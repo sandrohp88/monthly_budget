@@ -8,6 +8,7 @@ import {
   CircleDollarSign,
   CreditCard,
   LayoutDashboard,
+  Landmark,
   PartyPopper,
   Settings,
   Wallet,
@@ -23,6 +24,7 @@ const NAV: ReadonlyArray<{
 }> = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, shortcut: "d", section: 1 },
   { href: "/bills", label: "Bills", icon: CreditCard, shortcut: "b", section: 1 },
+  { href: "/accounts", label: "Accounts", icon: Landmark, shortcut: "a", section: 1 },
   { href: "/credit-cards", label: "Credit Cards", icon: Wallet, shortcut: "c", section: 1 },
   { href: "/paychecks", label: "Paychecks", icon: CircleDollarSign, shortcut: "p", section: 1 },
   { href: "/extras", label: "One-Time", icon: PartyPopper, shortcut: "e", section: 1 },
@@ -140,7 +142,7 @@ export function Sidebar({ displayName, role }: { displayName: string; role: stri
 
       {armed ? (
         <div className="mx-3 mb-2 rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-2)] px-3 py-1.5 text-[9px] uppercase tracking-[0.15em] text-[var(--mint)]">
-          press: d b p e x s
+      press: d b a c p e x s
         </div>
       ) : null}
 
