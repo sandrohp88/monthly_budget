@@ -175,7 +175,29 @@ export const plaidSyncSchema = z.object({
   itemId: z.string().optional(),
 });
 
+/**
+ * Body for POST /api/plaid/accounts/[id]/link-card.
+ * - `creditCardId: string` — link to existing card
+ * - `creditCardId: null` — unlink the Plaid account from any card
+ * - `createNew: { name }` — create a brand new card and link it
+ * Exactly one of (creditCardId, createNew) must be provided.
+ */
+export const plaidLinkCardSchema = z
+  .object({
+    creditCardId: z.string().nullable().optional(),
+    createNew: z
+      .object({
+        name: z.string().min(1).max(80),
+      })
+      .optional(),
+  })
+  .refine(
+    (v) => (v.creditCardId !== undefined) !== (v.createNew !== undefined),
+    { message: "Provide exactly one of creditCardId or createNew" },
+  );
+
 export type PlaidExchangeInput = z.infer<typeof plaidExchangeSchema>;
 export type PlaidDraftActionInput = z.infer<typeof plaidDraftActionSchema>;
 export type PlaidAccountUpdateInput = z.infer<typeof plaidAccountUpdateSchema>;
 export type PlaidSyncInput = z.infer<typeof plaidSyncSchema>;
+export type PlaidLinkCardInput = z.infer<typeof plaidLinkCardSchema>;

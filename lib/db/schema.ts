@@ -125,11 +125,19 @@ export const creditCards = sqliteTable(
     autoPay: integer("auto_pay", { mode: "boolean" }).notNull().default(false),
     notes: text("notes"),
     isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    /**
+     * Optional link to a Plaid account. When set, sync auto-populates this card's
+     * cycle days + most recent statement from Plaid Liabilities. Nulled by app
+     * code when the Plaid item is unlinked (SQLite ALTER TABLE can't add FKs,
+     * so referential integrity is enforced in `deactivatePlaidItem`).
+     */
+    plaidAccountId: text("plaid_account_id"),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
     updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
     userActive: index("credit_cards_user_active_idx").on(t.userId, t.isActive),
+    plaidAccountUnique: uniqueIndex("credit_cards_plaid_account_unique_idx").on(t.plaidAccountId),
   }),
 );
 
@@ -150,6 +158,7 @@ export const creditCardStatements = sqliteTable(
   },
   (t) => ({
     cardDue: index("cc_statements_card_due_idx").on(t.cardId, t.dueDate),
+    cardDateUnique: uniqueIndex("cc_statements_card_date_unique_idx").on(t.cardId, t.statementDate),
   }),
 );
 

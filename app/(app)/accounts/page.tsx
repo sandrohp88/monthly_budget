@@ -1,6 +1,13 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { listPlaidItems, listPlaidAccountsByItem, listPlaidDrafts, listCategories } from "@/lib/repos";
+import {
+  listPlaidItems,
+  listPlaidAccountsByItem,
+  listPlaidDrafts,
+  listCategories,
+  listCreditCards,
+  listStatements,
+} from "@/lib/repos";
 import { AccountsClient } from "./accounts-client";
 
 export const dynamic = "force-dynamic";
@@ -10,10 +17,11 @@ export default async function AccountsPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [items, pendingDrafts, categories] = await Promise.all([
+  const [items, pendingDrafts, categories, cards] = await Promise.all([
     listPlaidItems(userId),
     listPlaidDrafts(userId, "pending_review"),
     listCategories(userId),
+    listCreditCards(userId, false),
   ]);
 
   const itemsWithAccounts = await Promise.all(
@@ -21,6 +29,10 @@ export default async function AccountsPage() {
       ...item,
       accounts: await listPlaidAccountsByItem(item.id),
     })),
+  );
+
+  const cardsWithStatements = await Promise.all(
+    cards.map(async (card) => ({ card, statements: await listStatements(card.id) })),
   );
 
   const categoryNames = categories
@@ -31,6 +43,7 @@ export default async function AccountsPage() {
     <AccountsClient
       initialItems={itemsWithAccounts}
       initialPendingCount={pendingDrafts.length}
+      initialCards={cardsWithStatements}
       categoryNames={categoryNames}
     />
   );

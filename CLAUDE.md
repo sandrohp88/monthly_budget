@@ -243,6 +243,7 @@ weird gets emitted before merging.
 - `0002_add_credit_cards` — `credit_cards` + `credit_card_statements` tables
 - `0003_add_bill_paid_via_card` — `bills.paid_via_card_id` (nullable FK to a credit card; see §17)
 - `0004_add_plaid` — `plaid_items`, `plaid_accounts`, `plaid_transaction_drafts` (see §17)
+- `0005_link_card_to_plaid` — `credit_cards.plaid_account_id` (nullable, unique) + unique index on `(card_id, statement_date)` for idempotent statement upsert
 
 ---
 
@@ -445,6 +446,9 @@ These bit us before. Don't repeat:
 12. **Never store a plaintext Plaid access token in the DB** — encrypt with `encryptToken()` *before* inserting the row (see `app/api/plaid/exchange/route.ts` for the pattern).
 13. **A bill with `paidViaCardId` falls back to cash if the card is archived** — that's intentional (see §17), but means archiving a card silently changes the projection. Watch for it during card cleanup.
 14. **Plaid amounts are dollars (float), not cents** — always `Math.round(amount * 100)` when persisting.
+15. **Re-linking required to enable Liabilities on existing items** — Plaid bakes products into the access token. Items linked before `Liabilities` was added to `optional_products` won't return liability data. To fix, the user removes and re-adds the institution.
+16. **`credit_cards.plaid_account_id` has no DB-level FK** — SQLite ALTER TABLE can't add foreign keys, so referential cleanup is enforced in `deactivatePlaidItem` (nulls the column on linked cards before deactivating). If you add another path that deletes Plaid accounts, mirror that null-out logic.
+17. **Statement upsert preserves manual paid records** — `upsertCreditCardStatementByDate` will not overwrite `paidAmountCents`/`paidDate` when Plaid returns no payment data. Cycle date updates still apply. Don't "simplify" this away.
 
 ---
 
@@ -515,11 +519,12 @@ All encrypt/decrypt happens through `lib/plaid-crypto.ts`.
 - **`plaid_transaction_drafts`** — imported transactions awaiting review. `status` flow: `pending_review → approved | dismissed`. `id` = Plaid's `transaction_id` so upserts are idempotent.
 
 ### Routes (`app/api/plaid/`)
-- `POST link-token` — creates a short-lived (~30 min) Link token for the frontend widget
+- `POST link-token` — creates a short-lived (~30 min) Link token for the frontend widget. Requests `Transactions` (required) + `Liabilities` (optional, see "credit card linkage" below).
 - `POST exchange` — swaps the public token for a permanent access token, encrypts it, fetches initial accounts
-- `GET/PATCH/DELETE items[/id]` — manage connected institutions
+- `GET/PATCH/DELETE items[/id]` — manage connected institutions. DELETE first nulls `credit_cards.plaid_account_id` for any cards linked to this item's accounts (so manual cards survive the unlink).
 - `GET/PATCH accounts/[id]` — toggle `syncEnabled` / `useAsStartingBalance`
-- `POST sync` — pulls new/modified transactions for active items (cursor-based)
+- `POST accounts/[id]/link-card` — map a Plaid credit-type account to a manual `credit_cards` row. Body: `{ creditCardId }` (link existing), `{ creditCardId: null }` (unlink), or `{ createNew: { name } }` (create + link). On success, immediately runs Liabilities for the parent item so the card has real cycle days + statement before the response returns.
+- `POST sync` — pulls new/modified transactions for active items (cursor-based) AND credit-card liabilities for items whose bank supports it
 - `GET drafts` + `PATCH drafts/[id]` — list / approve / dismiss
 
 ### Sync semantics (`lib/plaid-sync.ts`)
@@ -527,6 +532,28 @@ All encrypt/decrypt happens through `lib/plaid-crypto.ts`.
 - **Pending transactions are skipped on add** (we re-pick them up when they post). Modified ones are upserted (preserve idempotency).
 - Account balances are refreshed on every sync from the same response.
 - Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
+
+### Credit card linkage (Plaid → `credit_cards`)
+A Plaid credit-type account can be **explicitly linked** to one of the user's
+manual `credit_cards` rows (or to a freshly-created card) via the
+`/accounts` page. The link lives in `credit_cards.plaid_account_id` (nullable,
+UNIQUE — one card per Plaid account, one Plaid account per card).
+
+What populates from Plaid Liabilities (`liabilitiesGet`) on every sync:
+- **`statementDay` / `dueDay`** — derived from `last_statement_issue_date` and `next_payment_due_date` (just the day-of-month). `updateCardCycleDays` is a no-op when nothing changed.
+- **Most recent statement** — upserted into `credit_card_statements` keyed by `(cardId, statementDate)` (unique index from migration 0005). If `last_payment_date >= last_statement_issue_date` and the payment amount covers the statement, it's marked paid.
+- A statement that already has `paidAmountCents` set manually is NEVER overwritten by a Plaid sync — manual reconciliation wins. Cycle dates are still updated.
+
+If the bank doesn't support Liabilities (most non-credit-card-issuing banks),
+`liabilitiesGet` errors and we log + continue — the link still exists, the
+user just keeps editing cycle days manually.
+
+### Why we DON'T auto-create a card on link
+Earlier versions auto-created a `credit_cards` row whenever a credit-type
+Plaid account appeared, deduping by name. That broke when users had existing
+manual cards (silent duplicates) or when banks reported generic names ("Apple
+Card"). Now nothing gets auto-created — the user explicitly picks "link to
+existing" or "create new" via the `/accounts` page chooser.
 
 ### "Use as starting balance" opt-in
 In `lib/projection-server.ts`, if any of the user's accounts has

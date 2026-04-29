@@ -6,9 +6,11 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Link2,
   RefreshCw,
   Trash2,
   Inbox,
+  Unlink,
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -24,22 +26,32 @@ import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { PlaidLinkButton } from "@/components/plaid-link-button";
 import { PlaidDraftApproveDialog } from "@/components/plaid-draft-approve-dialog";
+import { PlaidLinkCardDialog } from "@/components/plaid-link-card-dialog";
 import { cn } from "@/lib/cn";
-import type { PlaidItemRow, PlaidAccountRow } from "@/lib/db/schema";
+import type {
+  PlaidItemRow,
+  PlaidAccountRow,
+  CreditCardRow,
+  CreditCardStatementRow,
+} from "@/lib/db/schema";
 import type { DraftWithAccount } from "@/app/api/plaid/drafts/route";
 
 type ItemWithAccounts = PlaidItemRow & { accounts: PlaidAccountRow[] };
+type CardWithStatements = { card: CreditCardRow; statements: CreditCardStatementRow[] };
 
 export function AccountsClient({
   initialItems,
   initialPendingCount,
+  initialCards,
   categoryNames,
 }: {
   initialItems: ItemWithAccounts[];
   initialPendingCount: number;
+  initialCards: CardWithStatements[];
   categoryNames: string[];
 }) {
   const [items, setItems] = React.useState<ItemWithAccounts[]>(initialItems);
+  const [cards, setCards] = React.useState<CardWithStatements[]>(initialCards);
   const [pendingCount, setPendingCount] = React.useState(initialPendingCount);
   const [tab, setTab] = React.useState<"accounts" | "inbox">("accounts");
   const [syncing, setSyncing] = React.useState(false);
@@ -48,6 +60,17 @@ export function AccountsClient({
   const [showHistory, setShowHistory] = React.useState(false);
   const [approvingDraft, setApprovingDraft] = React.useState<DraftWithAccount | null>(null);
   const [dismissingId, setDismissingId] = React.useState<string | null>(null);
+  const [linkingCardFor, setLinkingCardFor] = React.useState<PlaidAccountRow | null>(null);
+  const [unlinkingId, setUnlinkingId] = React.useState<string | null>(null);
+
+  // ── derived: map plaidAccountId → linked card (with latest statement) ────
+  const linkByPlaidAccount = React.useMemo(() => {
+    const m = new Map<string, CardWithStatements>();
+    for (const cs of cards) {
+      if (cs.card.plaidAccountId) m.set(cs.card.plaidAccountId, cs);
+    }
+    return m;
+  }, [cards]);
 
   // ── derived ──────────────────────────────────────────────────────────────
   const totalAccounts = items.reduce((n, i) => n + i.accounts.length, 0);
@@ -63,6 +86,13 @@ export function AccountsClient({
     if (!res.ok) return;
     const json = await res.json() as { items: ItemWithAccounts[] };
     setItems(json.items);
+  };
+
+  const refreshCards = async () => {
+    const res = await fetch("/api/credit-cards");
+    if (!res.ok) return;
+    const json = await res.json() as { cards: CardWithStatements[] };
+    setCards(json.cards);
   };
 
   const fetchDrafts = React.useCallback(async () => {
@@ -95,10 +125,21 @@ export function AccountsClient({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({}),
       });
-      const json = await res.json() as { added?: number; modified?: number; error?: string };
+      const json = await res.json() as {
+        added?: number;
+        modified?: number;
+        cardsUpdated?: number;
+        statementsCreated?: number;
+        error?: string;
+      };
       if (!res.ok) throw new Error(json.error ?? "Sync failed");
-      toast.success(`Sync complete — ${json.added ?? 0} new, ${json.modified ?? 0} updated`);
-      await Promise.all([refreshItems(), fetchDrafts()]);
+      const txnPart = `${json.added ?? 0} new, ${json.modified ?? 0} updated`;
+      const cardPart =
+        (json.cardsUpdated ?? 0) > 0 || (json.statementsCreated ?? 0) > 0
+          ? ` · ${json.cardsUpdated ?? 0} card${(json.cardsUpdated ?? 0) === 1 ? "" : "s"}, ${json.statementsCreated ?? 0} statement${(json.statementsCreated ?? 0) === 1 ? "" : "s"}`
+          : "";
+      toast.success(`Sync complete — ${txnPart}${cardPart}`);
+      await Promise.all([refreshItems(), refreshCards(), fetchDrafts()]);
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -111,7 +152,28 @@ export function AccountsClient({
     const res = await fetch(`/api/plaid/items/${id}`, { method: "DELETE" });
     if (!res.ok) { toast.error("Unlink failed"); return; }
     toast.success(`${name} unlinked`);
-    await refreshItems();
+    await Promise.all([refreshItems(), refreshCards()]);
+  };
+
+  const unlinkCardFromPlaid = async (plaidAccountId: string) => {
+    setUnlinkingId(plaidAccountId);
+    try {
+      const res = await fetch(`/api/plaid/accounts/${plaidAccountId}/link-card`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ creditCardId: null }),
+      });
+      if (!res.ok) {
+        const j = (await res.json()) as { error?: string };
+        throw new Error(j.error ?? "Unlink failed");
+      }
+      toast.success("Card unlinked from Plaid account");
+      await refreshCards();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setUnlinkingId(null);
+    }
   };
 
   const toggleAccountPref = async (
@@ -227,8 +289,12 @@ export function AccountsClient({
               <InstitutionCard
                 key={item.id}
                 item={item}
+                linkByPlaidAccount={linkByPlaidAccount}
                 onUnlink={() => unlinkItem(item.id, item.institutionName)}
                 onToggle={toggleAccountPref}
+                onLinkCard={(acct) => setLinkingCardFor(acct)}
+                onUnlinkCard={unlinkCardFromPlaid}
+                unlinkingId={unlinkingId}
               />
             ))
           )}
@@ -318,6 +384,19 @@ export function AccountsClient({
           }}
         />
       )}
+
+      {/* Link-card chooser dialog */}
+      {linkingCardFor && (
+        <PlaidLinkCardDialog
+          account={linkingCardFor}
+          cards={cards.map((c) => c.card)}
+          onClose={() => setLinkingCardFor(null)}
+          onLinked={async () => {
+            setLinkingCardFor(null);
+            await refreshCards();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -328,12 +407,20 @@ export function AccountsClient({
 
 function InstitutionCard({
   item,
+  linkByPlaidAccount,
   onUnlink,
   onToggle,
+  onLinkCard,
+  onUnlinkCard,
+  unlinkingId,
 }: {
   item: ItemWithAccounts;
+  linkByPlaidAccount: Map<string, CardWithStatements>;
   onUnlink: () => void;
   onToggle: (id: string, field: "useAsStartingBalance" | "syncEnabled", value: boolean) => void;
+  onLinkCard: (acct: PlaidAccountRow) => void;
+  onUnlinkCard: (plaidAccountId: string) => void;
+  unlinkingId: string | null;
 }) {
   return (
     <div className="relative overflow-hidden rounded-sm border border-[var(--border-2)] bg-[var(--bg-card)] p-4">
@@ -366,7 +453,15 @@ function InstitutionCard({
 
       <div className="space-y-2">
         {item.accounts.map((acct) => (
-          <AccountRow key={acct.id} account={acct} onToggle={onToggle} />
+          <AccountRow
+            key={acct.id}
+            account={acct}
+            link={linkByPlaidAccount.get(acct.id)}
+            onToggle={onToggle}
+            onLinkCard={onLinkCard}
+            onUnlinkCard={onUnlinkCard}
+            unlinking={unlinkingId === acct.id}
+          />
         ))}
       </div>
     </div>
@@ -375,16 +470,28 @@ function InstitutionCard({
 
 function AccountRow({
   account,
+  link,
   onToggle,
+  onLinkCard,
+  onUnlinkCard,
+  unlinking,
 }: {
   account: PlaidAccountRow;
+  link: CardWithStatements | undefined;
   onToggle: (id: string, field: "useAsStartingBalance" | "syncEnabled", value: boolean) => void;
+  onLinkCard: (acct: PlaidAccountRow) => void;
+  onUnlinkCard: (plaidAccountId: string) => void;
+  unlinking: boolean;
 }) {
   const typeLabel = [account.subtype ?? account.type].join(" ").toUpperCase();
+  const isCredit = account.type === "credit";
   const balanceColor =
-    account.type === "credit" && account.balanceCents != null && account.balanceCents > 0
+    isCredit && account.balanceCents != null && account.balanceCents > 0
       ? "text-[var(--amber)]"
       : "text-[var(--mint)]";
+
+  // Most recent statement on the linked card, if any.
+  const latestStatement = link?.statements[0];
 
   return (
     <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2">
@@ -406,6 +513,63 @@ function AccountRow({
           {account.balanceCents != null ? <Money cents={account.balanceCents} /> : <span className="text-[var(--text-3)] text-[11px]">—</span>}
         </div>
       </div>
+
+      {/* Credit-card linkage section */}
+      {isCredit && (
+        <div className="mt-2">
+          {link ? (
+            <div className="rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-2)] px-2.5 py-1.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.15em] text-[var(--mint)]">
+                    <Link2 className="h-2.5 w-2.5" />
+                    LINKED CARD
+                  </div>
+                  <div className="mt-0.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--text-0)] truncate">
+                    {link.card.name}
+                  </div>
+                  <div className="mt-0.5 text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+                    STMT DAY {link.card.statementDay} · DUE DAY {link.card.dueDay}
+                    {latestStatement && (
+                      <>
+                        {" · NEXT DUE "}
+                        <DateLabel iso={latestStatement.dueDate} format="short" />
+                        {" · "}
+                        <Money cents={latestStatement.statementBalanceCents} />
+                      </>
+                    )}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onUnlinkCard(account.id)}
+                  disabled={unlinking}
+                  aria-label="Unlink card"
+                  title="Unlink from credit card"
+                >
+                  <Unlink className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2 rounded-sm border border-dashed border-[var(--border-raw)] bg-[var(--bg-2)] px-2.5 py-1.5">
+              <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                NOT LINKED TO A CREDIT CARD
+              </span>
+              <Button
+                id={`link-card-${account.id}`}
+                size="sm"
+                variant="outline"
+                onClick={() => onLinkCard(account)}
+              >
+                <Link2 className="h-3 w-3" />
+                LINK CARD
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Toggles */}
       <div className="mt-2 flex flex-col gap-1.5 text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">

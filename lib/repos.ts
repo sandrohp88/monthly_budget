@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
   bills,
@@ -631,6 +631,23 @@ export async function updatePlaidItemCursor(
 
 export async function deactivatePlaidItem(userId: string, id: string): Promise<void> {
   const db = getDb();
+  // SQLite ALTER TABLE can't add an FK with ON DELETE SET NULL, so we
+  // explicitly null `plaid_account_id` on any credit cards linked to this
+  // item's accounts before deactivating. This keeps the card row intact —
+  // the user just goes back to manual cycle-day management.
+  const accts = await db
+    .select({ id: plaidAccounts.id })
+    .from(plaidAccounts)
+    .where(eq(plaidAccounts.itemId, id))
+    .all();
+  if (accts.length > 0) {
+    const ids = accts.map((a) => a.id);
+    await db
+      .update(creditCards)
+      .set({ plaidAccountId: null, updatedAt: Date.now() })
+      .where(and(eq(creditCards.userId, userId), inArray(creditCards.plaidAccountId, ids)))
+      .run();
+  }
   await db
     .update(plaidItems)
     .set({ isActive: false })
@@ -660,6 +677,11 @@ export async function listPlaidAccountsByItem(itemId: string): Promise<PlaidAcco
 /**
  * Insert or fully replace an account row (called during each sync).
  * Uses the Plaid account_id as the primary key, so this is idempotent.
+ *
+ * Note: we deliberately do NOT auto-create a credit_cards row here. The user
+ * explicitly maps a Plaid credit account to a manual card (existing or new)
+ * via the accounts page. This prevents silent duplicates when the user already
+ * has manually-tracked cards.
  */
 export async function upsertPlaidAccount(data: NewPlaidAccount): Promise<void> {
   const db = getDb();
@@ -678,32 +700,155 @@ export async function upsertPlaidAccount(data: NewPlaidAccount): Promise<void> {
       },
     })
     .run();
+}
 
-  // Auto-create a corresponding credit card entry if one doesn't exist.
-  if (data.type === "credit") {
-    const existing = await db
-      .select({ id: creditCards.id })
-      .from(creditCards)
-      .where(and(eq(creditCards.userId, data.userId), eq(creditCards.name, data.name)))
+/**
+ * Look up the user's credit card linked to a given Plaid account, if any.
+ * Used by the liabilities sync to find which card to update from Plaid data.
+ */
+export async function getCreditCardByPlaidAccountId(
+  userId: string,
+  plaidAccountId: string,
+): Promise<CreditCardRow | undefined> {
+  const db = getDb();
+  return db
+    .select()
+    .from(creditCards)
+    .where(
+      and(
+        eq(creditCards.userId, userId),
+        eq(creditCards.plaidAccountId, plaidAccountId),
+      ),
+    )
+    .get();
+}
+
+/**
+ * Set or clear the Plaid account link on a credit card. Pass null to unlink.
+ * Enforces the unique-on-(plaid_account_id) index by checking for an existing
+ * link first and returning a friendly error if conflict.
+ */
+export async function setCreditCardPlaidLink(
+  userId: string,
+  cardId: string,
+  plaidAccountId: string | null,
+): Promise<{ ok: true; card: CreditCardRow } | { ok: false; error: string }> {
+  const db = getDb();
+  const card = await getCreditCard(userId, cardId);
+  if (!card) return { ok: false, error: "Card not found" };
+
+  if (plaidAccountId !== null) {
+    const owned = await db
+      .select({ id: plaidAccounts.id })
+      .from(plaidAccounts)
+      .where(and(eq(plaidAccounts.userId, userId), eq(plaidAccounts.id, plaidAccountId)))
       .get();
+    if (!owned) return { ok: false, error: "Plaid account not found" };
 
-    if (!existing) {
-      await db
-        .insert(creditCards)
-        .values({
-          id: newId(),
-          userId: data.userId,
-          name: data.name,
-          statementDay: 1,
-          dueDay: 21,
-          autoPay: false,
-          isActive: true,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        })
-        .run();
+    const conflict = await db
+      .select({ id: creditCards.id, name: creditCards.name })
+      .from(creditCards)
+      .where(
+        and(
+          eq(creditCards.userId, userId),
+          eq(creditCards.plaidAccountId, plaidAccountId),
+        ),
+      )
+      .get();
+    if (conflict && conflict.id !== cardId) {
+      return { ok: false, error: `Already linked to "${conflict.name}"` };
     }
   }
+
+  await db
+    .update(creditCards)
+    .set({ plaidAccountId, updatedAt: Date.now() })
+    .where(and(eq(creditCards.userId, userId), eq(creditCards.id, cardId)))
+    .run();
+  return { ok: true, card: (await getCreditCard(userId, cardId))! };
+}
+
+/**
+ * Update a card's cycle days from Plaid Liabilities. No-op when both values
+ * are unchanged so we don't bump updatedAt on every sync.
+ */
+export async function updateCardCycleDays(
+  cardId: string,
+  statementDay: number,
+  dueDay: number,
+): Promise<void> {
+  const db = getDb();
+  const current = await db
+    .select({ statementDay: creditCards.statementDay, dueDay: creditCards.dueDay })
+    .from(creditCards)
+    .where(eq(creditCards.id, cardId))
+    .get();
+  if (!current) return;
+  if (current.statementDay === statementDay && current.dueDay === dueDay) return;
+  await db
+    .update(creditCards)
+    .set({ statementDay, dueDay, updatedAt: Date.now() })
+    .where(eq(creditCards.id, cardId))
+    .run();
+}
+
+/**
+ * Upsert a statement keyed by (cardId, statementDate). Uses the unique index
+ * added in 0005 so re-syncs are idempotent. Will not overwrite a paid record
+ * with empty paid fields — manual reconciliation wins over Plaid's read-only
+ * snapshot.
+ */
+export async function upsertCreditCardStatementByDate(
+  cardId: string,
+  data: {
+    statementDate: string;
+    dueDate: string;
+    statementBalanceCents: number;
+    paidAmountCents?: number | null;
+    paidDate?: string | null;
+  },
+): Promise<void> {
+  const db = getDb();
+  const existing = await db
+    .select()
+    .from(creditCardStatements)
+    .where(
+      and(
+        eq(creditCardStatements.cardId, cardId),
+        eq(creditCardStatements.statementDate, data.statementDate),
+      ),
+    )
+    .get();
+
+  if (!existing) {
+    await db
+      .insert(creditCardStatements)
+      .values({
+        id: newId(),
+        cardId,
+        statementDate: data.statementDate,
+        dueDate: data.dueDate,
+        statementBalanceCents: data.statementBalanceCents,
+        paidAmountCents: data.paidAmountCents ?? null,
+        paidDate: data.paidDate ?? null,
+      })
+      .run();
+    return;
+  }
+
+  // Don't clobber a manual paid record with Plaid-only data.
+  const keepPaid = existing.paidAmountCents != null && (data.paidAmountCents ?? null) == null;
+  await db
+    .update(creditCardStatements)
+    .set({
+      dueDate: data.dueDate,
+      statementBalanceCents: data.statementBalanceCents,
+      ...(keepPaid
+        ? {}
+        : { paidAmountCents: data.paidAmountCents ?? null, paidDate: data.paidDate ?? null }),
+    })
+    .where(eq(creditCardStatements.id, existing.id))
+    .run();
 }
 
 

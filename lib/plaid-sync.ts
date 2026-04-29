@@ -8,7 +8,11 @@ import {
   upsertPlaidAccount,
   upsertPlaidDraft,
   updatePlaidItemCursor,
+  getCreditCardByPlaidAccountId,
+  updateCardCycleDays,
+  upsertCreditCardStatementByDate,
 } from "./repos";
+import { dueDateFromStatement } from "./credit-cards";
 import { log } from "./log";
 
 /** Plaid sends amounts as positive for debits and negative for credits.
@@ -23,6 +27,8 @@ export interface SyncResult {
   added: number;
   modified: number;
   removed: number;
+  cardsUpdated: number;
+  statementsCreated: number;
 }
 
 /**
@@ -40,6 +46,8 @@ export async function syncPlaidTransactions(
   let totalAdded = 0;
   let totalModified = 0;
   let totalRemoved = 0;
+  let totalCardsUpdated = 0;
+  let totalStatementsCreated = 0;
 
   const plaid = getPlaidClient();
 
@@ -140,17 +148,33 @@ export async function syncPlaidTransactions(
       totalAdded += added;
       totalModified += modified;
       totalRemoved += removed;
+
+      // Refresh credit-card cycle data + most recent statement from Liabilities.
+      const liab = await syncCreditCardLiabilitiesForItem(userId, item.id, accessToken);
+      totalCardsUpdated += liab.cardsUpdated;
+      totalStatementsCreated += liab.statementsCreated;
     } catch (err) {
       log.error(`plaid-sync: failed for item ${item.id}: ${(err as Error).message}`);
     }
   }
 
-  return { added: totalAdded, modified: totalModified, removed: totalRemoved };
+  return {
+    added: totalAdded,
+    modified: totalModified,
+    removed: totalRemoved,
+    cardsUpdated: totalCardsUpdated,
+    statementsCreated: totalStatementsCreated,
+  };
 }
 
 /**
  * Creates a Plaid link_token for the frontend Link widget.
  * The token is short-lived (30 min) and user-specific.
+ *
+ * Liabilities is in `optional_products` so banks that don't support it (most
+ * non-credit-card-issuing depository institutions) still let the user link
+ * deposit accounts. When a bank DOES support it, we get credit card cycle
+ * dates and statement balances back from `liabilitiesGet`.
  */
 export async function createLinkToken(userId: string): Promise<string> {
   const plaid = getPlaidClient();
@@ -158,8 +182,86 @@ export async function createLinkToken(userId: string): Promise<string> {
     user: { client_user_id: userId },
     client_name: "FINANCE_OS",
     products: [Products.Transactions],
+    optional_products: [Products.Liabilities],
     country_codes: [CountryCode.Us],
     language: "en",
   });
   return response.data.link_token;
+}
+
+/**
+ * Pulls credit-card liabilities for one item (institution login) and updates
+ * any locally-linked credit cards' cycle days + most recent statement.
+ *
+ * Robust to:
+ * - Banks that don't support Liabilities (catches and logs, doesn't throw).
+ * - Plaid accounts not yet linked to a manual card (silently skips).
+ * - Idempotent re-runs (statement upsert is keyed by (cardId, statementDate)).
+ *
+ * Returns the count of cards touched so the UI can report sync progress.
+ */
+export async function syncCreditCardLiabilitiesForItem(
+  userId: string,
+  itemId: string,
+  accessToken: string,
+): Promise<{ cardsUpdated: number; statementsCreated: number }> {
+  const plaid = getPlaidClient();
+  let cardsUpdated = 0;
+  let statementsCreated = 0;
+
+  try {
+    const res = await plaid.liabilitiesGet({ access_token: accessToken });
+    const credit = res.data.liabilities.credit ?? [];
+
+    for (const liab of credit) {
+      const plaidAccountId = liab.account_id;
+      if (!plaidAccountId) continue;
+
+      const card = await getCreditCardByPlaidAccountId(userId, plaidAccountId);
+      if (!card) continue; // not linked to a manual card yet
+
+      // Cycle days — derive day-of-month from issue/due dates when present.
+      const stmtDate = liab.last_statement_issue_date ?? null;
+      const dueDate = liab.next_payment_due_date ?? null;
+      const stmtDay = stmtDate ? Number(stmtDate.split("-")[2]) : null;
+      const dueDay = dueDate ? Number(dueDate.split("-")[2]) : null;
+      if (stmtDay && dueDay && stmtDay >= 1 && stmtDay <= 31 && dueDay >= 1 && dueDay <= 31) {
+        await updateCardCycleDays(card.id, stmtDay, dueDay);
+        cardsUpdated++;
+      }
+
+      // Latest statement — only if Plaid gave us both a date and a balance.
+      if (stmtDate && liab.last_statement_balance != null) {
+        // If Plaid omits next_payment_due_date, derive it from the card's dueDay
+        // using the same heuristic we use for manual cards.
+        const resolvedDue = dueDate ?? dueDateFromStatement(stmtDate, card.dueDay);
+
+        // If the most recent payment paid off the most recent statement, mark it.
+        const lastPayDate = liab.last_payment_date ?? null;
+        const lastPayAmt = liab.last_payment_amount ?? null;
+        const stmtBalCents = Math.round(liab.last_statement_balance * 100);
+        const payAmtCents = lastPayAmt != null ? Math.round(lastPayAmt * 100) : null;
+
+        const looksPaid =
+          lastPayDate != null &&
+          payAmtCents != null &&
+          lastPayDate >= stmtDate &&
+          payAmtCents >= stmtBalCents;
+
+        await upsertCreditCardStatementByDate(card.id, {
+          statementDate: stmtDate,
+          dueDate: resolvedDue,
+          statementBalanceCents: stmtBalCents,
+          paidAmountCents: looksPaid ? payAmtCents : null,
+          paidDate: looksPaid ? lastPayDate : null,
+        });
+        statementsCreated++;
+      }
+    }
+  } catch (err) {
+    // Bank doesn't support Liabilities, or temporary Plaid hiccup — non-fatal.
+    log.warn(`plaid-liabilities: skipped item ${itemId}: ${(err as Error).message}`);
+  }
+
+  return { cardsUpdated, statementsCreated };
 }
