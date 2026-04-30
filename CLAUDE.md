@@ -162,10 +162,36 @@ tests/
 
 ---
 
-## 6. UI conventions (FINANCE_OS aesthetic)
+## 6. UI conventions (Home Apps design system)
 
-The look is intentional — terminal/CRT, mint-on-black, JetBrains Mono. Stay
-consistent so new pages feel native.
+The look is intentional — **cyberpunk × military × sci-fi**: tactical-black
+backgrounds, electric-cyan primary, phosphor-green accent, sharp 1px borders,
+no shadows for elevation. Stay consistent so new pages feel native.
+
+### Typography (3 families, distinct roles)
+- **Orbitron** (`var(--font-display)`) — h1–h3, HUD callouts, hero numbers. Geometric, sci-fi.
+- **Rajdhani** (`var(--font-ui)`) — body/UI text. Slightly condensed, quasi-military.
+- **JetBrains Mono** (`var(--font-mono)`) — money, dates, terminal output. Anything `.tabular`.
+
+Defaults are wired in `app/layout.tsx` via `next/font` and applied through
+the base CSS in `globals.css`. **Don't import other fonts.**
+
+### Color tokens (use the var, not the hex)
+| Token | Use |
+|---|---|
+| `var(--cyan)` (alias: `--mint`) | Primary — interactive, focus, "live" markers |
+| `var(--phosphor)` | Accent — terminal-style success, "OK", live data |
+| `var(--olive)` | Structural / secondary actions, maps |
+| `var(--amber)` | Warning |
+| `var(--red)` | Danger / abort |
+| `var(--text-0/1/2/3)` | Text hierarchy (high → tertiary) |
+| `var(--bg-0/1/2/3)` | Backgrounds (deepest → elevated) |
+| `var(--border-raw)` / `var(--border-2)` | Default border / hover-active |
+
+Note: `--mint*` is kept as an alias of `--cyan*` so the 26 existing files
+that already use `text-[var(--mint)]` etc. inherit the new color
+automatically. **Prefer `--cyan` / `--phosphor` for new code** — the names
+are semantically accurate.
 
 ### Building blocks (use these, don't reinvent)
 | Component | When |
@@ -176,19 +202,22 @@ consistent so new pages feel native.
 | `<StatusPill variant="default|warn|off|danger|amber">` | Inline state markers |
 | `<Badge variant="default|secondary|destructive|warning|muted">` | Counts, role tags |
 | `<AlertBar tag="ALERT" variant="amber|mint|red" onDismiss={…}>` | Inline notices |
+| `.bracketed` utility class | Adds tactical L-corner brackets to a positioned container |
 
 ### Visual rules
-- **Borders are 3px** (`rounded-sm`) — not pill-shaped
-- **All UI text is uppercase, letter-spaced** (`tracking-[0.12em]` to `[0.2em]`)
-- **Numbers use `tabular`** class for alignment
-- **Mint = positive/safe**, **amber = warning**, **red = bad/overdue**
-- Variant badges/borders telegraph state — don't hide it in copy
-- Pages animate in with the `fade-in` class on the root
+- **Sharp corners by default** — `--radius` is `0px`. Only badges/chips get `2px` (`--radius-chip`).
+- **1px solid borders** for elevation — never drop shadows. Active borders use `var(--cyan)`.
+- **All UI labels are uppercase + letter-spaced** (`tracking-[0.12em]` for labels, `[0.2em]` for hero/page heads).
+- **Body prose stays sentence-case Rajdhani.** Headings (`<h1>`–`<h3>`) auto-render in Orbitron uppercase via base CSS.
+- **Numbers use `.tabular`** — auto-applies JetBrains Mono + tabular-nums.
+- **State telegraphs in color, not just copy** — variant badges/borders carry the meaning.
+- Pages animate in with `fade-in` class on the root.
 
 ### Dark only
 The app forces `dark` class in `app/layout.tsx`. There is no light mode. The
-theme tokens in `globals.css` map shadcn vars onto the FINANCE_OS palette so
-existing components inherit automatically.
+theme tokens in `globals.css` map shadcn HSL vars onto the Home Apps palette
+so existing primitives (Button, Dialog, etc.) inherit automatically — no
+per-component edit needed for the rebrand.
 
 ---
 
