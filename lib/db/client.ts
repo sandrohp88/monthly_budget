@@ -108,3 +108,21 @@ function selfHealMigrationTracking(migrationsFolder: string) {
 }
 
 export { schema };
+
+/**
+ * Test-only: clear the cached singleton + close the underlying SQLite handle
+ * so the next getDb() call opens a fresh DB at whatever DATABASE_URL points
+ * to. Used by lib/repos.test.ts to spin up an in-memory DB per test.
+ *
+ * NEVER call this from production code paths.
+ */
+export function __resetDbCacheForTests(): void {
+  if (cached) {
+    try {
+      cached.sqlite.close();
+    } catch {
+      // best effort
+    }
+    cached = null;
+  }
+}
