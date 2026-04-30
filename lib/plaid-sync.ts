@@ -15,13 +15,11 @@ import {
 import { dueDateFromStatement } from "./credit-cards";
 import { log } from "./log";
 
-/** Plaid sends amounts as positive for debits and negative for credits.
- *  We store positive = expense, negative = refund — same sign convention.
- *  Plaid amounts are in dollars (floating point); we multiply by 100 and round.
- */
-function toCents(plaidAmount: number): number {
-  return Math.round(plaidAmount * 100);
-}
+// Pure helpers live in plaid-helpers.ts so they don't drag in "server-only"
+// when imported from tests. Re-exported here for callers that already import
+// them from this module.
+export { toCents, looksLikePaid } from "./plaid-helpers";
+import { toCents, looksLikePaid } from "./plaid-helpers";
 
 export interface SyncResult {
   added: number;
@@ -242,11 +240,12 @@ export async function syncCreditCardLiabilitiesForItem(
         const stmtBalCents = Math.round(liab.last_statement_balance * 100);
         const payAmtCents = lastPayAmt != null ? Math.round(lastPayAmt * 100) : null;
 
-        const looksPaid =
-          lastPayDate != null &&
-          payAmtCents != null &&
-          lastPayDate >= stmtDate &&
-          payAmtCents >= stmtBalCents;
+        const looksPaid = looksLikePaid({
+          lastPaymentDate: lastPayDate,
+          lastPaymentCents: payAmtCents,
+          statementDate: stmtDate,
+          statementBalanceCents: stmtBalCents,
+        });
 
         await upsertCreditCardStatementByDate(card.id, {
           statementDate: stmtDate,

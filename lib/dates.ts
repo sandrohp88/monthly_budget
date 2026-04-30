@@ -35,8 +35,12 @@ export function daysBetween(a: string, b: string): number {
 /** End of month N months after `iso` (still ISO YYYY-MM-DD). */
 export function endOfMonthsAhead(iso: string, months: number): string {
   const d = parseISO(iso);
+  // We construct in UTC, so we MUST format via UTC accessors. date-fns
+  // `format()` uses local time and would silently drop a day in negative-UTC
+  // zones (e.g. EST renders Jan 31 00:00 UTC as Jan 30). toISOString() is
+  // timezone-stable: always renders the absolute UTC instant.
   const target = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months + 1, 0));
-  return format(target, "yyyy-MM-dd");
+  return target.toISOString().slice(0, 10);
 }
 
 export { DAY_MS };
