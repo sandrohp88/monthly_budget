@@ -14,6 +14,11 @@ services:
       - ./data:/data
     expose:
       - "3000"
+    # Loopback-only host binding so the host-installed cloudflared can reach
+    # the app at 127.0.0.1:3000. NOT reachable from the LAN (Caddy still owns
+    # 443 for budget.bluefalls.home, talking to app over the docker network).
+    ports:
+      - "127.0.0.1:3000:3000"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 30s

@@ -5,6 +5,7 @@ import { usePlaidLink } from "react-plaid-link";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Link2 } from "lucide-react";
+import { PLAID_LINK_TOKEN_STORAGE_KEY } from "@/lib/plaid-link-storage";
 
 interface PlaidLinkButtonProps {
   onLinked: () => void;
@@ -22,6 +23,14 @@ export function PlaidLinkButton({ onLinked }: PlaidLinkButtonProps) {
       const res = await fetch("/api/plaid/link-token", { method: "POST" });
       const json = await res.json() as { linkToken?: string; error?: string };
       if (!res.ok) throw new Error(json.error ?? "Failed to initialize Plaid");
+      // Persist so the OAuth-return page can reopen Link with the same token
+      // after the bank redirects the browser back.
+      try {
+        window.localStorage.setItem(PLAID_LINK_TOKEN_STORAGE_KEY, json.linkToken!);
+      } catch {
+        // localStorage may be unavailable in private mode; OAuth banks will fail
+        // gracefully on the return page, non-OAuth banks still work.
+      }
       setLinkToken(json.linkToken!);
     } catch (err) {
       toast.error((err as Error).message);
@@ -53,11 +62,13 @@ export function PlaidLinkButton({ onLinked }: PlaidLinkButtonProps) {
         setExchanging(false);
         setLinkToken(null);
         setFetching(false);
+        try { window.localStorage.removeItem(PLAID_LINK_TOKEN_STORAGE_KEY); } catch {}
       }
     },
     onExit: () => {
       setLinkToken(null);
       setFetching(false);
+      try { window.localStorage.removeItem(PLAID_LINK_TOKEN_STORAGE_KEY); } catch {}
     },
   });
 
