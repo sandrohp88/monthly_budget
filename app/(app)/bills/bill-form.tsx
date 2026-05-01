@@ -26,12 +26,16 @@ export type BillFormValues = {
   dueDay: number;
   dueMonth: number | null;
   autoPay: boolean;
+  paidViaCardId: string | null;
   notes: string | null;
 };
+
+const CASH_OPTION = "__cash__";
 
 export function BillForm({
   initial,
   categories,
+  cards,
   onSubmit,
   onCancel,
   submitting,
@@ -40,6 +44,7 @@ export function BillForm({
 }: {
   initial?: BillRow;
   categories: ReadonlyArray<string>;
+  cards: ReadonlyArray<{ id: string; name: string; isActive: boolean }>;
   onSubmit: (values: BillFormValues) => void | Promise<void>;
   onCancel: () => void;
   submitting?: boolean;
@@ -54,7 +59,21 @@ export function BillForm({
   const [dueDay, setDueDay] = React.useState<number>(initial?.dueDay ?? 1);
   const [dueMonth, setDueMonth] = React.useState<number | null>(initial?.dueMonth ?? null);
   const [autoPay, setAutoPay] = React.useState<boolean>(initial?.autoPay ?? false);
+  const [paidViaCardId, setPaidViaCardId] = React.useState<string>(
+    initial?.paidViaCardId ?? CASH_OPTION,
+  );
   const [notes, setNotes] = React.useState<string>(initial?.notes ?? "");
+
+  // The list to render in the dropdown: keep an archived linked card visible
+  // so the user can see the existing link before deciding to switch it.
+  const cardOptions = React.useMemo(() => {
+    const active = cards.filter((c) => c.isActive);
+    const linkedArchived =
+      paidViaCardId !== CASH_OPTION && !cards.find((c) => c.id === paidViaCardId && c.isActive)
+        ? cards.find((c) => c.id === paidViaCardId)
+        : null;
+    return linkedArchived ? [...active, linkedArchived] : active;
+  }, [cards, paidViaCardId]);
 
   const monthlyEq = frequency === "monthly" ? amountCents : Math.round(amountCents / 12);
 
@@ -72,6 +91,7 @@ export function BillForm({
           dueDay,
           dueMonth: frequency === "annual" ? dueMonth : null,
           autoPay,
+          paidViaCardId: paidViaCardId === CASH_OPTION ? null : paidViaCardId,
           notes: notes.trim() ? notes.trim() : null,
         });
       }}
@@ -156,6 +176,30 @@ export function BillForm({
             </Select>
           </div>
         ) : null}
+        <div className="col-span-2 space-y-1.5">
+          <Label>PAID VIA</Label>
+          <Select value={paidViaCardId} onValueChange={setPaidViaCardId}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={CASH_OPTION}>BANK / CASH</SelectItem>
+              {cardOptions.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name.toUpperCase()}
+                  {!c.isActive ? " (ARCHIVED)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+            {paidViaCardId === CASH_OPTION
+              ? "Deducts from balance on due day"
+              : cards.find((c) => c.id === paidViaCardId)?.isActive
+                ? "Skipped from cash projection — captured by the card's statement"
+                : "Linked card is archived — falling back to cash deduction"}
+          </p>
+        </div>
         <div className="col-span-2">
           <label className="flex cursor-pointer items-center justify-between">
             <Label>AUTOPAY</Label>

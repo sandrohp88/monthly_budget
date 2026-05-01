@@ -15,6 +15,7 @@ export const billCreateSchema = z
     dueDay: z.number().int().min(1).max(31),
     dueMonth: z.number().int().min(1).max(12).nullable().optional(),
     autoPay: z.boolean().default(false),
+    paidViaCardId: z.string().nullable().optional(),
     notes: z.string().max(500).nullable().optional(),
   })
   .refine(
@@ -142,3 +143,61 @@ export type CreditCardCreateInput = z.infer<typeof creditCardCreateSchema>;
 export type CreditCardUpdateInput = z.infer<typeof creditCardUpdateSchema>;
 export type StatementCreateInput = z.infer<typeof statementCreateSchema>;
 export type StatementUpdateInput = z.infer<typeof statementUpdateSchema>;
+
+// ── Plaid ───────────────────────────────────────────────────────────────────
+
+/** Body sent after Plaid Link completes: public_token + institution metadata. */
+export const plaidExchangeSchema = z.object({
+  publicToken: z.string().min(1),
+  institutionId: z.string().min(1),
+  institutionName: z.string().min(1).max(120),
+});
+
+/** User action on a single transaction draft. */
+export const plaidDraftActionSchema = z.object({
+  action: z.enum(["approve", "dismiss"]),
+  // approve path — user may override these before confirming
+  date: isoDate.optional(),
+  description: z.string().min(1).max(120).optional(),
+  amountCents: cents.optional(),
+  category: z.string().min(1).max(50).optional(),
+  notes: z.string().max(500).nullable().optional(),
+});
+
+/** User-editable per-account settings (toggles). */
+export const plaidAccountUpdateSchema = z.object({
+  useAsStartingBalance: z.boolean().optional(),
+  syncEnabled: z.boolean().optional(),
+});
+
+/** Optional item filter for a manual sync request. */
+export const plaidSyncSchema = z.object({
+  itemId: z.string().optional(),
+});
+
+/**
+ * Body for POST /api/plaid/accounts/[id]/link-card.
+ * - `creditCardId: string` — link to existing card
+ * - `creditCardId: null` — unlink the Plaid account from any card
+ * - `createNew: { name }` — create a brand new card and link it
+ * Exactly one of (creditCardId, createNew) must be provided.
+ */
+export const plaidLinkCardSchema = z
+  .object({
+    creditCardId: z.string().nullable().optional(),
+    createNew: z
+      .object({
+        name: z.string().min(1).max(80),
+      })
+      .optional(),
+  })
+  .refine(
+    (v) => (v.creditCardId !== undefined) !== (v.createNew !== undefined),
+    { message: "Provide exactly one of creditCardId or createNew" },
+  );
+
+export type PlaidExchangeInput = z.infer<typeof plaidExchangeSchema>;
+export type PlaidDraftActionInput = z.infer<typeof plaidDraftActionSchema>;
+export type PlaidAccountUpdateInput = z.infer<typeof plaidAccountUpdateSchema>;
+export type PlaidSyncInput = z.infer<typeof plaidSyncSchema>;
+export type PlaidLinkCardInput = z.infer<typeof plaidLinkCardSchema>;

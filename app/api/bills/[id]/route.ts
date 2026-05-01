@@ -27,6 +27,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       dueDay: data.dueDay,
       dueMonth: data.dueMonth ?? null,
       autoPay: data.autoPay,
+      paidViaCardId: data.paidViaCardId ? data.paidViaCardId : null,
       notes: data.notes ?? null,
       isActive: data.isActive ?? true,
     });

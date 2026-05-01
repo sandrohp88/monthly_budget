@@ -3,6 +3,7 @@ import {
   computeProjection,
   describeEvents,
   findWorstDay,
+  generatePaychecksFromSettings,
   __test__,
   type Bill,
   type ProjectionInput,
@@ -277,5 +278,48 @@ describe("projection engine", () => {
     expect(__test__.clampedBillDate(2024, 2, 31)).toBe("2024-02-29");
     expect(__test__.formatIsoDate(__test__.parseIsoDate("2025-07-04"))).toBe("2025-07-04");
     expect(() => __test__.parseIsoDate("not-a-date")).toThrow();
+  });
+
+  // ── describeEvents ────────────────────────────────────────────────────────
+  describe("describeEvents", () => {
+    it("returns an empty string for no events", () => {
+      expect(describeEvents([])).toBe("");
+    });
+    it("joins event labels with ' + '", () => {
+      expect(
+        describeEvents([
+          { kind: "paycheck", label: "Paycheck", amountCents: 100_000 },
+          { kind: "bill", label: "Rent", amountCents: 50_000 },
+        ]),
+      ).toBe("Paycheck + Rent");
+    });
+  });
+
+  // ── generatePaychecksFromSettings ─────────────────────────────────────────
+  describe("generatePaychecksFromSettings", () => {
+    it("emits paychecks at the requested cadence starting on firstPayday", () => {
+      const out = generatePaychecksFromSettings({
+        firstPayday: "2025-01-03",
+        frequencyDays: 14,
+        months: 1,
+        defaultAmountCents: 200_000,
+      });
+      // months=1 → window of 1*31 days. With 14-day cadence, that emits 3
+      // dates: Jan 3, Jan 17, Jan 31. Pin behavior so a refactor can't
+      // silently change cadence math.
+      expect(out.map((p) => p.payDate)).toEqual(["2025-01-03", "2025-01-17", "2025-01-31"]);
+      expect(out.every((p) => p.amountCents === 200_000)).toBe(true);
+    });
+
+    it("returns just the first paycheck when frequency exceeds the window", () => {
+      const out = generatePaychecksFromSettings({
+        firstPayday: "2025-01-03",
+        frequencyDays: 60,
+        months: 1, // window ≈ 31 days, less than one cadence
+        defaultAmountCents: 100_000,
+      });
+      expect(out).toHaveLength(1);
+      expect(out[0]?.payDate).toBe("2025-01-03");
+    });
   });
 });

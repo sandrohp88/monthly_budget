@@ -1,5 +1,6 @@
 import { addDaysIso } from "@/lib/dates";
-import type { CreditCardRow, CreditCardStatementRow } from "@/lib/db/schema";
+import { computeProjection } from "@/lib/projection";
+import type { BillRow, CreditCardRow, CreditCardStatementRow } from "@/lib/db/schema";
 
 /** Clamp a day-of-month to the actual number of days in that month (UTC). */
 function clampDay(year: number, month: number, day: number): number {
@@ -90,3 +91,88 @@ export type CardWithStatements = {
   card: CreditCardRow;
   statements: CreditCardStatementRow[];
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Next-cycle estimate
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The card's open billing cycle is the window between the previous statement
+ * close and the next one. Charges that land in this window appear on the next
+ * statement. Returned dates are inclusive on both ends.
+ */
+export function currentCycleWindow(
+  card: { statementDay: number },
+  fromIso: string,
+): { start: string; end: string } {
+  const end = nextDayOfMonthOnOrAfter(fromIso, card.statementDay);
+  // Previous close = same day-of-month, one calendar month earlier (clamped)
+  const [yStr, mStr] = end.split("-");
+  let year = Number(yStr);
+  let month = Number(mStr) - 1;
+  if (month < 1) {
+    month = 12;
+    year -= 1;
+  }
+  const prevClose = isoOf(year, month, clampDay(year, month, card.statementDay));
+  return { start: addDaysIso(prevClose, 1), end };
+}
+
+export type LinkedBillEstimate = {
+  billId: string;
+  name: string;
+  date: string;       // when it lands in this cycle
+  amountCents: number;
+};
+
+/**
+ * Compute every charge expected to hit the card in its current open cycle by
+ * running the linked bills through the existing projection engine. Reusing
+ * computeProjection means leap-year, day-clamp, and month-roll behavior stay
+ * consistent with the daily ledger.
+ */
+export function estimateCurrentCycle(
+  card: { statementDay: number; dueDay: number },
+  linkedBills: ReadonlyArray<BillRow>,
+  fromIso: string,
+): { window: { start: string; end: string }; charges: LinkedBillEstimate[]; totalCents: number } {
+  const window = currentCycleWindow(card, fromIso);
+  if (linkedBills.length === 0) {
+    return { window, charges: [], totalCents: 0 };
+  }
+
+  const rows = computeProjection({
+    startingBalanceCents: 0,
+    startDate: window.start,
+    endDate: window.end,
+    bills: linkedBills.map((b) => ({
+      id: b.id,
+      name: b.name,
+      amountCents: b.amountCents,
+      frequency: b.frequency,
+      dueDay: b.dueDay,
+      dueMonth: b.dueMonth,
+    })),
+    paychecks: [],
+    extras: [],
+  });
+
+  const charges: LinkedBillEstimate[] = [];
+  for (const row of rows) {
+    for (const ev of row.events) {
+      if (ev.kind !== "bill") continue;
+      // Find the source bill so we can preserve the row id (multiple bills
+      // may have the same display label)
+      const source = linkedBills.find((b) => b.name === ev.label) ?? linkedBills[0]!;
+      charges.push({
+        billId: source.id,
+        name: ev.label,
+        date: row.date,
+        amountCents: ev.amountCents,
+      });
+    }
+  }
+  const totalCents = charges.reduce((s, c) => s + c.amountCents, 0);
+  return { window, charges, totalCents };
+}
+
