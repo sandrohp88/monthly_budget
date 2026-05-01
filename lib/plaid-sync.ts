@@ -176,6 +176,14 @@ export async function syncPlaidTransactions(
  */
 export async function createLinkToken(userId: string): Promise<string> {
   const plaid = getPlaidClient();
+
+  // OAuth-required institutions (Navy Federal, Chase, BofA, etc.) won't load
+  // unless we pass a redirect_uri that's also registered in the Plaid dashboard.
+  // APP_URL is set in production to the public hostname (e.g. https://budget.sherrera.dev).
+  // In dev it can be left unset — non-OAuth sandbox banks work without it.
+  const appUrl = process.env.APP_URL?.replace(/\/$/, "");
+  const redirectUri = appUrl ? `${appUrl}/plaid/oauth-return` : undefined;
+
   const response = await plaid.linkTokenCreate({
     user: { client_user_id: userId },
     client_name: "FINANCE_OS",
@@ -183,6 +191,7 @@ export async function createLinkToken(userId: string): Promise<string> {
     optional_products: [Products.Liabilities],
     country_codes: [CountryCode.Us],
     language: "en",
+    ...(redirectUri ? { redirect_uri: redirectUri } : {}),
   });
   return response.data.link_token;
 }
