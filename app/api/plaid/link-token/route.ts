@@ -10,6 +10,7 @@ export async function POST() {
     const linkToken = await createLinkToken(auth.userId);
     return NextResponse.json({ linkToken });
   } catch (err) {
-    return jsonError(`Failed to create link token: ${(err as Error).message}`);
+    const detail = (err as any)?.response?.data ?? (err as Error).message;
+    return jsonError(`Failed to create link token: ${JSON.stringify(detail)}`);
   }
 }
