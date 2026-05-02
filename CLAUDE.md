@@ -273,6 +273,7 @@ weird gets emitted before merging.
 - `0003_add_bill_paid_via_card` — `bills.paid_via_card_id` (nullable FK to a credit card; see §17)
 - `0004_add_plaid` — `plaid_items`, `plaid_accounts`, `plaid_transaction_drafts` (see §17)
 - `0005_link_card_to_plaid` — `credit_cards.plaid_account_id` (nullable, unique) + unique index on `(card_id, statement_date)` for idempotent statement upsert
+- `0006_flexible_bill_intervals` — replaces `bills.frequency` / `due_day` / `due_month` with `interval_months` (any positive int: 1=monthly, 3=quarterly, 12=annual, etc.) + `anchor_date` (one ISO occurrence; the projection engine generates the rest from there). Table-rebuild migration; backfills monthly→`(1, '2024-01-DD')` and annual→`(12, '2024-MM-DD')` with day clamped to month length.
 
 ---
 

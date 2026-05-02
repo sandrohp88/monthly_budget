@@ -25,19 +25,60 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Money } from "@/components/money";
+import { DateLabel } from "@/components/date-label";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Badge } from "@/components/ui/badge";
 import { BillForm, type BillFormValues } from "./bill-form";
 import { cn } from "@/lib/cn";
+import { todayIso } from "@/lib/dates";
 import type { BillRow } from "@/lib/db/schema";
 
-const MONTHS = [
-  "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-  "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
-];
-
 function monthlyEquivalent(b: BillRow): number {
-  return b.frequency === "monthly" ? b.amountCents : Math.round(b.amountCents / 12);
+  return b.intervalMonths > 0 ? Math.round(b.amountCents / b.intervalMonths) : b.amountCents;
+}
+
+function intervalLabel(months: number): string {
+  switch (months) {
+    case 1: return "MONTHLY";
+    case 2: return "EVERY 2 MO";
+    case 3: return "QUARTERLY";
+    case 6: return "EVERY 6 MO";
+    case 12: return "ANNUAL";
+    default: return `EVERY ${months} MO`;
+  }
+}
+
+function daysInMonthUtc(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/**
+ * Next occurrence of this bill on or after `today`, derived by walking
+ * forward from the anchor in `intervalMonths` steps and clamping the
+ * day-of-month to each target month's length.
+ */
+function nextOccurrence(b: BillRow, today: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(b.anchorDate);
+  if (!m) return b.anchorDate;
+  const aY = Number(m[1]);
+  const aM = Number(m[2]);
+  const aD = Number(m[3]);
+  const tm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(today);
+  if (!tm) return b.anchorDate;
+  const tY = Number(tm[1]);
+  const tM = Number(tm[2]);
+  const monthsDiff = (tY - aY) * 12 + (tM - aM);
+  let k = Math.floor(monthsDiff / b.intervalMonths) - 1;
+  for (let i = 0; i < 4096; i++) {
+    const total = aY * 12 + (aM - 1) + k * b.intervalMonths;
+    const y = Math.floor(total / 12);
+    const mo = ((total % 12) + 12) % 12 + 1;
+    const d = Math.min(aD, daysInMonthUtc(y, mo));
+    const iso = `${String(y).padStart(4, "0")}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    if (iso >= today) return iso;
+    k++;
+  }
+  return b.anchorDate;
 }
 
 export type BillCardOption = { id: string; name: string; isActive: boolean };
@@ -56,7 +97,8 @@ export function BillsClient({
   const [showArchived, setShowArchived] = React.useState(false);
   const [filter, setFilter] = React.useState("");
   const [categoryFilter, setCategoryFilter] = React.useState<string>("ALL");
-  const [sortKey, setSortKey] = React.useState<"name" | "amount" | "dueDay" | "monthly">("name");
+  const [sortKey, setSortKey] = React.useState<"name" | "amount" | "next" | "monthly">("name");
+  const today = todayIso();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<BillRow | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
@@ -72,7 +114,7 @@ export function BillsClient({
     .sort((a, b) => {
       switch (sortKey) {
         case "amount": return a.amountCents - b.amountCents;
-        case "dueDay": return a.dueDay - b.dueDay;
+        case "next": return nextOccurrence(a, today).localeCompare(nextOccurrence(b, today));
         case "monthly": return monthlyEquivalent(a) - monthlyEquivalent(b);
         default: return a.name.localeCompare(b.name);
       }
@@ -164,7 +206,7 @@ export function BillsClient({
       <PageHead
         module="MODULE_02"
         title="BILLS"
-        subtitle="Recurring expenses · monthly and annual obligations"
+        subtitle="Recurring expenses · any cycle from monthly to multi-year"
         actions={
           <>
             <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -242,11 +284,10 @@ export function BillsClient({
                 <TableHead onClick={() => setSortKey("amount")} className="cursor-pointer text-right">
                   AMOUNT ↕
                 </TableHead>
-                <TableHead>FREQ</TableHead>
-                <TableHead onClick={() => setSortKey("dueDay")} className="cursor-pointer text-right">
-                  DUE DAY
+                <TableHead>EVERY</TableHead>
+                <TableHead onClick={() => setSortKey("next")} className="cursor-pointer text-right">
+                  NEXT DUE ↕
                 </TableHead>
-                <TableHead className="text-right">DUE MONTH</TableHead>
                 <TableHead>AUTOPAY</TableHead>
                 <TableHead onClick={() => setSortKey("monthly")} className="cursor-pointer text-right">
                   MONTHLY EQ ↕
@@ -286,13 +327,12 @@ export function BillsClient({
                     <Money cents={b.amountCents} />
                   </TableCell>
                   <TableCell>
-                    <StatusPill variant={b.frequency === "annual" ? "warn" : "default"}>
-                      {b.frequency.toUpperCase()}
+                    <StatusPill variant={b.intervalMonths === 1 ? "default" : "warn"}>
+                      {intervalLabel(b.intervalMonths)}
                     </StatusPill>
                   </TableCell>
-                  <TableCell className="text-right">{b.dueDay}</TableCell>
-                  <TableCell className="text-right">
-                    {b.frequency === "annual" && b.dueMonth ? MONTHS[b.dueMonth - 1] : "—"}
+                  <TableCell className="text-right tabular">
+                    <DateLabel iso={nextOccurrence(b, today)} format="short" />
                   </TableCell>
                   <TableCell>
                     <StatusPill variant={b.autoPay ? "default" : "off"}>
@@ -313,7 +353,7 @@ export function BillsClient({
                 <TableCell className="text-right">
                   <Money cents={totalAmount} />
                 </TableCell>
-                <TableCell colSpan={4} />
+                <TableCell colSpan={3} />
                 <TableCell className="text-right text-[var(--mint)]">
                   <Money cents={totalMonthly} />
                 </TableCell>

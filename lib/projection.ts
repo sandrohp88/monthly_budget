@@ -23,9 +23,10 @@ export type Bill = {
   id: string;
   name: string;
   amountCents: number;
-  frequency: "monthly" | "annual";
-  dueDay: number;
-  dueMonth?: number | null;
+  /** Cycle length in months. 1=monthly, 3=quarterly, 12=annual, etc. */
+  intervalMonths: number;
+  /** ISO YYYY-MM-DD of one known occurrence. */
+  anchorDate: string;
 };
 
 export type OneTimeExpense = {
@@ -100,6 +101,23 @@ function clampedBillDate(year: number, month: number, dueDay: number): string {
   return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
+/**
+ * Add `deltaMonths` to (year, month) — month is 1-indexed — and clamp `day`
+ * to the resulting month's length. Handles negative deltas correctly.
+ */
+function addMonthsClamped(
+  year: number,
+  month: number,
+  day: number,
+  deltaMonths: number,
+): { year: number; month: number; day: number } {
+  const totalMonths = year * 12 + (month - 1) + deltaMonths;
+  const y = Math.floor(totalMonths / 12);
+  const m = ((totalMonths % 12) + 12) % 12 + 1;
+  const d = Math.min(day, daysInMonth(y, m));
+  return { year: y, month: m, day: d };
+}
+
 export function computeProjection(input: ProjectionInput): ProjectionRow[] {
   const startTs = parseIsoDate(input.startDate);
   const endTs = parseIsoDate(input.endDate);
@@ -132,28 +150,30 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
   const endM = endDateObj.getUTCMonth() + 1;
 
   for (const b of input.bills) {
-    if (b.frequency === "monthly") {
-      for (let y = startY; y <= endY; y++) {
-        const fromM = y === startY ? startM : 1;
-        const toM = y === endY ? endM : 12;
-        for (let m = fromM; m <= toM; m++) {
-          addEvent(clampedBillDate(y, m, b.dueDay), {
-            kind: "bill",
-            label: b.name,
-            amountCents: b.amountCents,
-          });
-        }
-      }
-    } else {
-      const dueMonth = b.dueMonth;
-      if (dueMonth == null) continue;
-      for (let y = startY; y <= endY; y++) {
-        addEvent(clampedBillDate(y, dueMonth, b.dueDay), {
-          kind: "bill",
-          label: b.name,
-          amountCents: b.amountCents,
-        });
-      }
+    if (b.intervalMonths < 1) continue;
+    const anchorTs = parseIsoDate(b.anchorDate);
+    const anchorObj = new Date(anchorTs);
+    const anchorY = anchorObj.getUTCFullYear();
+    const anchorM = anchorObj.getUTCMonth() + 1;
+    const anchorD = anchorObj.getUTCDate();
+
+    // Months between anchor and the projection window, used to bracket the
+    // range of `k` values we need to enumerate. The ±1 buffer absorbs
+    // off-by-ones from day-clamping and partial-month boundaries.
+    const anchorMonths = anchorY * 12 + (anchorM - 1);
+    const startMonths = startY * 12 + (startM - 1);
+    const endMonths = endY * 12 + (endM - 1);
+    const kStart = Math.floor((startMonths - anchorMonths) / b.intervalMonths) - 1;
+    const kEnd = Math.floor((endMonths - anchorMonths) / b.intervalMonths) + 1;
+
+    for (let k = kStart; k <= kEnd; k++) {
+      const occ = addMonthsClamped(anchorY, anchorM, anchorD, k * b.intervalMonths);
+      const date = `${String(occ.year).padStart(4, "0")}-${String(occ.month).padStart(2, "0")}-${String(occ.day).padStart(2, "0")}`;
+      addEvent(date, {
+        kind: "bill",
+        label: b.name,
+        amountCents: b.amountCents,
+      });
     }
   }
 

@@ -43,6 +43,13 @@
       "when": 1777950000000,
       "tag": "0005_link_card_to_plaid",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1778050000000,
+      "tag": "0006_flexible_bill_intervals",
+      "breakpoints": true
     }
   ]
 }

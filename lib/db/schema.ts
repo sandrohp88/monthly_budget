@@ -66,9 +66,18 @@ export const bills = sqliteTable(
     name: text("name").notNull(),
     category: text("category").notNull(),
     amountCents: integer("amount_cents").notNull(),
-    frequency: text("frequency", { enum: ["monthly", "annual"] }).notNull(),
-    dueDay: integer("due_day").notNull(),
-    dueMonth: integer("due_month"),
+    /**
+     * Cycle length in months. 1=monthly, 3=quarterly, 6=semiannual, 12=annual,
+     * any positive integer otherwise (e.g. 2=every 2 months, 24=every 2 years).
+     */
+    intervalMonths: integer("interval_months").notNull(),
+    /**
+     * One known occurrence of this bill (ISO YYYY-MM-DD). The projection engine
+     * generates all other occurrences by adding/subtracting `intervalMonths`
+     * from this date, day-clamping to each target month's length.
+     * The day-of-month encoded here is the "intended" due day.
+     */
+    anchorDate: text("anchor_date").notNull(),
     autoPay: integer("auto_pay", { mode: "boolean" }).notNull().default(false),
     /**
      * If set, this bill is paid by the referenced credit card and should NOT

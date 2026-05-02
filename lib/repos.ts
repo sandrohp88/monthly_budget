@@ -993,7 +993,7 @@ export async function exportAll(userId: string) {
   ]);
   return {
     exportedAt: new Date().toISOString(),
-    schemaVersion: 2,
+    schemaVersion: 3,
     settings: s,
     bills: b,
     paychecks: p,
@@ -1026,18 +1026,43 @@ export async function importAll(
       }).run();
     }
   }
-  for (const b of (payload.bills ?? []) as Array<Partial<BillRow>>) {
-    if (!b.name || !b.frequency || typeof b.amountCents !== "number" || typeof b.dueDay !== "number") continue;
+  type LegacyBill = Partial<BillRow> & {
+    frequency?: "monthly" | "annual";
+    dueDay?: number;
+    dueMonth?: number | null;
+  };
+  const monthDays = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  for (const b of (payload.bills ?? []) as LegacyBill[]) {
+    if (!b.name || typeof b.amountCents !== "number") continue;
+    let intervalMonths: number;
+    let anchorDate: string;
+    if (typeof b.intervalMonths === "number" && typeof b.anchorDate === "string") {
+      intervalMonths = b.intervalMonths;
+      anchorDate = b.anchorDate;
+    } else if (b.frequency === "monthly" && typeof b.dueDay === "number") {
+      intervalMonths = 1;
+      anchorDate = `2024-01-${String(b.dueDay).padStart(2, "0")}`;
+    } else if (
+      b.frequency === "annual" &&
+      typeof b.dueDay === "number" &&
+      typeof b.dueMonth === "number"
+    ) {
+      intervalMonths = 12;
+      const day = Math.min(b.dueDay, monthDays[b.dueMonth - 1] ?? 28);
+      anchorDate = `2024-${String(b.dueMonth).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    } else {
+      continue;
+    }
     await db.insert(bills).values({
       id: b.id ?? newId(),
       userId,
       name: b.name,
       category: b.category ?? "Other",
       amountCents: b.amountCents,
-      frequency: b.frequency,
-      dueDay: b.dueDay,
-      dueMonth: b.dueMonth ?? null,
+      intervalMonths,
+      anchorDate,
       autoPay: b.autoPay ?? false,
+      paidViaCardId: b.paidViaCardId ?? null,
       notes: b.notes ?? null,
       isActive: b.isActive ?? true,
     }).run();
