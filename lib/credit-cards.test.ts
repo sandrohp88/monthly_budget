@@ -32,23 +32,26 @@ function statement(over: Partial<CreditCardStatementRow> = {}): CreditCardStatem
   };
 }
 
-function bill(over: Partial<BillRow> = {}): BillRow {
+// Tests still construct fixtures by day-of-month. Translate `dueDay` to a
+// January 2024 anchor (Jan has 31 days, so every dueDay 1-31 is representable
+// without clamping).
+function bill(over: Partial<BillRow> & { dueDay?: number } = {}): BillRow {
+  const { dueDay, ...rest } = over;
   return {
     id: "b1",
     userId: "u1",
     name: "Internet",
     category: "Utilities",
     amountCents: 50_00,
-    frequency: "monthly",
-    dueDay: 5,
-    dueMonth: null,
+    intervalMonths: 1,
+    anchorDate: dueDay != null ? `2024-01-${String(dueDay).padStart(2, "0")}` : "2024-01-05",
     autoPay: false,
     paidViaCardId: null,
     notes: null,
     isActive: true,
     createdAt: 0,
     updatedAt: 0,
-    ...over,
+    ...rest,
   };
 }
 

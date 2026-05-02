@@ -41,8 +41,8 @@ describe("projection engine", () => {
       id: "b1",
       name: "Rent",
       amountCents: 100_00,
-      frequency: "monthly",
-      dueDay: 15,
+      intervalMonths: 1,
+      anchorDate: "2024-01-15",
     };
     const rows = computeProjection({ ...baseInput(), bills: [bill] });
     const billDays = rows.filter((r) => r.events.some((e) => e.label === "Rent"));
@@ -60,9 +60,8 @@ describe("projection engine", () => {
       id: "b2",
       name: "Domain renewal",
       amountCents: 20_00,
-      frequency: "annual",
-      dueDay: 15,
-      dueMonth: 7,
+      intervalMonths: 12,
+      anchorDate: "2024-07-15",
     };
     const rows = computeProjection({
       ...baseInput(),
@@ -74,14 +73,17 @@ describe("projection engine", () => {
     expect(hits.map((r) => r.date)).toEqual(["2024-07-15", "2025-07-15", "2026-07-15"]);
   });
 
-  it("annual bill with dueDay 31 in Feb clamps to last day of February", () => {
+  it("annual bill with anchor day 31 in Feb clamps to last day of February", () => {
+    // Anchor is "2024-02-29" (the natural Feb-31 clamp in a leap year).
+    // The engine should remember the *intended* day-of-month — but since
+    // we already clamped at backfill, day=29 is what's stored. Across
+    // non-leap years, that lands on Feb 28 (clamp) and Feb 29 in the leap year.
     const bill: Bill = {
       id: "b3",
       name: "Edge bill",
       amountCents: 1_00,
-      frequency: "annual",
-      dueDay: 31,
-      dueMonth: 2,
+      intervalMonths: 12,
+      anchorDate: "2024-02-29",
     };
     const rows = computeProjection({
       ...baseInput(),
@@ -97,13 +99,13 @@ describe("projection engine", () => {
     ]);
   });
 
-  it("monthly bill with dueDay 31 clamps in 30-day months and February", () => {
+  it("monthly bill with anchor day 31 clamps in 30-day months and February", () => {
     const bill: Bill = {
       id: "b4",
       name: "Last day",
       amountCents: 1_00,
-      frequency: "monthly",
-      dueDay: 31,
+      intervalMonths: 1,
+      anchorDate: "2024-01-31",
     };
     const rows = computeProjection({
       ...baseInput(),
@@ -128,6 +130,81 @@ describe("projection engine", () => {
     ]);
   });
 
+  it("quarterly bill (intervalMonths=3) fires four times per year", () => {
+    const bill: Bill = {
+      id: "bq",
+      name: "Insurance",
+      amountCents: 300_00,
+      intervalMonths: 3,
+      anchorDate: "2025-02-10",
+    };
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-01-01",
+      endDate: "2025-12-31",
+      bills: [bill],
+    });
+    const hits = rows.filter((r) => r.events.some((e) => e.label === "Insurance"));
+    expect(hits.map((r) => r.date)).toEqual([
+      "2025-02-10",
+      "2025-05-10",
+      "2025-08-10",
+      "2025-11-10",
+    ]);
+  });
+
+  it("semiannual bill (intervalMonths=6) generates backward from a future anchor", () => {
+    // Anchor is in the future relative to the projection window — engine must
+    // walk backward by the interval to find occurrences in-window.
+    const bill: Bill = {
+      id: "bs",
+      name: "Property tax",
+      amountCents: 1500_00,
+      intervalMonths: 6,
+      anchorDate: "2026-09-01",
+    };
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2024-01-01",
+      endDate: "2026-12-31",
+      bills: [bill],
+    });
+    const hits = rows.filter((r) => r.events.some((e) => e.label === "Property tax"));
+    expect(hits.map((r) => r.date)).toEqual([
+      "2024-03-01",
+      "2024-09-01",
+      "2025-03-01",
+      "2025-09-01",
+      "2026-03-01",
+      "2026-09-01",
+    ]);
+  });
+
+  it("every-2-months bill aligns to anchor day-of-month across odd intervals", () => {
+    const bill: Bill = {
+      id: "b2m",
+      name: "Gym",
+      amountCents: 75_00,
+      intervalMonths: 2,
+      anchorDate: "2025-03-20",
+    };
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-01-01",
+      endDate: "2025-12-31",
+      bills: [bill],
+    });
+    const hits = rows.filter((r) => r.events.some((e) => e.label === "Gym"));
+    expect(hits.map((r) => r.date)).toEqual([
+      "2025-01-20",
+      "2025-03-20",
+      "2025-05-20",
+      "2025-07-20",
+      "2025-09-20",
+      "2025-11-20",
+    ]);
+  });
+
   it("paycheck and bill on the same day: paycheck applied first, balance reflects both", () => {
     const rows = computeProjection({
       ...baseInput(),
@@ -140,8 +217,8 @@ describe("projection engine", () => {
           id: "b",
           name: "Rent",
           amountCents: 700_00,
-          frequency: "monthly",
-          dueDay: 1,
+          intervalMonths: 1,
+          anchorDate: "2024-01-01",
         },
       ],
     });
@@ -177,8 +254,8 @@ describe("projection engine", () => {
           id: "b",
           name: "Internet",
           amountCents: 60_00,
-          frequency: "monthly",
-          dueDay: 11,
+          intervalMonths: 1,
+          anchorDate: "2024-01-11",
         },
       ],
       extras: [{ date: "2025-04-11", description: "Concert tickets", amountCents: 90_00 }],

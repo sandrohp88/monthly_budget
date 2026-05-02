@@ -6,22 +6,18 @@ const isoDate = z
 
 const cents = z.number().int();
 
-export const billCreateSchema = z
-  .object({
-    name: z.string().min(1).max(80),
-    category: z.string().min(1).max(50),
-    amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
-    frequency: z.enum(["monthly", "annual"]),
-    dueDay: z.number().int().min(1).max(31),
-    dueMonth: z.number().int().min(1).max(12).nullable().optional(),
-    autoPay: z.boolean().default(false),
-    paidViaCardId: z.string().nullable().optional(),
-    notes: z.string().max(500).nullable().optional(),
-  })
-  .refine(
-    (b) => b.frequency === "monthly" || (typeof b.dueMonth === "number" && b.dueMonth >= 1 && b.dueMonth <= 12),
-    { message: "Annual bills require a due month", path: ["dueMonth"] },
-  );
+export const billCreateSchema = z.object({
+  name: z.string().min(1).max(80),
+  category: z.string().min(1).max(50),
+  amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
+  /** Cycle length in months. 1=monthly, 3=quarterly, 12=annual, etc. */
+  intervalMonths: z.number().int().min(1).max(120),
+  /** One known occurrence; the engine generates the rest from this. */
+  anchorDate: isoDate,
+  autoPay: z.boolean().default(false),
+  paidViaCardId: z.string().nullable().optional(),
+  notes: z.string().max(500).nullable().optional(),
+});
 
 export const billUpdateSchema = billCreateSchema.and(
   z.object({ isActive: z.boolean().optional() }),

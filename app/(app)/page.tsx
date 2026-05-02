@@ -56,12 +56,14 @@ export default async function DashboardPage() {
       : null;
   const ccOverdueCount = openStatements.filter((s) => s.dueDate < todayIso()).length;
 
-  const totalMonthlyBills = bills.reduce((sum, b) => {
-    if (b.frequency === "monthly") return sum + b.amountCents;
-    return sum + Math.round(b.amountCents / 12);
-  }, 0);
-  const totalAnnualBills = bills.reduce(
-    (sum, b) => (b.frequency === "annual" ? sum + b.amountCents : sum),
+  const totalMonthlyBills = bills.reduce(
+    (sum, b) => sum + (b.intervalMonths > 0 ? Math.round(b.amountCents / b.intervalMonths) : b.amountCents),
+    0,
+  );
+  // Annualized cost of bills that don't recur monthly (quarterly, annual, etc.).
+  const nonMonthlyBills = bills.filter((b) => b.intervalMonths > 1);
+  const totalAnnualBills = nonMonthlyBills.reduce(
+    (sum, b) => sum + Math.round((b.amountCents * 12) / b.intervalMonths),
     0,
   );
 
@@ -132,12 +134,12 @@ export default async function DashboardPage() {
         <Tile
           label="MONTHLY BILLS"
           value={<Money cents={totalMonthlyBills} />}
-          delta={`includes annual / 12`}
+          delta={`amortized across all cycles`}
         />
         <Tile
-          label="ANNUAL BILLS"
+          label="NON-MONTHLY (ANNUALIZED)"
           value={<Money cents={totalAnnualBills} />}
-          delta={`${bills.filter((b) => b.frequency === "annual").length} tracked`}
+          delta={`${nonMonthlyBills.length} tracked`}
         />
         <Tile
           label="ONE-TIME (90D)"

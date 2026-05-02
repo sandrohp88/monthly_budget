@@ -16,21 +16,35 @@ import {
 } from "@/components/ui/select";
 import { Money } from "@/components/money";
 import { CategoryDialog } from "@/components/category-dialog";
+import { todayIso } from "@/lib/dates";
 import type { BillRow } from "@/lib/db/schema";
 
 export type BillFormValues = {
   name: string;
   category: string;
   amountCents: number;
-  frequency: "monthly" | "annual";
-  dueDay: number;
-  dueMonth: number | null;
+  intervalMonths: number;
+  anchorDate: string;
   autoPay: boolean;
   paidViaCardId: string | null;
   notes: string | null;
 };
 
 const CASH_OPTION = "__cash__";
+const CUSTOM_PRESET = "custom";
+
+const INTERVAL_PRESETS: ReadonlyArray<{ value: string; months: number; label: string }> = [
+  { value: "1", months: 1, label: "MONTHLY" },
+  { value: "2", months: 2, label: "EVERY 2 MONTHS" },
+  { value: "3", months: 3, label: "QUARTERLY (3 MO)" },
+  { value: "6", months: 6, label: "EVERY 6 MONTHS" },
+  { value: "12", months: 12, label: "ANNUAL" },
+  { value: CUSTOM_PRESET, months: 0, label: "CUSTOM…" },
+];
+
+function presetForMonths(m: number): string {
+  return INTERVAL_PRESETS.find((p) => p.months === m)?.value ?? CUSTOM_PRESET;
+}
 
 export function BillForm({
   initial,
@@ -55,9 +69,11 @@ export function BillForm({
   const [category, setCategory] = React.useState(initial?.category ?? categories[0] ?? "Other");
   const [categoryDialogOpen, setCategoryDialogOpen] = React.useState(false);
   const [amountCents, setAmountCents] = React.useState(initial?.amountCents ?? 0);
-  const [frequency, setFrequency] = React.useState<"monthly" | "annual">(initial?.frequency ?? "monthly");
-  const [dueDay, setDueDay] = React.useState<number>(initial?.dueDay ?? 1);
-  const [dueMonth, setDueMonth] = React.useState<number | null>(initial?.dueMonth ?? null);
+  const [intervalMonths, setIntervalMonths] = React.useState<number>(initial?.intervalMonths ?? 1);
+  const [intervalPreset, setIntervalPreset] = React.useState<string>(
+    initial ? presetForMonths(initial.intervalMonths) : "1",
+  );
+  const [anchorDate, setAnchorDate] = React.useState<string>(initial?.anchorDate ?? todayIso());
   const [autoPay, setAutoPay] = React.useState<boolean>(initial?.autoPay ?? false);
   const [paidViaCardId, setPaidViaCardId] = React.useState<string>(
     initial?.paidViaCardId ?? CASH_OPTION,
@@ -75,7 +91,15 @@ export function BillForm({
     return linkedArchived ? [...active, linkedArchived] : active;
   }, [cards, paidViaCardId]);
 
-  const monthlyEq = frequency === "monthly" ? amountCents : Math.round(amountCents / 12);
+  const monthlyEq = intervalMonths > 0 ? Math.round(amountCents / intervalMonths) : amountCents;
+
+  const onPresetChange = (v: string) => {
+    setIntervalPreset(v);
+    if (v !== CUSTOM_PRESET) {
+      const m = Number(v);
+      if (Number.isFinite(m) && m > 0) setIntervalMonths(m);
+    }
+  };
 
   return (
     <form
@@ -87,9 +111,8 @@ export function BillForm({
           name: name.trim(),
           category,
           amountCents,
-          frequency,
-          dueDay,
-          dueMonth: frequency === "annual" ? dueMonth : null,
+          intervalMonths,
+          anchorDate,
           autoPay,
           paidViaCardId: paidViaCardId === CASH_OPTION ? null : paidViaCardId,
           notes: notes.trim() ? notes.trim() : null,
@@ -131,49 +154,44 @@ export function BillForm({
         </div>
         <div className="space-y-1.5">
           <Label>FREQUENCY</Label>
-          <Select value={frequency} onValueChange={(v) => setFrequency(v as "monthly" | "annual")}>
+          <Select value={intervalPreset} onValueChange={onPresetChange}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="monthly">MONTHLY</SelectItem>
-              <SelectItem value="annual">ANNUAL</SelectItem>
+              {INTERVAL_PRESETS.map((p) => (
+                <SelectItem key={p.value} value={p.value}>
+                  {p.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="dueDay">DUE DAY (1–31)</Label>
+          <Label htmlFor="anchorDate">NEXT DUE DATE</Label>
           <Input
-            id="dueDay"
-            type="number"
-            min={1}
-            max={31}
+            id="anchorDate"
+            type="date"
             required
-            value={dueDay}
-            onChange={(e) => setDueDay(Number(e.target.value))}
+            value={anchorDate}
+            onChange={(e) => setAnchorDate(e.target.value)}
           />
         </div>
-        {frequency === "annual" ? (
+        {intervalPreset === CUSTOM_PRESET ? (
           <div className="col-span-2 space-y-1.5">
-            <Label>DUE MONTH</Label>
-            <Select
-              value={dueMonth ? String(dueMonth) : ""}
-              onValueChange={(v) => setDueMonth(Number(v))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select a month" />
-              </SelectTrigger>
-              <SelectContent>
-                {[
-                  "January", "February", "March", "April", "May", "June",
-                  "July", "August", "September", "October", "November", "December",
-                ].map((m, i) => (
-                  <SelectItem key={m} value={String(i + 1)}>
-                    {m.toUpperCase()}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="intervalMonths">EVERY N MONTHS</Label>
+            <Input
+              id="intervalMonths"
+              type="number"
+              min={1}
+              max={120}
+              required
+              value={intervalMonths}
+              onChange={(e) => setIntervalMonths(Math.max(1, Number(e.target.value) || 1))}
+            />
+            <p className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+              1=monthly · 12=annual · 24=every 2 years · etc.
+            </p>
           </div>
         ) : null}
         <div className="col-span-2 space-y-1.5">

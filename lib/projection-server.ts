@@ -79,9 +79,8 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       id: b.id,
       name: b.name,
       amountCents: b.amountCents,
-      frequency: b.frequency,
-      dueDay: b.dueDay,
-      dueMonth: b.dueMonth,
+      intervalMonths: b.intervalMonths,
+      anchorDate: b.anchorDate,
     })),
     extras: [
       ...extras.map((e) => ({
