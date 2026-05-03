@@ -1,7 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { Plus, Trash2, AlertTriangle, CheckCircle2, FileText } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  AlertTriangle,
+  CheckCircle2,
+  FileText,
+  Sparkles,
+  Scale,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +24,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -25,17 +41,21 @@ import { DateLabel } from "@/components/date-label";
 import {
   CardWithStatements,
   LinkedBillEstimate,
+  cardPromoWhatIf,
   currentStatementOf,
   daysBetween,
   dueDateFromStatement,
   isStatementOpen,
   nextDayOfMonthOnOrAfter,
   paidWithoutInterest,
+  promoMonthlyChunkAt,
+  promoWhatIf,
   totalDue,
 } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 import type {
+  CreditCardPromoRow,
   CreditCardRow,
   CreditCardStatementRow,
 } from "@/lib/db/schema";
@@ -50,6 +70,7 @@ export type CycleEstimate = {
 export type CardWithStatementsAndEstimate = CardWithStatements & {
   estimate: CycleEstimate | null;
   linkedBillCount: number;
+  promos: CreditCardPromoRow[];
 };
 
 export function CreditCardsClient({
@@ -64,6 +85,10 @@ export function CreditCardsClient({
   const [editCard, setEditCard] = React.useState<CreditCardRow | null>(null);
   const [statementCard, setStatementCard] = React.useState<CreditCardRow | null>(null);
   const [editStatement, setEditStatement] = React.useState<{ cardId: string; statement: CreditCardStatementRow } | null>(null);
+  const [createPromoCard, setCreatePromoCard] = React.useState<CreditCardRow | null>(null);
+  const [editPromo, setEditPromo] = React.useState<{ card: CreditCardRow; promo: CreditCardPromoRow } | null>(null);
+  const [whatIfPromo, setWhatIfPromo] = React.useState<{ card: CreditCardRow; promo: CreditCardPromoRow } | null>(null);
+  const [whatIfCard, setWhatIfCard] = React.useState<{ card: CreditCardRow; promos: CreditCardPromoRow[] } | null>(null);
 
   const today = todayIso();
 
@@ -85,6 +110,18 @@ export function CreditCardsClient({
   const totalLinkedBills = cards
     .filter((c) => c.card.isActive)
     .reduce((sum, c) => sum + c.linkedBillCount, 0);
+
+  // Promo aggregates across all active cards
+  const allActivePromos = cards
+    .filter((c) => c.card.isActive)
+    .flatMap((c) => c.promos.filter((p) => p.isActive && p.remainingAmountCents > 0));
+  const totalPromoRemainingCents = allActivePromos.reduce(
+    (s, p) => s + p.remainingAmountCents,
+    0,
+  );
+  const nextPromoDeadline = [...allActivePromos].sort((a, b) =>
+    a.endDate.localeCompare(b.endDate),
+  )[0];
 
   // ── refresh after writes ────────────────────────────────────────────────
   const refresh = async () => {
@@ -173,6 +210,32 @@ export function CreditCardsClient({
           variant={overdue.length > 0 ? "red" : "default"}
           delta={overdue.length > 0 ? "INTEREST ACCRUING" : "none"}
         />
+        <Tile
+          label="PROMO BALANCE"
+          value={
+            totalPromoRemainingCents > 0 ? (
+              <Money cents={totalPromoRemainingCents} />
+            ) : (
+              <span className="text-[var(--text-2)] text-base">—</span>
+            )
+          }
+          delta={
+            allActivePromos.length > 0 ? (
+              <>
+                {allActivePromos.length} ACTIVE
+                {nextPromoDeadline ? (
+                  <>
+                    {" · NEXT END "}
+                    <DateLabel iso={nextPromoDeadline.endDate} format="short" />
+                  </>
+                ) : null}
+              </>
+            ) : (
+              "no 0% promos"
+            )
+          }
+          variant={totalPromoRemainingCents > 0 ? "mint" : "default"}
+        />
       </TileGrid>
 
       {activeCards.length === 0 ? (
@@ -191,18 +254,25 @@ export function CreditCardsClient({
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {activeCards.map(({ card, statements, estimate, linkedBillCount }) => (
+          {activeCards.map(({ card, statements, estimate, linkedBillCount, promos }) => (
             <CreditCardTile
               key={card.id}
               card={card}
               statements={statements}
               estimate={estimate}
               linkedBillCount={linkedBillCount}
+              promos={promos}
               today={today}
               onAddStatement={() => setStatementCard(card)}
               onEdit={() => setEditCard(card)}
               onArchive={() => archiveCard(card.id)}
               onEditStatement={(s) => setEditStatement({ cardId: card.id, statement: s })}
+              onAddPromo={() => setCreatePromoCard(card)}
+              onEditPromo={(p) => setEditPromo({ card, promo: p })}
+              onPromoWhatIf={(p) => setWhatIfPromo({ card, promo: p })}
+              onCardPromoWhatIf={() =>
+                setWhatIfCard({ card, promos: promos.filter((p) => p.isActive) })
+              }
             />
           ))}
         </div>
@@ -255,6 +325,51 @@ export function CreditCardsClient({
           }}
         />
       ) : null}
+
+      {/* Promo create dialog */}
+      {createPromoCard ? (
+        <PromoDialog
+          card={createPromoCard}
+          onClose={() => setCreatePromoCard(null)}
+          onSaved={async () => {
+            setCreatePromoCard(null);
+            await refresh();
+          }}
+        />
+      ) : null}
+
+      {/* Promo edit dialog */}
+      {editPromo ? (
+        <PromoDialog
+          card={editPromo.card}
+          promo={editPromo.promo}
+          onClose={() => setEditPromo(null)}
+          onSaved={async () => {
+            setEditPromo(null);
+            await refresh();
+          }}
+        />
+      ) : null}
+
+      {/* Per-promo what-if sheet */}
+      {whatIfPromo ? (
+        <PromoWhatIfSheet
+          scope="promo"
+          card={whatIfPromo.card}
+          promos={[whatIfPromo.promo]}
+          onClose={() => setWhatIfPromo(null)}
+        />
+      ) : null}
+
+      {/* Per-card rollup what-if sheet */}
+      {whatIfCard ? (
+        <PromoWhatIfSheet
+          scope="card"
+          card={whatIfCard.card}
+          promos={whatIfCard.promos}
+          onClose={() => setWhatIfCard(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -268,21 +383,31 @@ function CreditCardTile({
   statements,
   estimate,
   linkedBillCount,
+  promos,
   today,
   onAddStatement,
   onEdit,
   onArchive,
   onEditStatement,
+  onAddPromo,
+  onEditPromo,
+  onPromoWhatIf,
+  onCardPromoWhatIf,
 }: {
   card: CreditCardRow;
   statements: CreditCardStatementRow[];
   estimate: CycleEstimate | null;
   linkedBillCount: number;
+  promos: CreditCardPromoRow[];
   today: string;
   onAddStatement: () => void;
   onEdit: () => void;
   onArchive: () => void;
   onEditStatement: (s: CreditCardStatementRow) => void;
+  onAddPromo: () => void;
+  onEditPromo: (p: CreditCardPromoRow) => void;
+  onPromoWhatIf: (p: CreditCardPromoRow) => void;
+  onCardPromoWhatIf: () => void;
 }) {
   const current = currentStatementOf(statements);
   const isOpen = current ? isStatementOpen(current) : false;
@@ -506,6 +631,17 @@ function CreditCardTile({
           ) : null}
         </div>
       ) : null}
+
+      {/* promotional financing */}
+      <PromosSection
+        card={card}
+        promos={promos}
+        today={today}
+        onAdd={onAddPromo}
+        onEdit={onEditPromo}
+        onWhatIf={onPromoWhatIf}
+        onCardWhatIf={onCardPromoWhatIf}
+      />
 
       {/* recent statement history */}
       {statements.length > 1 ? (
@@ -993,6 +1129,470 @@ function ActualVsEstimate({
         <Money cents={Math.abs(delta)} />
       </span>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Promotional financing (0% APR for X months) — list + summary inside a card tile
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PromosSection({
+  card,
+  promos,
+  today,
+  onAdd,
+  onEdit,
+  onWhatIf,
+  onCardWhatIf,
+}: {
+  card: CreditCardRow;
+  promos: CreditCardPromoRow[];
+  today: string;
+  onAdd: () => void;
+  onEdit: (p: CreditCardPromoRow) => void;
+  onWhatIf: (p: CreditCardPromoRow) => void;
+  onCardWhatIf: () => void;
+}) {
+  const active = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);
+  const totalRemaining = active.reduce((s, p) => s + p.remainingAmountCents, 0);
+
+  return (
+    <div className="mb-3 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3">
+      <div className="mb-2 flex items-center justify-between text-[9px] uppercase tracking-[0.18em] text-[var(--text-3)]">
+        <span className="flex items-center gap-1.5">
+          <Sparkles className="h-3 w-3 text-[var(--cyan)]" />
+          {`// 0% PROMOS (${active.length})`}
+        </span>
+        <Button size="sm" variant="ghost" onClick={onAdd}>
+          <Plus className="h-3 w-3" /> ADD
+        </Button>
+      </div>
+
+      {active.length === 0 ? (
+        <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+          No active promos. Track 0% financing to spread it across cycles.
+        </div>
+      ) : (
+        <>
+          <div className="mb-2 flex items-baseline justify-between">
+            <span className="text-[18px] font-bold tabular text-[var(--text-0)]">
+              <Money cents={totalRemaining} />
+            </span>
+            <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+              REMAINING
+            </span>
+          </div>
+
+          <ul className="space-y-1.5">
+            {active.map((p) => {
+              const chunk = promoMonthlyChunkAt(p, today);
+              const daysLeft = daysBetween(today, p.endDate);
+              const tone =
+                daysLeft < 0
+                  ? "text-[var(--red)]"
+                  : daysLeft <= 30
+                    ? "text-[var(--amber)]"
+                    : "text-[var(--text-1)]";
+              return (
+                <li
+                  key={p.id}
+                  className="flex items-center justify-between gap-2 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-2 py-1.5"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onEdit(p)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <div className="truncate text-[11px] tracking-tight text-[var(--text-0)]">
+                      {p.description}
+                    </div>
+                    <div className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+                      <span className="tabular text-[var(--text-1)]">
+                        <Money cents={chunk} />
+                      </span>
+                      {"/MO · ENDS "}
+                      <span className={tone}>
+                        <DateLabel iso={p.endDate} format="short" />
+                      </span>
+                    </div>
+                  </button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onWhatIf(p)}
+                    title="What-if comparison"
+                  >
+                    <Scale className="h-3 w-3" />
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+
+          {active.length > 1 ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2 w-full"
+              onClick={onCardWhatIf}
+            >
+              <Scale className="h-3 w-3" /> COMPARE PAY ALL VS SCHEDULE
+            </Button>
+          ) : null}
+        </>
+      )}
+      {/* keep the card prop referenced so eslint doesn't flag it; future use */}
+      <span className="hidden">{card.id}</span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Promo create/edit dialog
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PromoDialog({
+  card,
+  promo,
+  onClose,
+  onSaved,
+}: {
+  card: CreditCardRow;
+  promo?: CreditCardPromoRow;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const editing = !!promo;
+  const today = todayIso();
+  const [description, setDescription] = React.useState(promo?.description ?? "");
+  const [originalAmountCents, setOriginalAmount] = React.useState(
+    promo?.originalAmountCents ?? 0,
+  );
+  const [remainingAmountCents, setRemaining] = React.useState(
+    promo?.remainingAmountCents ?? 0,
+  );
+  const [startDate, setStartDate] = React.useState(promo?.startDate ?? today);
+  const [endDate, setEndDate] = React.useState(promo?.endDate ?? "");
+  const [overrideMonthly, setOverrideMonthly] = React.useState(
+    promo?.monthlyPaymentCents != null,
+  );
+  const [monthlyPaymentCents, setMonthlyPayment] = React.useState(
+    promo?.monthlyPaymentCents ?? 0,
+  );
+  const [notes, setNotes] = React.useState(promo?.notes ?? "");
+  const [saving, setSaving] = React.useState(false);
+
+  // Auto-fill remaining = original on create when user types original first
+  React.useEffect(() => {
+    if (!editing && originalAmountCents > 0 && remainingAmountCents === 0) {
+      setRemaining(originalAmountCents);
+    }
+  }, [editing, originalAmountCents, remainingAmountCents]);
+
+  const computedChunk = React.useMemo(() => {
+    if (!endDate || remainingAmountCents <= 0) return 0;
+    return promoMonthlyChunkAt(
+      {
+        remainingAmountCents,
+        monthlyPaymentCents: overrideMonthly ? monthlyPaymentCents : null,
+        endDate,
+      },
+      today,
+    );
+  }, [endDate, remainingAmountCents, overrideMonthly, monthlyPaymentCents, today]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!endDate) {
+      toast.error("End date required");
+      return;
+    }
+    if (endDate < startDate) {
+      toast.error("End date must be on or after start date");
+      return;
+    }
+    if (originalAmountCents <= 0) {
+      toast.error("Original amount must be positive");
+      return;
+    }
+    setSaving(true);
+    try {
+      const url = editing
+        ? `/api/credit-cards/promos/${promo!.id}`
+        : `/api/credit-cards/${card.id}/promos`;
+      const res = await fetch(url, {
+        method: editing ? "PATCH" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          description: description.trim(),
+          originalAmountCents,
+          remainingAmountCents,
+          startDate,
+          endDate,
+          monthlyPaymentCents: overrideMonthly ? monthlyPaymentCents : null,
+          notes: notes.trim() || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "save failed");
+      toast.success(editing ? "Promo updated" : "Promo added");
+      onSaved();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const archive = async () => {
+    if (!promo) return;
+    if (!confirm("Archive this promo? Future projection chunks will stop.")) return;
+    const res = await fetch(`/api/credit-cards/promos/${promo.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      toast.error("Archive failed");
+      return;
+    }
+    toast.success("Promo archived");
+    onSaved();
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <CardSubTag>{`${card.name.toUpperCase()} // ${editing ? "EDIT_PROMO" : "NEW_PROMO"}`}</CardSubTag>
+          <DialogTitle>{editing ? "EDIT PROMO" : "ADD 0% PROMO"}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4 pt-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="promo-desc">DESCRIPTION</Label>
+            <Input
+              id="promo-desc"
+              required
+              maxLength={120}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="MacBook Pro, Dental work…"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label>ORIGINAL AMOUNT</Label>
+              <MoneyInput valueCents={originalAmountCents} onChangeCents={setOriginalAmount} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>REMAINING</Label>
+              <MoneyInput valueCents={remainingAmountCents} onChangeCents={setRemaining} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label>START DATE</Label>
+              <Input
+                type="date"
+                required
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>END DATE (PAY-OFF DEADLINE)</Label>
+              <Input
+                type="date"
+                required
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+          </div>
+          <label className="flex cursor-pointer items-center justify-between border-y border-[var(--border-raw)] py-3">
+            <div>
+              <Label>OVERRIDE MONTHLY PAYMENT</Label>
+              <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                {overrideMonthly
+                  ? "USING FIXED OVERRIDE"
+                  : "AUTO: REMAINING ÷ MONTHS LEFT"}
+              </div>
+            </div>
+            <Switch checked={overrideMonthly} onCheckedChange={setOverrideMonthly} />
+          </label>
+          {overrideMonthly ? (
+            <div className="space-y-1.5">
+              <Label>MONTHLY PAYMENT</Label>
+              <MoneyInput valueCents={monthlyPaymentCents} onChangeCents={setMonthlyPayment} />
+            </div>
+          ) : null}
+          <div className="rounded-sm border border-[var(--cyan-dim,var(--border-raw))] bg-[var(--bg-2)] px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+            PROJECTED MONTHLY CHUNK:{" "}
+            <span className="text-[var(--cyan)] tabular">
+              <Money cents={computedChunk} />
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="promo-notes">NOTES</Label>
+            <Input
+              id="promo-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              maxLength={500}
+            />
+          </div>
+          <DialogFooter>
+            {editing ? (
+              <Button type="button" variant="destructive" onClick={archive} disabled={saving}>
+                <Trash2 className="h-3 w-3" /> ARCHIVE
+              </Button>
+            ) : null}
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+                CANCEL
+              </Button>
+              <Button type="submit" variant="primary" disabled={saving}>
+                {saving ? "SAVING…" : editing ? "SAVE CHANGES" : "ADD PROMO"}
+              </Button>
+            </div>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// What-if comparison sheet (per-promo or whole card)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PromoWhatIfSheet({
+  scope,
+  card,
+  promos,
+  onClose,
+}: {
+  scope: "promo" | "card";
+  card: CreditCardRow;
+  promos: CreditCardPromoRow[];
+  onClose: () => void;
+}) {
+  const today = todayIso();
+  const whatIf = React.useMemo(() => {
+    if (scope === "promo" && promos.length === 1) {
+      return promoWhatIf(promos[0]!, card, today);
+    }
+    return cardPromoWhatIf(promos, card, today);
+  }, [scope, promos, card, today]);
+
+  const title =
+    scope === "promo" && promos.length === 1
+      ? promos[0]!.description.toUpperCase()
+      : `${card.name.toUpperCase()} — ALL PROMOS`;
+
+  return (
+    <Sheet open onOpenChange={(o) => !o && onClose()}>
+      <SheetContent>
+        <SheetHeader>
+          <CardSubTag>{`${card.name.toUpperCase()} // WHAT_IF`}</CardSubTag>
+          <SheetTitle>{title}</SheetTitle>
+        </SheetHeader>
+        <SheetBody className="space-y-4">
+          <div className="text-[11px] tracking-wide text-[var(--text-2)]">
+            Side-by-side cash impact. The numbers are the math; the call is yours.
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {/* Pay off now */}
+            <div className="rounded-sm border border-[var(--border-2)] bg-[var(--bg-1)] p-3">
+              <div className="mb-1 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
+                {`// PAY OFF TODAY`}
+              </div>
+              <div className="mb-1 text-[22px] font-bold leading-none tabular text-[var(--cyan)]">
+                <Money cents={whatIf.payOffNow.totalCents} />
+              </div>
+              <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+                CASH OUT <DateLabel iso={whatIf.payOffNow.cashOutDate} format="short" />
+              </div>
+              <div className="mt-3 border-t border-[var(--border-raw)] pt-2 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                FUTURE CHUNKS: <span className="text-[var(--mint)]">NONE</span>
+              </div>
+            </div>
+
+            {/* Continue schedule */}
+            <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-3">
+              <div className="mb-1 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
+                {`// CONTINUE SCHEDULE`}
+              </div>
+              <div className="mb-1 text-[22px] font-bold leading-none tabular text-[var(--text-0)]">
+                <Money cents={whatIf.continueSchedule.totalCents} />
+              </div>
+              <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+                {whatIf.continueSchedule.finalDueDate ? (
+                  <>
+                    THROUGH{" "}
+                    <DateLabel iso={whatIf.continueSchedule.finalDueDate} format="short" />
+                  </>
+                ) : (
+                  "NO FUTURE CHUNKS"
+                )}
+              </div>
+              <div className="mt-3 border-t border-[var(--border-raw)] pt-2 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                {whatIf.continueSchedule.chunks.length} PAYMENT
+                {whatIf.continueSchedule.chunks.length === 1 ? "" : "S"}
+              </div>
+            </div>
+          </div>
+
+          {whatIf.continueSchedule.chunks.length > 0 ? (
+            <div>
+              <div className="mb-2 text-[9px] uppercase tracking-[0.18em] text-[var(--text-3)]">
+                {`// SCHEDULE`}
+              </div>
+              <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)]">
+                <table className="w-full text-[11px] tabular">
+                  <thead>
+                    <tr className="border-b border-[var(--border-raw)] text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                      <th className="px-3 py-1.5 text-left">DUE</th>
+                      <th className="px-3 py-1.5 text-right">AMOUNT</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {whatIf.continueSchedule.chunks.map((c) => (
+                      <tr
+                        key={c.dueDate}
+                        className="border-b border-[var(--border-raw)] last:border-0"
+                      >
+                        <td className="px-3 py-1.5 text-[var(--text-1)]">
+                          <DateLabel iso={c.dueDate} format="short" />
+                        </td>
+                        <td className="px-3 py-1.5 text-right text-[var(--text-0)]">
+                          <Money cents={c.amountCents} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+            BOTH PATHS PAY THE SAME PRINCIPAL ASSUMING YOU MEET THE DEADLINE.
+            DIFFERENCE IS{" "}
+            <span className="text-[var(--cyan)]">CASH-FLOW TIMING</span> ONLY — INTEREST IS
+            ZERO EITHER WAY WHEN PAID BY{" "}
+            {scope === "promo" && promos.length === 1 ? (
+              <DateLabel iso={promos[0]!.endDate} format="short" />
+            ) : (
+              "EACH PROMO'S DEADLINE"
+            )}
+            .
+          </div>
+        </SheetBody>
+        <SheetFooter>
+          <Button variant="outline" onClick={onClose}>
+            CLOSE
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cardPromoWhatIf,
   currentCycleWindow,
   currentStatementOf,
   daysBetween,
@@ -8,10 +9,14 @@ import {
   isStatementOpen,
   nextDayOfMonthOnOrAfter,
   paidWithoutInterest,
+  projectPromoSchedule,
+  promoMonthlyChunkAt,
+  promoWhatIf,
   totalDue,
 } from "./credit-cards";
 import type {
   BillRow,
+  CreditCardPromoRow,
   CreditCardStatementRow,
 } from "./db/schema";
 
@@ -372,5 +377,183 @@ describe("estimateCurrentCycle", () => {
     expect(out.charges).toHaveLength(2);
     // Both attribute to "first" because the find() matches on name.
     expect(out.charges.every((c) => c.billId === "first")).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Promotional financing
+// ────────────────────────────────────────────────────────────────────────────
+
+function promo(over: Partial<CreditCardPromoRow> = {}): CreditCardPromoRow {
+  return {
+    id: "p1",
+    userId: "u1",
+    cardId: "c1",
+    description: "Test promo",
+    originalAmountCents: 120_000, // $1,200
+    remainingAmountCents: 120_000,
+    startDate: "2026-01-01",
+    endDate: "2026-12-31",
+    monthlyPaymentCents: null,
+    notes: null,
+    isActive: true,
+    createdAt: 0,
+    updatedAt: 0,
+    ...over,
+  };
+}
+
+describe("promoMonthlyChunkAt", () => {
+  it("uses the override when set, clamped to remaining", () => {
+    const p = promo({ monthlyPaymentCents: 50_00, remainingAmountCents: 30_00 });
+    expect(promoMonthlyChunkAt(p, "2026-03-01")).toBe(30_00);
+  });
+
+  it("computes ceil(remaining/months_left) when no override", () => {
+    // 12 months remaining (Jan 2026 → Dec 2026 inclusive), $1200 → exactly $100/mo
+    const p = promo({ remainingAmountCents: 120_00 });
+    expect(promoMonthlyChunkAt(p, "2026-01-01")).toBe(10_00);
+  });
+
+  it("recomputes as remaining decreases month-over-month", () => {
+    // After 6 payments of $100, remaining = $600 with 6 months left → still $100
+    const p = promo({ remainingAmountCents: 60_00 });
+    expect(promoMonthlyChunkAt(p, "2026-07-01")).toBe(10_00);
+  });
+
+  it("returns the full remaining as a lump after endDate", () => {
+    const p = promo({ remainingAmountCents: 30_00 });
+    expect(promoMonthlyChunkAt(p, "2027-01-15")).toBe(30_00);
+  });
+
+  it("returns zero when remaining is zero", () => {
+    expect(promoMonthlyChunkAt(promo({ remainingAmountCents: 0 }), "2026-05-01")).toBe(0);
+  });
+});
+
+describe("projectPromoSchedule", () => {
+  const card = { statementDay: 15, dueDay: 10 };
+
+  it("schedules monthly chunks landing on each due date through endDate", () => {
+    const schedule = projectPromoSchedule(
+      promo({ remainingAmountCents: 60_00, startDate: "2026-05-01", endDate: "2026-10-31" }),
+      card,
+      "2026-05-03",
+      new Set(),
+    );
+    // Cycles: stmt May 15 → due ~Jun 10, stmt Jun 15 → Jul 10, … stmt Oct 15 → Nov 10
+    // Final due (Nov 10) is past endDate (Oct 31) so it gets the lump-on-cliff branch
+    expect(schedule.length).toBeGreaterThan(0);
+    const total = schedule.reduce((s, c) => s + c.amountCents, 0);
+    expect(total).toBe(60_00); // sums to the full remaining
+  });
+
+  it("skips cycles whose due date is in the skip set (recorded statements)", () => {
+    const skip = new Set(["2026-06-10"]);
+    const schedule = projectPromoSchedule(
+      promo({ remainingAmountCents: 30_00, startDate: "2026-05-01", endDate: "2026-08-31" }),
+      card,
+      "2026-05-03",
+      skip,
+    );
+    expect(schedule.find((c) => c.dueDate === "2026-06-10")).toBeUndefined();
+    // Other due dates should still appear
+    expect(schedule.length).toBeGreaterThan(0);
+  });
+
+  it("returns empty for archived promos", () => {
+    const schedule = projectPromoSchedule(
+      promo({ isActive: false }),
+      card,
+      "2026-05-01",
+      new Set(),
+    );
+    expect(schedule).toEqual([]);
+  });
+
+  it("returns empty when remaining is zero", () => {
+    const schedule = projectPromoSchedule(
+      promo({ remainingAmountCents: 0 }),
+      card,
+      "2026-05-01",
+      new Set(),
+    );
+    expect(schedule).toEqual([]);
+  });
+
+  it("converges to zero by the deadline (no overshoot, no shortfall)", () => {
+    // Awkward number — $1,001 over 7 months: ceil($1001/7)=$143; the schedule
+    // should still sum to exactly $1,001, with the final chunk absorbing the
+    // rounding remainder.
+    const schedule = projectPromoSchedule(
+      promo({ remainingAmountCents: 1001_00, startDate: "2026-05-01", endDate: "2026-11-30" }),
+      card,
+      "2026-05-03",
+      new Set(),
+    );
+    const total = schedule.reduce((s, c) => s + c.amountCents, 0);
+    expect(total).toBe(1001_00);
+  });
+});
+
+describe("promoWhatIf", () => {
+  const card = { statementDay: 15, dueDay: 10 };
+
+  it("payOffNow always equals the remaining balance, today's date", () => {
+    const w = promoWhatIf(
+      promo({ remainingAmountCents: 80_00 }),
+      card,
+      "2026-05-03",
+    );
+    expect(w.payOffNow.totalCents).toBe(80_00);
+    expect(w.payOffNow.cashOutDate).toBe("2026-05-03");
+  });
+
+  it("continueSchedule sums to the same remaining balance", () => {
+    const w = promoWhatIf(
+      promo({ remainingAmountCents: 80_00, startDate: "2026-05-01", endDate: "2026-08-31" }),
+      card,
+      "2026-05-03",
+    );
+    expect(w.continueSchedule.totalCents).toBe(80_00);
+    expect(w.continueSchedule.chunks.length).toBeGreaterThan(0);
+  });
+});
+
+describe("cardPromoWhatIf", () => {
+  const card = { statementDay: 15, dueDay: 10 };
+
+  it("merges chunks from multiple promos landing on the same due date", () => {
+    const a = promo({
+      id: "a",
+      remainingAmountCents: 30_00,
+      startDate: "2026-05-01",
+      endDate: "2026-07-31",
+      monthlyPaymentCents: 10_00,
+    });
+    const b = promo({
+      id: "b",
+      remainingAmountCents: 60_00,
+      startDate: "2026-05-01",
+      endDate: "2026-07-31",
+      monthlyPaymentCents: 20_00,
+    });
+    const w = cardPromoWhatIf([a, b], card, "2026-05-03");
+    // Pay-off-now = 30 + 60 = 90
+    expect(w.payOffNow.totalCents).toBe(90_00);
+    // Total scheduled also = 90
+    expect(w.continueSchedule.totalCents).toBe(90_00);
+    // Each due date entry should be the SUM of both promos' chunks (10+20=30)
+    for (const chunk of w.continueSchedule.chunks) {
+      expect(chunk.amountCents).toBe(30_00);
+    }
+  });
+
+  it("excludes archived and zero-balance promos", () => {
+    const a = promo({ id: "a", isActive: false, remainingAmountCents: 50_00 });
+    const b = promo({ id: "b", remainingAmountCents: 0 });
+    const c = promo({ id: "c", remainingAmountCents: 40_00 });
+    const w = cardPromoWhatIf([a, b, c], card, "2026-05-03");
+    expect(w.payOffNow.totalCents).toBe(40_00);
   });
 });

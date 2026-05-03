@@ -274,6 +274,7 @@ weird gets emitted before merging.
 - `0004_add_plaid` — `plaid_items`, `plaid_accounts`, `plaid_transaction_drafts` (see §17)
 - `0005_link_card_to_plaid` — `credit_cards.plaid_account_id` (nullable, unique) + unique index on `(card_id, statement_date)` for idempotent statement upsert
 - `0006_flexible_bill_intervals` — replaces `bills.frequency` / `due_day` / `due_month` with `interval_months` (any positive int: 1=monthly, 3=quarterly, 12=annual, etc.) + `anchor_date` (one ISO occurrence; the projection engine generates the rest from there). Table-rebuild migration; backfills monthly→`(1, '2024-01-DD')` and annual→`(12, '2024-MM-DD')` with day clamped to month length.
+- `0007_add_credit_card_promos` — `credit_card_promos` table for 0% APR promotional financing on credit cards (description, original/remaining cents, start/end dates, optional monthly payment override). See §17a.
 
 ---
 
@@ -479,6 +480,8 @@ These bit us before. Don't repeat:
 15. **Re-linking required to enable Liabilities on existing items** — Plaid bakes products into the access token. Items linked before `Liabilities` was added to `optional_products` won't return liability data. To fix, the user removes and re-adds the institution.
 16. **`credit_cards.plaid_account_id` has no DB-level FK** — SQLite ALTER TABLE can't add foreign keys, so referential cleanup is enforced in `deactivatePlaidItem` (nulls the column on linked cards before deactivating). If you add another path that deletes Plaid accounts, mirror that null-out logic.
 17. **Statement upsert preserves manual paid records** — `upsertCreditCardStatementByDate` will not overwrite `paidAmountCents`/`paidDate` when Plaid returns no payment data. Cycle date updates still apply. Don't "simplify" this away.
+18. **Promo auto-decrement only fires on unpaid→paid edge** — `applyPromoChunksForPaidStatement` is idempotency-by-edge: the route checks `wasUnpaid && isNowPaid` before calling it. Re-saving an already-paid statement won't double-decrement. Don't move the call into the repo or strip the guard. See §17a.
+19. **Promo chunks never get added to a cycle that has a recorded statement** — the statement balance entered by the user is assumed to already include any promo principal billed in that cycle. `projectPromoSchedule` takes a `skipDueDates` set fed from `recordedDueDatesByCard` in `projection-server.ts`. Skip the skip-set and you double-count.
 
 ---
 
@@ -612,6 +615,81 @@ in `lib/projection-server.ts` (`cashBills`).
 - ❌ Don't store the plaintext access token even briefly in the DB — encrypt before insert in the same function.
 - ❌ Don't bypass `getPlaidClient()` — it lazy-validates env vars and surfaces clear errors.
 - ❌ Don't add a webhook endpoint without explicit need — sync-on-load is enough for a single-family deploy and avoids exposing a public ingress.
+
+---
+
+## 17a. Credit-card promotional financing (0% APR for X months)
+
+A `credit_card_promos` row models a chunk of a card's balance that's on a 0%
+APR promotion with a deadline (Apple Card monthly installments, Affirm, store
+cards, etc.). The projection spreads the promo's principal over its remaining
+months instead of treating it as a single lump payment, and a what-if comparison
+visualises pay-off-now vs. continue-the-schedule cash impact.
+
+### Authoritative-statement rule (READ BEFORE TOUCHING THE PROJECTION)
+The whole design hinges on this. **Recorded statements are authoritative for the
+cycle they cover.** When the user enters a statement balance, they enter the
+full balance reported by the issuer (which already includes any promo chunk
+billed in that cycle). The projection therefore:
+
+- Treats unpaid recorded statements as cash debits on their due date for the
+  full statement balance — same as before promos existed.
+- Adds promo monthly chunks ONLY to **future cycles that don't yet have a
+  recorded statement**. Cycles with a recorded statement are skipped via
+  `projectPromoSchedule(..., skipDueDates)` to avoid double-counting.
+- Subtracts each card's total active promo `remainingAmountCents` from the
+  Plaid open-cycle estimate (`liveBalance - unpaidStatements - promoRemaining`)
+  so the unbilled promo principal isn't projected as one big lump on the next
+  due date.
+
+The math is in `projectPromoSchedule()` and `promoMonthlyChunkAt()` (both in
+`lib/credit-cards.ts`); the projection wiring is in `lib/projection-server.ts`
+right after the open-cycle-estimate block.
+
+### Auto-decrement on statement payment
+When a statement transitions **unpaid → paid** via PATCH on
+`/api/credit-cards/statements/[id]`, the route calls
+`applyPromoChunksForPaidStatement(userId, cardId, statementDate)` which
+subtracts each active promo's chunk-at-statement-close from
+`remainingAmountCents` and auto-archives the promo when remaining hits zero.
+The route only fires this on the unpaid→paid edge, NOT on every PATCH, so
+re-saving a paid statement won't double-decrement. If you add another path
+that marks statements paid (a Plaid sync that flips paid based on Liabilities,
+say), wire it through the same helper or replicate the unpaid→paid guard.
+
+### Monthly chunk math
+`promoMonthlyChunkAt(promo, asOfIso)` returns the cash amount due in the cycle
+containing `asOfIso`:
+
+1. If `monthlyPaymentCents` is set → use it (clamped to `remainingAmountCents`).
+2. Otherwise → `ceil(remainingAmountCents / monthsBetweenInclusive(asOfIso, endDate))`.
+3. If `asOfIso > endDate` → return the full `remainingAmountCents` (last-chance
+   lump so the projection visualises the deadline cliff).
+
+The ceil + clamp combination guarantees that walking the schedule one cycle at
+a time decrements `virtualRemaining` to exactly zero by the deadline (no
+overshoot, no shortfall). There's a unit test for this in
+`lib/credit-cards.test.ts` ("converges to zero by the deadline").
+
+### What-if helpers
+`promoWhatIf(promo, card, today)` and `cardPromoWhatIf(promos, card, today)`
+both return `{ payOffNow, continueSchedule }`. Both totals **always equal the
+remaining principal** — interest is zero either way when paid by the deadline.
+The difference is cash-flow timing only; that's exactly what the UI sheet
+spells out. **Do not turn these into recommendations** ("you should pay X")
+— financial advice is off-limits per the action policy. Keep it to the math.
+
+### Don't
+- ❌ Don't auto-decrement promo remaining anywhere except in the unpaid→paid
+  statement transition. Other paths (Plaid sync, re-save of an already-paid
+  statement) would silently double-count.
+- ❌ Don't add a promo's monthly chunk to the projection for a cycle that
+  already has a recorded statement. The statement is authoritative.
+- ❌ Don't render prescriptive advice ("pay this off now to save $X") in the
+  what-if sheet — only show the cash-flow numbers and let the user decide.
+- ❌ Don't compute the promo chunk by raw division — use `Math.ceil` so the
+  schedule converges to zero on the last cycle. Plain rounding leaves
+  fractional remainders that never go away.
 
 ---
 
