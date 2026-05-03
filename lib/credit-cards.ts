@@ -1,6 +1,11 @@
 import { addDaysIso } from "@/lib/dates";
 import { computeProjection } from "@/lib/projection";
-import type { BillRow, CreditCardRow, CreditCardStatementRow } from "@/lib/db/schema";
+import type {
+  BillRow,
+  CreditCardPromoRow,
+  CreditCardRow,
+  CreditCardStatementRow,
+} from "@/lib/db/schema";
 
 /** Clamp a day-of-month to the actual number of days in that month (UTC). */
 function clampDay(year: number, month: number, day: number): number {
@@ -175,3 +180,181 @@ export function estimateCurrentCycle(
   return { window, charges, totalCents };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Promotional financing (0% APR for X months)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Whole-month count from `from` to `to` (inclusive of both endpoints' months). */
+function monthsBetweenInclusive(fromIso: string, toIso: string): number {
+  const [fy, fm] = fromIso.split("-").map(Number);
+  const [ty, tm] = toIso.split("-").map(Number);
+  const months = (ty! - fy!) * 12 + (tm! - fm!) + 1;
+  return Math.max(1, months);
+}
+
+/**
+ * The cash chunk a promo demands at a given as-of date. Used both by the
+ * projection (to inject monthly debits for future cycles) and by the
+ * statement-payment auto-decrement (to know how much to subtract from
+ * `remainingAmountCents`).
+ *
+ * Rules:
+ *   - explicit `monthlyPaymentCents` override wins, clamped to remaining
+ *   - otherwise: ceil(remaining / months_left_inclusive)
+ *   - if as-of is past `endDate`, return the full remaining (last-chance lump
+ *     so the projection visualises the "must clear by deadline" pressure)
+ */
+export function promoMonthlyChunkAt(
+  promo: Pick<
+    CreditCardPromoRow,
+    "remainingAmountCents" | "monthlyPaymentCents" | "endDate"
+  >,
+  asOfIso: string,
+): number {
+  if (promo.remainingAmountCents <= 0) return 0;
+  if (asOfIso > promo.endDate) return promo.remainingAmountCents;
+  if (promo.monthlyPaymentCents != null) {
+    return Math.min(promo.monthlyPaymentCents, promo.remainingAmountCents);
+  }
+  const months = monthsBetweenInclusive(asOfIso, promo.endDate);
+  return Math.min(
+    promo.remainingAmountCents,
+    Math.ceil(promo.remainingAmountCents / months),
+  );
+}
+
+export type PromoCycleSchedule = {
+  /** Due date the chunk lands on (the card's dueDay clamped). */
+  dueDate: string;
+  amountCents: number;
+};
+
+/**
+ * Project a promo's remaining balance as monthly chunks landing on each future
+ * cycle's due date through the promo's `endDate`. Skips cycles whose due date
+ * lies in `skipDueDates` — used by the projection to skip cycles already
+ * covered by a recorded statement (those cycles are authoritative for any
+ * promo cash they include).
+ *
+ * Iterates one chunk at a time, decrementing a virtual remaining balance and
+ * recomputing the per-cycle chunk so the schedule converges to zero by the
+ * deadline.
+ */
+export function projectPromoSchedule(
+  promo: CreditCardPromoRow,
+  card: { statementDay: number; dueDay: number },
+  fromIso: string,
+  skipDueDates: ReadonlySet<string>,
+): PromoCycleSchedule[] {
+  if (promo.remainingAmountCents <= 0) return [];
+  if (!promo.isActive) return [];
+
+  const out: PromoCycleSchedule[] = [];
+  // Walk forward one cycle at a time. The "cycle" pointer is a date inside the
+  // billing window; nextDayOfMonthOnOrAfter gives us its statement close, then
+  // dueDateFromStatement turns that into the payment due date.
+  let cursor = fromIso;
+  let virtualRemaining = promo.remainingAmountCents;
+  // Hard cap on iterations to avoid runaway loops if dates ever go sideways.
+  for (let i = 0; i < 240 && virtualRemaining > 0; i++) {
+    const statement = nextDayOfMonthOnOrAfter(cursor, card.statementDay);
+    const dueDate = dueDateFromStatement(statement, card.dueDay);
+    // Stop scheduling once we'd be paying after the deadline. The final chunk
+    // (forced "lump") is captured below by the asOfIso > endDate branch.
+    if (dueDate > promo.endDate) {
+      // Force any remaining to land on the final due date that's still on/before endDate.
+      // If we've already issued the final cycle, just emit the lump on this dueDate
+      // so the user sees the cliff.
+      const chunk = virtualRemaining;
+      if (!skipDueDates.has(dueDate)) {
+        out.push({ dueDate, amountCents: chunk });
+      }
+      virtualRemaining = 0;
+      break;
+    }
+    const chunk = promoMonthlyChunkAt(
+      {
+        remainingAmountCents: virtualRemaining,
+        monthlyPaymentCents: promo.monthlyPaymentCents,
+        endDate: promo.endDate,
+      },
+      statement,
+    );
+    if (chunk > 0 && !skipDueDates.has(dueDate)) {
+      out.push({ dueDate, amountCents: chunk });
+    }
+    virtualRemaining -= chunk;
+    // Advance cursor past this cycle to find the next one
+    cursor = addDaysIso(statement, 1);
+  }
+  return out;
+}
+
+export type PromoWhatIf = {
+  /** Pay everything off today: cash out NOW, no future projected chunks. */
+  payOffNow: { totalCents: number; cashOutDate: string };
+  /** Continue monthly schedule: cash out spread across cycles until end date. */
+  continueSchedule: {
+    totalCents: number;
+    chunks: PromoCycleSchedule[];
+    finalDueDate: string | null;
+  };
+};
+
+/**
+ * Build a side-by-side comparison of "pay this promo off today" vs. "continue
+ * the monthly schedule". Pure math — no recommendation.
+ */
+export function promoWhatIf(
+  promo: CreditCardPromoRow,
+  card: { statementDay: number; dueDay: number },
+  todayIso: string,
+): PromoWhatIf {
+  const chunks = projectPromoSchedule(promo, card, todayIso, new Set());
+  const totalScheduled = chunks.reduce((s, c) => s + c.amountCents, 0);
+  return {
+    payOffNow: {
+      totalCents: promo.remainingAmountCents,
+      cashOutDate: todayIso,
+    },
+    continueSchedule: {
+      totalCents: totalScheduled,
+      chunks,
+      finalDueDate: chunks.length > 0 ? chunks[chunks.length - 1]!.dueDate : null,
+    },
+  };
+}
+
+/**
+ * Card-level rollup: combine all active promos on a card into a single
+ * "pay everything off today" vs. "continue all schedules" comparison.
+ */
+export function cardPromoWhatIf(
+  promos: ReadonlyArray<CreditCardPromoRow>,
+  card: { statementDay: number; dueDay: number },
+  todayIso: string,
+): PromoWhatIf {
+  const active = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);
+  const payOffTotal = active.reduce((s, p) => s + p.remainingAmountCents, 0);
+  const allChunks: PromoCycleSchedule[] = [];
+  for (const p of active) {
+    allChunks.push(...projectPromoSchedule(p, card, todayIso, new Set()));
+  }
+  // Merge chunks landing on the same due date so the UI shows one entry per cycle.
+  const byDate = new Map<string, number>();
+  for (const c of allChunks) {
+    byDate.set(c.dueDate, (byDate.get(c.dueDate) ?? 0) + c.amountCents);
+  }
+  const merged = [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([dueDate, amountCents]) => ({ dueDate, amountCents }));
+  const totalScheduled = merged.reduce((s, c) => s + c.amountCents, 0);
+  return {
+    payOffNow: { totalCents: payOffTotal, cashOutDate: todayIso },
+    continueSchedule: {
+      totalCents: totalScheduled,
+      chunks: merged,
+      finalDueDate: merged.length > 0 ? merged[merged.length - 1]!.dueDate : null,
+    },
+  };
+}

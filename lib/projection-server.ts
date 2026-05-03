@@ -7,10 +7,15 @@ import {
   listExtras,
   listPaychecks,
   listPlaidAccounts,
+  listPromos,
   listStatementsForUser,
   getPrimaryLinkedBalance,
 } from "./repos";
-import { dueDateFromStatement, nextDayOfMonthOnOrAfter } from "./credit-cards";
+import {
+  dueDateFromStatement,
+  nextDayOfMonthOnOrAfter,
+  projectPromoSchedule,
+} from "./credit-cards";
 import { computeProjection, type ProjectionInput, type ProjectionRow } from "./projection";
 
 export type ProjectionBundle = {
@@ -35,7 +40,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   // End date = today + projectionMonths (approx, using 31 days per month for a safe upper bound).
   const endDate = addDaysIso(today, settings.projectionMonths * 31);
 
-  const [bills, paychecks, extras, statements, activeCards, linkedBalance, plaidAccts] =
+  const [bills, paychecks, extras, statements, activeCards, linkedBalance, plaidAccts, promos] =
     await Promise.all([
       listBills(userId, false),
       listPaychecks(userId),
@@ -44,6 +49,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       listCreditCards(userId, false),
       getPrimaryLinkedBalance(userId),
       listPlaidAccounts(userId),
+      listPromos(userId, false),
     ]);
   const activeCardIds = new Set(activeCards.map((c) => c.id));
 
@@ -67,10 +73,13 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     }));
 
   // Open-cycle estimate per Plaid-linked active card: the live card balance
-  // minus any unpaid statements is the floor of what's been spent in the
-  // current open cycle, which will land on the next statement and be due
-  // on the dueDate after that. Subtracting unpaid statements avoids
-  // double-counting them (they're already in ccExtras above).
+  // minus any unpaid statements minus the unbilled promo principal is the
+  // floor of what's been spent in the current open cycle, which will land on
+  // the next statement and be due on the dueDate after that. Subtracting
+  // unpaid statements avoids double-counting them (they're already in
+  // ccExtras above). Subtracting promo remaining avoids projecting unbilled
+  // promo principal as a single lump on the next due date — promos contribute
+  // their own monthly chunks via promoExtras below.
   const balanceByPlaidAccount = new Map(plaidAccts.map((a) => [a.id, a.balanceCents] as const));
   const unpaidByCard = new Map<string, number>();
   for (const s of statements) {
@@ -78,13 +87,21 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       unpaidByCard.set(s.cardId, (unpaidByCard.get(s.cardId) ?? 0) + s.statementBalanceCents);
     }
   }
+  const promoRemainingByCard = new Map<string, number>();
+  for (const p of promos) {
+    promoRemainingByCard.set(
+      p.cardId,
+      (promoRemainingByCard.get(p.cardId) ?? 0) + p.remainingAmountCents,
+    );
+  }
   const openCycleExtras: { date: string; description: string; amountCents: number }[] = [];
   for (const card of activeCards) {
     if (!card.plaidAccountId) continue;
     const liveBalance = balanceByPlaidAccount.get(card.plaidAccountId);
     if (liveBalance == null || liveBalance <= 0) continue;
     const unpaid = unpaidByCard.get(card.id) ?? 0;
-    const openCycleCents = Math.max(0, liveBalance - unpaid);
+    const promoRemaining = promoRemainingByCard.get(card.id) ?? 0;
+    const openCycleCents = Math.max(0, liveBalance - unpaid - promoRemaining);
     if (openCycleCents <= 0) continue;
     const nextStatement = nextDayOfMonthOnOrAfter(today, card.statementDay);
     openCycleExtras.push({
@@ -92,6 +109,37 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       description: `${card.name} next payment (est)`,
       amountCents: openCycleCents,
     });
+  }
+
+  // Promotional financing: each active promo contributes one debit per future
+  // cycle's due date through its endDate. Cycles already covered by a recorded
+  // statement (paid OR unpaid) are SKIPPED — recorded statements are
+  // authoritative for the cash they demand on their due date, and the
+  // statement balance entered by the user is assumed to already include any
+  // promo chunk billed in that cycle.
+  const recordedDueDatesByCard = new Map<string, Set<string>>();
+  for (const s of statements) {
+    let set = recordedDueDatesByCard.get(s.cardId);
+    if (!set) {
+      set = new Set();
+      recordedDueDatesByCard.set(s.cardId, set);
+    }
+    set.add(s.dueDate);
+  }
+  const cardById = new Map(activeCards.map((c) => [c.id, c] as const));
+  const promoExtras: { date: string; description: string; amountCents: number }[] = [];
+  for (const promo of promos) {
+    const card = cardById.get(promo.cardId);
+    if (!card) continue; // archived card → promo also pauses (promo monthly cash floats away)
+    const skip = recordedDueDatesByCard.get(promo.cardId) ?? new Set<string>();
+    const schedule = projectPromoSchedule(promo, card, today, skip);
+    for (const chunk of schedule) {
+      promoExtras.push({
+        date: chunk.dueDate,
+        description: `${card.name} promo (${promo.description})`,
+        amountCents: chunk.amountCents,
+      });
+    }
   }
 
   // Opt-in: if the user has marked a linked account as their starting balance source,
@@ -122,6 +170,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       })),
       ...ccExtras,
       ...openCycleExtras,
+      ...promoExtras,
     ],
   };
 

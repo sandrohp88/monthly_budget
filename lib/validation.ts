@@ -107,6 +107,39 @@ export const creditCardUpdateSchema = creditCardCreateSchema.partial().extend({
   isActive: z.boolean().optional(),
 });
 
+export const promoCreateSchema = z
+  .object({
+    description: z.string().min(1).max(120),
+    originalAmountCents: cents.refine((n) => n > 0, "Original amount must be positive"),
+    /** Optional on create — defaults to originalAmountCents in the route. */
+    remainingAmountCents: cents.refine((n) => n >= 0, "Remaining cannot be negative").optional(),
+    startDate: isoDate,
+    endDate: isoDate,
+    /** When set, used as-is each cycle. When null, projection computes remaining/months_left. */
+    monthlyPaymentCents: cents.refine((n) => n >= 0, "Monthly payment cannot be negative").nullable().optional(),
+    notes: z.string().max(500).nullable().optional(),
+  })
+  .refine((v) => v.endDate >= v.startDate, {
+    message: "endDate must be on or after startDate",
+    path: ["endDate"],
+  });
+
+export const promoUpdateSchema = z
+  .object({
+    description: z.string().min(1).max(120).optional(),
+    originalAmountCents: cents.refine((n) => n > 0).optional(),
+    remainingAmountCents: cents.refine((n) => n >= 0).optional(),
+    startDate: isoDate.optional(),
+    endDate: isoDate.optional(),
+    monthlyPaymentCents: cents.refine((n) => n >= 0).nullable().optional(),
+    notes: z.string().max(500).nullable().optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine(
+    (v) => v.startDate == null || v.endDate == null || v.endDate >= v.startDate,
+    { message: "endDate must be on or after startDate", path: ["endDate"] },
+  );
+
 export const statementCreateSchema = z.object({
   statementDate: isoDate,
   dueDate: isoDate,
@@ -139,6 +172,8 @@ export type CreditCardCreateInput = z.infer<typeof creditCardCreateSchema>;
 export type CreditCardUpdateInput = z.infer<typeof creditCardUpdateSchema>;
 export type StatementCreateInput = z.infer<typeof statementCreateSchema>;
 export type StatementUpdateInput = z.infer<typeof statementUpdateSchema>;
+export type PromoCreateInput = z.infer<typeof promoCreateSchema>;
+export type PromoUpdateInput = z.infer<typeof promoUpdateSchema>;
 
 // ── Plaid ───────────────────────────────────────────────────────────────────
 

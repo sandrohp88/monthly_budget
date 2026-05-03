@@ -171,6 +171,53 @@ export const creditCardStatements = sqliteTable(
   }),
 );
 
+/**
+ * Promotional financing on a credit card (e.g. 0% APR for 12 months).
+ * One row per promo. The card's statement balance reported by the issuer
+ * INCLUDES the unbilled promo principal — we model the promo separately so
+ * the projection can spread its monthly chunks over future cycles instead of
+ * treating the whole purchase as a single big payment.
+ *
+ * Reconciliation rule (see lib/projection-server.ts):
+ *   - Recorded statements are authoritative for the cycle they cover —
+ *     a promo's chunk for that cycle is assumed to be inside the statement
+ *     balance the user already entered.
+ *   - For future cycles with NO recorded statement, the projection injects
+ *     one debit per cycle on the cycle's due date (chunk = override or
+ *     remaining/months_left).
+ *   - Plaid open-cycle estimate subtracts `remainingAmountCents` so the
+ *     unbilled promo principal isn't projected as a single lump.
+ */
+export const creditCardPromos = sqliteTable(
+  "credit_card_promos",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    cardId: text("card_id")
+      .notNull()
+      .references(() => creditCards.id, { onDelete: "cascade" }),
+    description: text("description").notNull(),
+    originalAmountCents: integer("original_amount_cents").notNull(),
+    /** Decremented automatically when a statement on this card is marked paid. */
+    remainingAmountCents: integer("remaining_amount_cents").notNull(),
+    startDate: text("start_date").notNull(),
+    /** Last day interest-free; the projection stops scheduling chunks after this. */
+    endDate: text("end_date").notNull(),
+    /** Optional override; when null, monthly chunk = remaining / months_left. */
+    monthlyPaymentCents: integer("monthly_payment_cents"),
+    notes: text("notes"),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    userActive: index("cc_promos_user_active_idx").on(t.userId, t.isActive),
+    cardIdx: index("cc_promos_card_idx").on(t.cardId),
+  }),
+);
+
 export const categories = sqliteTable("categories", {
   id: text("id").primaryKey(),
   userId: text("user_id")
@@ -190,6 +237,7 @@ export type OneTimeExpenseRow = typeof oneTimeExpenses.$inferSelect;
 export type CategoryRow = typeof categories.$inferSelect;
 export type CreditCardRow = typeof creditCards.$inferSelect;
 export type CreditCardStatementRow = typeof creditCardStatements.$inferSelect;
+export type CreditCardPromoRow = typeof creditCardPromos.$inferSelect;
 
 export type NewUser = typeof users.$inferInsert;
 export type NewSettings = typeof settings.$inferInsert;
@@ -199,6 +247,7 @@ export type NewOneTimeExpense = typeof oneTimeExpenses.$inferInsert;
 export type NewCategory = typeof categories.$inferInsert;
 export type NewCreditCard = typeof creditCards.$inferInsert;
 export type NewCreditCardStatement = typeof creditCardStatements.$inferInsert;
+export type NewCreditCardPromo = typeof creditCardPromos.$inferInsert;
 
 // ── Plaid ─────────────────────────────────────────────────────────────────────
 

@@ -4,6 +4,7 @@ import {
   bills,
   categories,
   creditCards,
+  creditCardPromos,
   creditCardStatements,
   oneTimeExpenses,
   paychecks,
@@ -14,11 +15,13 @@ import {
   users,
   type BillRow,
   type CategoryRow,
+  type CreditCardPromoRow,
   type CreditCardRow,
   type CreditCardStatementRow,
   type NewBill,
   type NewCategory,
   type NewCreditCard,
+  type NewCreditCardPromo,
   type NewCreditCardStatement,
   type NewOneTimeExpense,
   type NewPaycheck,
@@ -37,6 +40,7 @@ import {
 } from "./db/schema";
 import { newId } from "./ids";
 import { hashPassword } from "./auth";
+import { promoMonthlyChunkAt } from "./credit-cards";
 
 const DEFAULT_CATEGORIES: ReadonlyArray<{ name: string; color: string; kind: "expense" | "income" }> = [
   { name: "Housing", color: "#2563eb", kind: "expense" },
@@ -580,6 +584,137 @@ export async function updateStatement(
 export async function deleteStatement(id: string): Promise<void> {
   const db = getDb();
   await db.delete(creditCardStatements).where(eq(creditCardStatements.id, id)).run();
+}
+
+// ── credit card promos ────────────────────────────────────────────────────────
+
+export async function listPromos(
+  userId: string,
+  includeArchived = false,
+): Promise<CreditCardPromoRow[]> {
+  const db = getDb();
+  if (includeArchived) {
+    return db
+      .select()
+      .from(creditCardPromos)
+      .where(eq(creditCardPromos.userId, userId))
+      .orderBy(asc(creditCardPromos.endDate))
+      .all();
+  }
+  return db
+    .select()
+    .from(creditCardPromos)
+    .where(and(eq(creditCardPromos.userId, userId), eq(creditCardPromos.isActive, true)))
+    .orderBy(asc(creditCardPromos.endDate))
+    .all();
+}
+
+export async function listPromosForCard(
+  userId: string,
+  cardId: string,
+  includeArchived = false,
+): Promise<CreditCardPromoRow[]> {
+  const db = getDb();
+  if (includeArchived) {
+    return db
+      .select()
+      .from(creditCardPromos)
+      .where(and(eq(creditCardPromos.userId, userId), eq(creditCardPromos.cardId, cardId)))
+      .orderBy(asc(creditCardPromos.endDate))
+      .all();
+  }
+  return db
+    .select()
+    .from(creditCardPromos)
+    .where(
+      and(
+        eq(creditCardPromos.userId, userId),
+        eq(creditCardPromos.cardId, cardId),
+        eq(creditCardPromos.isActive, true),
+      ),
+    )
+    .orderBy(asc(creditCardPromos.endDate))
+    .all();
+}
+
+export async function getPromo(
+  userId: string,
+  id: string,
+): Promise<CreditCardPromoRow | undefined> {
+  const db = getDb();
+  return db
+    .select()
+    .from(creditCardPromos)
+    .where(and(eq(creditCardPromos.userId, userId), eq(creditCardPromos.id, id)))
+    .get();
+}
+
+export async function createPromo(
+  userId: string,
+  cardId: string,
+  data: Omit<NewCreditCardPromo, "id" | "userId" | "cardId" | "createdAt" | "updatedAt">,
+): Promise<CreditCardPromoRow> {
+  const db = getDb();
+  const id = newId();
+  await db.insert(creditCardPromos).values({ id, userId, cardId, ...data }).run();
+  return (await getPromo(userId, id))!;
+}
+
+export async function updatePromo(
+  userId: string,
+  id: string,
+  patch: Partial<Omit<CreditCardPromoRow, "id" | "userId" | "cardId" | "createdAt">>,
+): Promise<CreditCardPromoRow | undefined> {
+  const db = getDb();
+  await db
+    .update(creditCardPromos)
+    .set({ ...patch, updatedAt: Date.now() })
+    .where(and(eq(creditCardPromos.userId, userId), eq(creditCardPromos.id, id)))
+    .run();
+  return getPromo(userId, id);
+}
+
+export async function archivePromo(userId: string, id: string): Promise<void> {
+  await updatePromo(userId, id, { isActive: false });
+}
+
+/**
+ * Decrement remaining balances on a card's active promos by the chunk amount
+ * the projection assumes was inside the just-paid statement balance. Called
+ * when a statement transitions from unpaid → paid (PATCH on /statements/[id]).
+ *
+ * The chunk per promo is `monthlyPaymentCents` if set, otherwise
+ * `remaining / months_left_at_statement_close`. We clamp at zero and auto-
+ * archive a promo when its remaining hits zero so it stops contributing to
+ * future projections.
+ *
+ * Idempotency: we DON'T track which statements have been applied, so calling
+ * this twice for the same statement will double-decrement. The PATCH route
+ * only invokes it on the unpaid→paid transition to avoid that.
+ */
+export async function applyPromoChunksForPaidStatement(
+  userId: string,
+  cardId: string,
+  statementDate: string,
+): Promise<void> {
+  const db = getDb();
+  const promos = await listPromosForCard(userId, cardId, false);
+  if (promos.length === 0) return;
+  for (const promo of promos) {
+    if (promo.remainingAmountCents <= 0) continue;
+    // Skip promos whose window doesn't include this statement.
+    if (statementDate < promo.startDate) continue;
+    const chunk = promoMonthlyChunkAt(promo, statementDate);
+    if (chunk <= 0) continue;
+    const newRemaining = Math.max(0, promo.remainingAmountCents - chunk);
+    const patch: Partial<CreditCardPromoRow> = { remainingAmountCents: newRemaining };
+    if (newRemaining === 0) patch.isActive = false;
+    await db
+      .update(creditCardPromos)
+      .set({ ...patch, updatedAt: Date.now() })
+      .where(eq(creditCardPromos.id, promo.id))
+      .run();
+  }
 }
 
 // ── plaid ──────────────────────────────────────────────────────────────────

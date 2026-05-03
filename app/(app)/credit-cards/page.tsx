@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { listBills, listCreditCards, listStatements } from "@/lib/repos";
+import { listBills, listCreditCards, listPromosForCard, listStatements } from "@/lib/repos";
 import { estimateCurrentCycle } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
 import { CreditCardsClient } from "./credit-cards-client";
@@ -19,18 +19,24 @@ export default async function CreditCardsPage() {
 
   const today = todayIso();
 
-  // For each card, gather its linked active bills and project the open cycle.
+  // For each card, gather its linked active bills, project the open cycle, and
+  // load active + archived promos so the UI can show history under a toggle.
   const data = await Promise.all(
     cards.map(async (card) => {
       const linkedBills = allBills.filter((b) => b.paidViaCardId === card.id);
       const estimate = card.isActive
         ? estimateCurrentCycle(card, linkedBills, today)
         : null;
+      const [statements, promos] = await Promise.all([
+        listStatements(card.id),
+        listPromosForCard(userId, card.id, true),
+      ]);
       return {
         card,
-        statements: await listStatements(card.id),
+        statements,
         estimate,
         linkedBillCount: linkedBills.length,
+        promos,
       };
     }),
   );
