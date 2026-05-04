@@ -21,6 +21,11 @@ export function todayIso(timeZone = "America/New_York"): string {
   return formatter.format(now);
 }
 
+/** First day of the month containing `iso`, as ISO YYYY-MM-DD. */
+export function startOfMonthIso(iso: string): string {
+  return `${iso.slice(0, 7)}-01`;
+}
+
 /** Add a number of days to an ISO date, returning a new ISO date. */
 export function addDaysIso(iso: string, days: number): string {
   const d = parseISO(iso);

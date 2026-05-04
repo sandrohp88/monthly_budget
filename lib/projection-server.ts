@@ -1,5 +1,5 @@
 import "server-only";
-import { addDaysIso, todayIso } from "./dates";
+import { addDaysIso, startOfMonthIso, todayIso } from "./dates";
 import {
   getSettings,
   listBillPaymentOverridesForUser,
@@ -37,7 +37,8 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   if (!settings) return null;
 
   const today = todayIso(settings.timezone);
-  const startDate = settings.firstPaydayDate < today ? settings.firstPaydayDate : today;
+  const startDate =
+    settings.firstPaydayDate < today ? settings.firstPaydayDate : startOfMonthIso(today);
 
   // End date = today + projectionMonths (approx, using 31 days per month for a safe upper bound).
   const endDate = addDaysIso(today, settings.projectionMonths * 31);
