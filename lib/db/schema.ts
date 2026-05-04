@@ -404,6 +404,7 @@ export const plaidTransactionDrafts = sqliteTable(
       .references(() => plaidAccounts.id, { onDelete: "cascade" }),
     date: text("date").notNull(),
     description: text("description").notNull(),
+    originalDescription: text("original_description"),
     amountCents: integer("amount_cents").notNull(),
     plaidCategory: text("plaid_category"),
     merchantName: text("merchant_name"),
@@ -412,6 +413,7 @@ export const plaidTransactionDrafts = sqliteTable(
       .notNull()
       .default("pending_review"),
     linkedExpenseId: text("linked_expense_id"),
+    linkedPromoId: text("linked_promo_id"),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({

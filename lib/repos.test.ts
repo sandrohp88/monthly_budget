@@ -651,6 +651,28 @@ describe("repos / plaid drafts", () => {
     expect((await listPlaidDrafts(userId, "approved")).map((d) => d.id)).toEqual(["a"]);
     expect((await listPlaidDrafts(userId, "all")).map((d) => d.id).sort()).toEqual(["a", "p"]);
   });
+
+  it("can link an approved Plaid draft to a promo", async () => {
+    const { userId, accountId } = await setup();
+    await upsertPlaidDraft({
+      id: "promo_txn", userId, accountId, date: "2026-05-04",
+      description: "Promo purchase", amountCents: 200_00,
+      plaidCategory: null, merchantName: "PayPal", pending: false,
+      status: "pending_review", linkedExpenseId: null, linkedPromoId: null,
+    });
+
+    const updated = await updatePlaidDraftStatus(userId, "promo_txn", {
+      status: "approved",
+      linkedPromoId: "promo_1",
+    });
+
+    expect(updated).toMatchObject({
+      id: "promo_txn",
+      status: "approved",
+      linkedPromoId: "promo_1",
+      linkedExpenseId: null,
+    });
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────────

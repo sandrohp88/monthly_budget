@@ -1220,6 +1220,7 @@ export async function upsertPlaidDraft(data: NewPlaidTransactionDraft): Promise<
       set: {
         date: data.date,
         description: data.description,
+        originalDescription: data.originalDescription,
         amountCents: data.amountCents,
         plaidCategory: data.plaidCategory,
         merchantName: data.merchantName,
@@ -1252,6 +1253,7 @@ export async function updatePlaidDraftStatus(
   patch: {
     status: "approved" | "dismissed";
     linkedExpenseId?: string;
+    linkedPromoId?: string;
   },
 ): Promise<PlaidTransactionDraftRow | undefined> {
   const db = getDb();
@@ -1266,6 +1268,35 @@ export async function updatePlaidDraftStatus(
     )
     .run();
   return getPlaidDraft(userId, id);
+}
+
+export async function updatePlaidDraft(
+  userId: string,
+  id: string,
+  patch: Partial<Pick<
+    PlaidTransactionDraftRow,
+    "date" | "description" | "amountCents" | "plaidCategory" | "merchantName" | "originalDescription"
+  >>,
+): Promise<PlaidTransactionDraftRow | undefined> {
+  const db = getDb();
+  await db
+    .update(plaidTransactionDrafts)
+    .set(patch)
+    .where(
+      and(
+        eq(plaidTransactionDrafts.userId, userId),
+        eq(plaidTransactionDrafts.id, id),
+      ),
+    )
+    .run();
+  return getPlaidDraft(userId, id);
+}
+
+export async function deletePlaidDraft(
+  userId: string,
+  id: string,
+): Promise<PlaidTransactionDraftRow | undefined> {
+  return updatePlaidDraftStatus(userId, id, { status: "dismissed" });
 }
 
 /**

@@ -20,6 +20,15 @@ import {
 } from "./credit-cards";
 import { computeProjection, type ProjectionInput, type ProjectionRow } from "./projection";
 
+export type PromoPaymentSummary = {
+  id: string;
+  cardId: string;
+  description: string;
+  remainingAmountCents: number;
+  endDate: string;
+  monthlyPaymentCents: number | null;
+};
+
 export type ProjectionBundle = {
   rows: ProjectionRow[];
   startDate: string;
@@ -30,6 +39,7 @@ export type ProjectionBundle = {
   startingBalanceCents: number;
   projectionMonths: number;
   currency: string;
+  promoSummariesByCard: Record<string, PromoPaymentSummary[]>;
 };
 
 export async function buildProjection(userId: string): Promise<ProjectionBundle | null> {
@@ -74,15 +84,24 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     list.push({ date: override.dueDate, amountCents: override.amountCents });
     billOverridesByBill.set(override.billId, list);
   }
-  const cardOverridesByCard = new Map<string, Map<string, number>>();
+  const cardOverridesByCard = new Map<string, Map<string, { amountCents: number; notes: string | null }>>();
   for (const override of creditCardPaymentOverrides) {
     let byDate = cardOverridesByCard.get(override.cardId);
     if (!byDate) {
-      byDate = new Map<string, number>();
+      byDate = new Map<string, { amountCents: number; notes: string | null }>();
       cardOverridesByCard.set(override.cardId, byDate);
     }
-    byDate.set(override.dueDate, override.amountCents);
+    byDate.set(override.dueDate, {
+      amountCents: override.amountCents,
+      notes: override.notes,
+    });
   }
+  const appliedCardOverrideKeys = new Set<string>();
+  const overrideKey = (cardId: string, dueDate: string) => `${cardId}:${dueDate}`;
+  const movedFromDate = (notes: string | null | undefined): string | undefined => {
+    const match = notes?.match(/(?:^|\s)moved-from:(\d{4}-\d{2}-\d{2})(?:\s|$)/);
+    return match?.[1];
+  };
 
   // Bills paid via an ACTIVE credit card don't move cash on their own — the
   // card's statement payment carries them. Skip them from the projection to
@@ -138,14 +157,19 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     const nextStatement = nextStatementDateOnOrAfter(today, card);
     const dueDate = dueDateFromStatement(nextStatement, card.dueDay);
     const override = cardOverridesByCard.get(card.id)?.get(dueDate);
-    openCycleExtras.push({
-      date: dueDate,
-      description: `${card.name} next payment (est)`,
-      amountCents: override ?? openCycleCents,
-      sourceId: card.id,
-      sourceType: "creditCardPayment",
-      originalAmountCents: openCycleCents,
-    });
+    appliedCardOverrideKeys.add(overrideKey(card.id, dueDate));
+    const amountCents = override?.amountCents ?? openCycleCents;
+    if (amountCents > 0) {
+      openCycleExtras.push({
+        date: dueDate,
+        description: `${card.name} next payment (est)`,
+        amountCents,
+        sourceId: card.id,
+        sourceType: "creditCardPayment",
+        originalAmountCents: openCycleCents,
+        relatedDate: movedFromDate(override?.notes),
+      });
+    }
   }
 
   // Promotional financing: each active promo contributes one debit per future
@@ -165,17 +189,62 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     set.add(s.dueDate);
   }
   const cardById = new Map(activeCards.map((c) => [c.id, c] as const));
-  const promoExtras: { date: string; description: string; amountCents: number }[] = [];
+  const promoChunksByCardDate = new Map<
+    string,
+    { cardId: string; cardName: string; dueDate: string; amountCents: number }
+  >();
   for (const promo of promos) {
     const card = cardById.get(promo.cardId);
     if (!card) continue; // archived card → promo also pauses (promo monthly cash floats away)
     const skip = recordedDueDatesByCard.get(promo.cardId) ?? new Set<string>();
     const schedule = projectPromoSchedule(promo, card, today, skip);
     for (const chunk of schedule) {
-      promoExtras.push({
-        date: chunk.dueDate,
-        description: `${card.name} promo (${promo.description})`,
-        amountCents: chunk.amountCents,
+      const key = overrideKey(card.id, chunk.dueDate);
+      const existing = promoChunksByCardDate.get(key);
+      if (existing) {
+        existing.amountCents += chunk.amountCents;
+      } else {
+        promoChunksByCardDate.set(key, {
+          cardId: card.id,
+          cardName: card.name,
+          dueDate: chunk.dueDate,
+          amountCents: chunk.amountCents,
+        });
+      }
+    }
+  }
+  const promoExtras: ProjectionInput["extras"] = [];
+  for (const chunk of promoChunksByCardDate.values()) {
+    const override = cardOverridesByCard.get(chunk.cardId)?.get(chunk.dueDate);
+    appliedCardOverrideKeys.add(overrideKey(chunk.cardId, chunk.dueDate));
+    const amountCents = override?.amountCents ?? chunk.amountCents;
+    if (amountCents <= 0) continue;
+    promoExtras.push({
+      date: chunk.dueDate,
+      description: `${chunk.cardName} promo payment`,
+      amountCents,
+      sourceId: chunk.cardId,
+      sourceType: "creditCardPayment",
+      originalAmountCents: chunk.amountCents,
+      relatedDate: movedFromDate(override?.notes),
+    });
+  }
+
+  const plannedCardExtras: ProjectionInput["extras"] = [];
+  for (const [cardId, overrides] of cardOverridesByCard) {
+    const card = cardById.get(cardId);
+    if (!card) continue;
+    for (const [dueDate, override] of overrides) {
+      if (appliedCardOverrideKeys.has(overrideKey(cardId, dueDate))) continue;
+      if (override.amountCents <= 0) continue;
+      plannedCardExtras.push({
+        date: dueDate,
+        description: `${card.name} planned payment`,
+        amountCents: override.amountCents,
+        sourceId: cardId,
+        sourceType: "creditCardPayment",
+        originalAmountCents: 0,
+        relatedDate: movedFromDate(override.notes),
       });
     }
   }
@@ -212,8 +281,26 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       ...ccExtras,
       ...openCycleExtras,
       ...promoExtras,
+      ...plannedCardExtras,
     ],
   };
+  const promoSummariesByCard: Record<string, PromoPaymentSummary[]> = {};
+  for (const promo of promos) {
+    if (!promo.isActive || promo.remainingAmountCents <= 0 || !activeCardIds.has(promo.cardId)) continue;
+    const list = promoSummariesByCard[promo.cardId] ?? [];
+    list.push({
+      id: promo.id,
+      cardId: promo.cardId,
+      description: promo.description,
+      remainingAmountCents: promo.remainingAmountCents,
+      endDate: promo.endDate,
+      monthlyPaymentCents: promo.monthlyPaymentCents,
+    });
+    promoSummariesByCard[promo.cardId] = list;
+  }
+  for (const list of Object.values(promoSummariesByCard)) {
+    list.sort((a, b) => a.endDate.localeCompare(b.endDate));
+  }
 
   return {
     rows: computeProjection(input),
@@ -223,5 +310,6 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     startingBalanceCents: effectiveStartingBalance,
     projectionMonths: settings.projectionMonths,
     currency: settings.currency,
+    promoSummariesByCard,
   };
 }
