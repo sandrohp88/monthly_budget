@@ -20,6 +20,7 @@ vi.mock("server-only", () => ({}));
 // Mock the Plaid client. The mock's behavior is configured per-test by
 // reaching into __plaidMock.
 const __plaidMock = {
+  transactionsSync: vi.fn(),
   liabilitiesGet: vi.fn(),
 };
 vi.mock("./plaid-client", () => ({
@@ -35,9 +36,11 @@ import {
   upsertPlaidAccount,
   setCreditCardPlaidLink,
   getCreditCard,
+  listPromosForCard,
   listStatements,
 } from "./repos";
-import { syncCreditCardLiabilitiesForItem } from "./plaid-sync";
+import { encryptToken } from "./plaid-crypto";
+import { syncCreditCardLiabilitiesForItem, syncPlaidTransactions } from "./plaid-sync";
 
 let dbDir: string;
 
@@ -49,6 +52,7 @@ beforeEach(() => {
   getDb();
   runMigrations();
   __plaidMock.liabilitiesGet.mockReset();
+  __plaidMock.transactionsSync.mockReset();
 });
 
 afterEach(() => {
@@ -58,6 +62,130 @@ afterEach(() => {
   } catch {
     // best effort
   }
+});
+
+describe("syncPlaidTransactions PayPal special financing", () => {
+  it("creates PayPal wallet promos and recomputes remaining balances FIFO from PayPal Credit payments", async () => {
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_paypal",
+      institutionName: "PayPal",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_paypal_credit",
+      itemId: item.id,
+      userId: user.id,
+      name: "PayPal Credit Card",
+      mask: "9288",
+      type: "credit",
+      subtype: "paypal",
+      balanceCents: 3885_49,
+      updatedAt: Date.now(),
+    });
+    await upsertPlaidAccount({
+      id: "acct_paypal_wallet",
+      itemId: item.id,
+      userId: user.id,
+      name: "PayPal",
+      mask: null,
+      type: "depository",
+      subtype: "paypal",
+      balanceCents: 0,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "PayPal Credit Card ****9288",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: false,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_paypal_credit");
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "cursor_1",
+        has_more: false,
+        accounts: [],
+        added: [
+          {
+            transaction_id: "payment_before",
+            account_id: "acct_paypal_credit",
+            pending: false,
+            date: "2026-02-09",
+            name: "PayPal Credit Card",
+            original_description: "PayPal Credit Card",
+            amount: 354.66,
+            personal_finance_category: { primary: "LOAN_PAYMENTS" },
+            merchant_name: null,
+          },
+          {
+            transaction_id: "purchase_1",
+            account_id: "acct_paypal_wallet",
+            pending: false,
+            date: "2026-02-14",
+            name: "Payment to Temu.com",
+            original_description: "Payment to Temu.com",
+            amount: 250.92,
+            personal_finance_category: { primary: "GENERAL_MERCHANDISE" },
+            merchant_name: "Temu",
+          },
+          {
+            transaction_id: "small_purchase",
+            account_id: "acct_paypal_wallet",
+            pending: false,
+            date: "2026-02-13",
+            name: "Payment to Coffee Shop",
+            original_description: "Payment to Coffee Shop",
+            amount: 50,
+            personal_finance_category: { primary: "FOOD_AND_DRINK" },
+            merchant_name: "Coffee Shop",
+          },
+          {
+            transaction_id: "purchase_2",
+            account_id: "acct_paypal_wallet",
+            pending: false,
+            date: "2026-02-25",
+            name: "Payment to Light Elegance",
+            original_description: "Payment to Light Elegance",
+            amount: 275.46,
+            personal_finance_category: { primary: "PERSONAL_CARE" },
+            merchant_name: "Light Elegance",
+          },
+          {
+            transaction_id: "payment_after",
+            account_id: "acct_paypal_credit",
+            pending: false,
+            date: "2026-03-04",
+            name: "PayPal Credit Card",
+            original_description: "PayPal Credit Card",
+            amount: 188.47,
+            personal_finance_category: { primary: "LOAN_PAYMENTS" },
+            merchant_name: null,
+          },
+        ],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    await syncPlaidTransactions(user.id, item.id);
+    await syncPlaidTransactions(user.id, item.id);
+
+    const promos = await listPromosForCard(user.id, card.id, true);
+    expect(promos).toHaveLength(2);
+    expect(promos.map((promo) => promo.description)).toEqual(["Temu", "Light Elegance"]);
+    expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([112_45, 275_46]);
+    expect(promos.map((promo) => promo.endDate)).toEqual(["2026-08-14", "2026-08-25"]);
+  });
 });
 
 async function makeUser() {

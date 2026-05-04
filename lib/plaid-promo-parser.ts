@@ -173,8 +173,9 @@ export function isSpecialFinancingCandidate(txn: PromoCandidateInput): boolean {
     txn.merchantName,
   ].some((text) => includesAny(text, ["paypal credit"]));
 
-  // PayPal currently advertises 6-month deferred-interest financing for
-  // qualifying purchases of $149+. Treat this only as a review candidate; the
-  // sync path still requires explicit API text before auto-creating a promo.
-  return isPayPalCredit && txn.amountCents >= 149_00;
+  // PayPal's real transaction feed uses the wallet account for purchases and
+  // the credit account for payments. Treat purchases over $150 as review
+  // candidates when a paired PayPal Credit card exists; sync reconciles these
+  // rows idempotently with FIFO payment allocation.
+  return isPayPalCredit && txn.amountCents > 150_00;
 }

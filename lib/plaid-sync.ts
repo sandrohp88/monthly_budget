@@ -12,12 +12,22 @@ import {
   updatePlaidItemCursor,
   getCreditCardByPlaidAccountId,
   createPromo,
+  listPromosForCard,
+  updatePromo,
   updatePlaidDraftStatus,
   updateCardCycleDays,
   upsertCreditCardStatementByDate,
 } from "./repos";
 import { dueDateFromStatement } from "./credit-cards";
 import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
+import {
+  allocatePayPalPaymentsFifo,
+  isPayPalCreditAccount,
+  isPayPalCreditPayment,
+  isPayPalWalletAccount,
+  isPayPalWalletPurchase,
+  toPayPalFinancingPurchase,
+} from "./paypal-special-financing";
 import { log } from "./log";
 
 // Pure helpers live in plaid-helpers.ts so they don't drag in "server-only"
@@ -103,6 +113,91 @@ async function autoCreatePromosFromExistingDrafts(userId: string, itemId: string
       originalDescription: draft.originalDescription,
       merchantName: draft.merchantName,
       amountCents: draft.amountCents,
+    });
+  }
+}
+
+async function reconcilePayPalSpecialFinancing(userId: string, itemId: string): Promise<void> {
+  const accounts = await listPlaidAccountsByItem(itemId);
+  const paypalCreditAccount = accounts.find(isPayPalCreditAccount);
+  if (!paypalCreditAccount) return;
+
+  const card = await getCreditCardByPlaidAccountId(userId, paypalCreditAccount.id);
+  if (!card) return;
+
+  const walletAccountIds = new Set(accounts.filter(isPayPalWalletAccount).map((account) => account.id));
+  if (walletAccountIds.size === 0) return;
+
+  const drafts = (await listPlaidDrafts(userId, "approved")).filter((draft) =>
+    accounts.some((account) => account.id === draft.accountId),
+  );
+  const latestDraftDate = drafts.reduce(
+    (latest, draft) => (draft.date > latest ? draft.date : latest),
+    "",
+  );
+
+  const walletPurchases = drafts
+    .filter((draft) => walletAccountIds.has(draft.accountId))
+    .filter(isPayPalWalletPurchase)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+
+  const purchases = walletPurchases
+    .map(toPayPalFinancingPurchase)
+    .filter((purchase): purchase is NonNullable<typeof purchase> => purchase !== null)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+
+  if (purchases.length === 0) return;
+
+  const payments = drafts
+    .filter((draft) => draft.accountId === paypalCreditAccount.id && isPayPalCreditPayment(draft))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+
+  const remainingByDraftId = allocatePayPalPaymentsFifo(
+    walletPurchases.map((purchase) => ({
+      id: purchase.id,
+      date: purchase.date,
+      originalAmountCents: purchase.amountCents,
+    })),
+    payments.map((payment) => ({
+      date: payment.date,
+      amountCents: payment.amountCents,
+    })),
+  );
+
+  const existingPromos = await listPromosForCard(userId, card.id, true);
+  const promoById = new Map(existingPromos.map((promo) => [promo.id, promo]));
+
+  for (const purchase of purchases) {
+    const remainingAmountCents = remainingByDraftId.get(purchase.id) ?? purchase.amountCents;
+    const isStillPromotional = purchase.endDate >= latestDraftDate;
+    if (purchase.linkedPromoId) {
+      const promo = promoById.get(purchase.linkedPromoId);
+      if (!promo) continue;
+      await updatePromo(userId, promo.id, {
+        originalAmountCents: purchase.amountCents,
+        remainingAmountCents,
+        startDate: purchase.date,
+        endDate: purchase.endDate,
+        isActive: remainingAmountCents > 0 && isStillPromotional,
+      });
+      continue;
+    }
+
+    if (remainingAmountCents <= 0 || !isStillPromotional) continue;
+
+    const promo = await createPromo(userId, card.id, {
+      description: purchase.merchantName ?? purchase.description,
+      originalAmountCents: purchase.amountCents,
+      remainingAmountCents,
+      startDate: purchase.date,
+      endDate: purchase.endDate,
+      monthlyPaymentCents: null,
+      notes: `Auto-created from PayPal special financing transaction ${purchase.id}`,
+      isActive: true,
+    });
+    await updatePlaidDraftStatus(userId, purchase.id, {
+      status: "approved",
+      linkedPromoId: promo.id,
     });
   }
 }
@@ -254,6 +349,7 @@ export async function syncPlaidTransactions(
       // Persist the advanced cursor.
       await updatePlaidItemCursor(item.id, cursor ?? "", Date.now());
       await autoCreatePromosFromExistingDrafts(userId, item.id);
+      await reconcilePayPalSpecialFinancing(userId, item.id);
 
       totalAdded += added;
       totalModified += modified;

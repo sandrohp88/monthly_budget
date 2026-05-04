@@ -145,7 +145,7 @@ export function TransactionsClient({
         <Tile label="IMPORTED" value={transactions.length} delta="approved automatically" />
         <Tile label="DEBITS" value={debits.length} delta={<Money cents={debits.reduce((s, t) => s + t.amountCents, 0)} />} />
         <Tile label="CREDITS" value={credits.length} delta={<Money cents={Math.abs(credits.reduce((s, t) => s + t.amountCents, 0))} />} />
-        <Tile label="PROMO CANDIDATES" value={promoCandidates.length} variant={promoCandidates.length ? "amber" : "default"} delta="API evidence or PayPal $149+" />
+        <Tile label="PROMO CANDIDATES" value={promoCandidates.length} variant={promoCandidates.length ? "amber" : "default"} delta="API evidence or PayPal > $150" />
       </TileGrid>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
