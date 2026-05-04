@@ -40,6 +40,89 @@ export function nextDayOfMonthOnOrAfter(fromIso: string, dayOfMonth: number): st
   return isoOf(year, month, clampDay(year, month, dayOfMonth));
 }
 
+type StatementCycleConfig = {
+  statementDay: number;
+  statementCycleMode?: "calendar_day" | "interval_days" | string | null;
+  statementCycleAnchorDate?: string | null;
+  statementCycleIntervalDays?: number | null;
+};
+
+function isIsoDate(s: string | null | undefined): s is string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s ?? "");
+}
+
+function usesIntervalStatementCycle(card: StatementCycleConfig): boolean {
+  return (
+    card.statementCycleMode === "interval_days" &&
+    isIsoDate(card.statementCycleAnchorDate) &&
+    typeof card.statementCycleIntervalDays === "number" &&
+    card.statementCycleIntervalDays > 0
+  );
+}
+
+function intervalStatementCycle(
+  card: StatementCycleConfig,
+): { anchor: string; interval: number } | null {
+  if (!usesIntervalStatementCycle(card)) return null;
+  return {
+    anchor: card.statementCycleAnchorDate!,
+    interval: card.statementCycleIntervalDays!,
+  };
+}
+
+/**
+ * Next statement close on/after `fromIso`.
+ * Calendar-day cards use the persisted statement day. Interval cards walk from
+ * an anchor statement date by `statementCycleIntervalDays` calendar days.
+ */
+export function nextStatementDateOnOrAfter(
+  fromIso: string,
+  card: StatementCycleConfig,
+): string {
+  const cycle = intervalStatementCycle(card);
+  if (!cycle) {
+    return nextDayOfMonthOnOrAfter(fromIso, card.statementDay);
+  }
+
+  const { anchor, interval } = cycle;
+  if (anchor >= fromIso) return anchor;
+
+  const elapsed = daysBetween(anchor, fromIso);
+  const cycles = Math.ceil(elapsed / interval);
+  return addDaysIso(anchor, cycles * interval);
+}
+
+/** Previous statement close on/before `fromIso`. */
+export function previousStatementDateOnOrBefore(
+  fromIso: string,
+  card: StatementCycleConfig,
+): string {
+  const cycle = intervalStatementCycle(card);
+  if (!cycle) {
+    const next = nextDayOfMonthOnOrAfter(fromIso, card.statementDay);
+    if (next === fromIso) return next;
+
+    const [yStr, mStr] = next.split("-");
+    let year = Number(yStr);
+    let month = Number(mStr) - 1;
+    if (month < 1) {
+      month = 12;
+      year -= 1;
+    }
+    return isoOf(year, month, clampDay(year, month, card.statementDay));
+  }
+
+  const { anchor, interval } = cycle;
+  if (anchor > fromIso) {
+    const elapsed = daysBetween(fromIso, anchor);
+    const cyclesBack = Math.ceil(elapsed / interval);
+    return addDaysIso(anchor, -cyclesBack * interval);
+  }
+  const elapsed = daysBetween(anchor, fromIso);
+  const cycles = Math.floor(elapsed / interval);
+  return addDaysIso(anchor, cycles * interval);
+}
+
 /**
  * Given a statement date and the card's dueDay, compute the matching due date
  * for that statement. Heuristic: due date is the next occurrence of `dueDay`
@@ -107,19 +190,13 @@ export type CardWithStatements = {
  * statement. Returned dates are inclusive on both ends.
  */
 export function currentCycleWindow(
-  card: { statementDay: number },
+  card: StatementCycleConfig,
   fromIso: string,
 ): { start: string; end: string } {
-  const end = nextDayOfMonthOnOrAfter(fromIso, card.statementDay);
-  // Previous close = same day-of-month, one calendar month earlier (clamped)
-  const [yStr, mStr] = end.split("-");
-  let year = Number(yStr);
-  let month = Number(mStr) - 1;
-  if (month < 1) {
-    month = 12;
-    year -= 1;
-  }
-  const prevClose = isoOf(year, month, clampDay(year, month, card.statementDay));
+  const end = nextStatementDateOnOrAfter(fromIso, card);
+  const prevClose = usesIntervalStatementCycle(card)
+    ? addDaysIso(end, -card.statementCycleIntervalDays!)
+    : previousStatementDateOnOrBefore(addDaysIso(end, -1), card);
   return { start: addDaysIso(prevClose, 1), end };
 }
 
@@ -137,7 +214,7 @@ export type LinkedBillEstimate = {
  * consistent with the daily ledger.
  */
 export function estimateCurrentCycle(
-  card: { statementDay: number; dueDay: number },
+  card: StatementCycleConfig & { dueDay: number },
   linkedBills: ReadonlyArray<BillRow>,
   fromIso: string,
 ): { window: { start: string; end: string }; charges: LinkedBillEstimate[]; totalCents: number } {
@@ -242,7 +319,7 @@ export type PromoCycleSchedule = {
  */
 export function projectPromoSchedule(
   promo: CreditCardPromoRow,
-  card: { statementDay: number; dueDay: number },
+  card: StatementCycleConfig & { dueDay: number },
   fromIso: string,
   skipDueDates: ReadonlySet<string>,
 ): PromoCycleSchedule[] {
@@ -257,7 +334,7 @@ export function projectPromoSchedule(
   let virtualRemaining = promo.remainingAmountCents;
   // Hard cap on iterations to avoid runaway loops if dates ever go sideways.
   for (let i = 0; i < 240 && virtualRemaining > 0; i++) {
-    const statement = nextDayOfMonthOnOrAfter(cursor, card.statementDay);
+    const statement = nextStatementDateOnOrAfter(cursor, card);
     const dueDate = dueDateFromStatement(statement, card.dueDay);
     // Stop scheduling once we'd be paying after the deadline. The final chunk
     // (forced "lump") is captured below by the asOfIso > endDate branch.
@@ -307,7 +384,7 @@ export type PromoWhatIf = {
  */
 export function promoWhatIf(
   promo: CreditCardPromoRow,
-  card: { statementDay: number; dueDay: number },
+  card: StatementCycleConfig & { dueDay: number },
   todayIso: string,
 ): PromoWhatIf {
   const chunks = projectPromoSchedule(promo, card, todayIso, new Set());
@@ -331,7 +408,7 @@ export function promoWhatIf(
  */
 export function cardPromoWhatIf(
   promos: ReadonlyArray<CreditCardPromoRow>,
-  card: { statementDay: number; dueDay: number },
+  card: StatementCycleConfig & { dueDay: number },
   todayIso: string,
 ): PromoWhatIf {
   const active = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);

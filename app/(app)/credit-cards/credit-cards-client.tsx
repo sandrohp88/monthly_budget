@@ -35,6 +35,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { MoneyInput } from "@/components/money-input";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
@@ -46,8 +53,9 @@ import {
   daysBetween,
   dueDateFromStatement,
   isStatementOpen,
-  nextDayOfMonthOnOrAfter,
+  nextStatementDateOnOrAfter,
   paidWithoutInterest,
+  previousStatementDateOnOrBefore,
   promoMonthlyChunkAt,
   promoWhatIf,
   totalDue,
@@ -61,6 +69,7 @@ import type {
 } from "@/lib/db/schema";
 
 type StatementWithCard = CreditCardStatementRow & { cardName: string; cardId: string };
+type StatementCycleMode = "calendar_day" | "interval_days";
 
 export type CycleEstimate = {
   window: { start: string; end: string };
@@ -72,6 +81,13 @@ export type CardWithStatementsAndEstimate = CardWithStatements & {
   linkedBillCount: number;
   promos: CreditCardPromoRow[];
 };
+
+function statementCycleLabel(card: CreditCardRow): string {
+  if (card.statementCycleMode === "interval_days") {
+    return `${card.statementCycleIntervalDays}D CYCLE`;
+  }
+  return `STATEMENT D${card.statementDay}`;
+}
 
 export function CreditCardsClient({
   initialCards,
@@ -457,7 +473,7 @@ function CreditCardTile({
             {card.name}
           </div>
           <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
-            STATEMENT D{card.statementDay} · DUE D{card.dueDay}
+            {statementCycleLabel(card)} · DUE D{card.dueDay}
             {card.autoPay ? " · AUTOPAY" : ""}
           </div>
         </div>
@@ -487,7 +503,7 @@ function CreditCardTile({
             <div className="mb-2 text-[11px] tracking-wide text-[var(--text-2)]">
               Next statement expected{" "}
               <span className="text-[var(--text-0)]">
-                <DateLabel iso={nextDayOfMonthOnOrAfter(today, card.statementDay)} format="short" />
+                <DateLabel iso={nextStatementDateOnOrAfter(today, card)} format="short" />
               </span>
             </div>
             <Button size="sm" variant="primary" onClick={onAddStatement}>
@@ -706,6 +722,15 @@ function CardDialog({
   const editing = !!card;
   const [name, setName] = React.useState(card?.name ?? "");
   const [statementDay, setStatementDay] = React.useState(card?.statementDay ?? 5);
+  const [statementCycleMode, setStatementCycleMode] = React.useState<StatementCycleMode>(
+    card?.statementCycleMode === "interval_days" ? "interval_days" : "calendar_day",
+  );
+  const [statementCycleAnchorDate, setStatementCycleAnchorDate] = React.useState(
+    card?.statementCycleAnchorDate ?? todayIso(),
+  );
+  const [statementCycleIntervalDays, setStatementCycleIntervalDays] = React.useState(
+    card?.statementCycleIntervalDays ?? 31,
+  );
   const [dueDay, setDueDay] = React.useState(card?.dueDay ?? 26);
   const [autoPay, setAutoPay] = React.useState(card?.autoPay ?? false);
   const [notes, setNotes] = React.useState(card?.notes ?? "");
@@ -721,6 +746,10 @@ function CardDialog({
         body: JSON.stringify({
           name: name.trim(),
           statementDay,
+          statementCycleMode,
+          statementCycleAnchorDate:
+            statementCycleMode === "interval_days" ? statementCycleAnchorDate : null,
+          statementCycleIntervalDays,
           dueDay,
           autoPay,
           notes: notes.trim() || null,
@@ -756,21 +785,37 @@ function CardDialog({
               placeholder="Chase Freedom, Amex Gold…"
             />
           </div>
+          <div className="space-y-1.5">
+            <Label>STATEMENT CYCLE</Label>
+            <Select
+              value={statementCycleMode}
+              onValueChange={(value) => setStatementCycleMode(value as StatementCycleMode)}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="calendar_day">FIXED DAY OF MONTH</SelectItem>
+                <SelectItem value="interval_days">EVERY N DAYS</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="cc-stmt">STATEMENT DAY (1–31)</Label>
+              <Label htmlFor="cc-stmt">STATEMENT DAY (1-31)</Label>
               <Input
                 id="cc-stmt"
                 type="number"
                 min={1}
                 max={31}
-                required
+                required={statementCycleMode === "calendar_day"}
+                disabled={statementCycleMode === "interval_days"}
                 value={statementDay}
                 onChange={(e) => setStatementDay(Number(e.target.value))}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="cc-due">DUE DAY (1–31)</Label>
+              <Label htmlFor="cc-due">DUE DAY (1-31)</Label>
               <Input
                 id="cc-due"
                 type="number"
@@ -782,9 +827,39 @@ function CardDialog({
               />
             </div>
           </div>
+          {statementCycleMode === "interval_days" ? (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="cc-cycle-anchor">ANCHOR STATEMENT DATE</Label>
+                <Input
+                  id="cc-cycle-anchor"
+                  type="date"
+                  required
+                  value={statementCycleAnchorDate}
+                  onChange={(e) => setStatementCycleAnchorDate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="cc-cycle-days">CYCLE DAYS</Label>
+                <Input
+                  id="cc-cycle-days"
+                  type="number"
+                  min={1}
+                  max={366}
+                  required
+                  value={statementCycleIntervalDays}
+                  onChange={(e) => setStatementCycleIntervalDays(Number(e.target.value))}
+                />
+              </div>
+            </div>
+          ) : null}
           <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-[10px] uppercase tracking-wide text-[var(--text-2)]">
-            STATEMENT CLOSES ON DAY {statementDay} → PAYMENT DUE ON DAY {dueDay}
-            {dueDay === statementDay ? (
+            {statementCycleMode === "interval_days"
+              ? `STATEMENT CLOSES EVERY ${statementCycleIntervalDays} DAYS FROM ${statementCycleAnchorDate}`
+              : `STATEMENT CLOSES ON DAY ${statementDay}`}
+            {" -> "}
+            PAYMENT DUE ON DAY {dueDay}
+            {statementCycleMode === "calendar_day" && dueDay === statementDay ? (
               <span className="ml-2 text-[var(--red)]">DAYS MUST DIFFER</span>
             ) : null}
           </div>
@@ -803,7 +878,13 @@ function CardDialog({
             <Button
               type="submit"
               variant="primary"
-              disabled={saving || !name.trim() || statementDay === dueDay}
+              disabled={
+                saving ||
+                !name.trim() ||
+                (statementCycleMode === "calendar_day" && statementDay === dueDay) ||
+                (statementCycleMode === "interval_days" &&
+                  (!statementCycleAnchorDate || statementCycleIntervalDays < 1))
+              }
             >
               {saving ? "SAVING…" : editing ? "SAVE CHANGES" : "ADD CARD"}
             </Button>
@@ -829,15 +910,9 @@ function StatementCreateDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  // Default statement date = next occurrence of card.statementDay on/before today
+  // Default statement date = most recent statement close on/before today.
   const today = todayIso();
-  const defaultStatementDate = nextDayOfMonthOnOrAfter(
-    // Look up to 31 days in the past so we land on the most recently closed cycle
-    new Date(new Date(today + "T00:00:00Z").getTime() - 31 * 86_400_000)
-      .toISOString()
-      .slice(0, 10),
-    card.statementDay,
-  );
+  const defaultStatementDate = previousStatementDateOnOrBefore(today, card);
   const [statementDate, setStatementDate] = React.useState(defaultStatementDate);
   const [dueDate, setDueDate] = React.useState(dueDateFromStatement(defaultStatementDate, card.dueDay));
   const [statementBalanceCents, setBalance] = React.useState(0);

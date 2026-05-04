@@ -911,18 +911,35 @@ export async function updateCardCycleDays(
   cardId: string,
   statementDay: number,
   dueDay: number,
+  statementDate?: string,
 ): Promise<void> {
   const db = getDb();
   const current = await db
-    .select({ statementDay: creditCards.statementDay, dueDay: creditCards.dueDay })
+    .select({
+      statementDay: creditCards.statementDay,
+      dueDay: creditCards.dueDay,
+      statementCycleMode: creditCards.statementCycleMode,
+      statementCycleAnchorDate: creditCards.statementCycleAnchorDate,
+    })
     .from(creditCards)
     .where(eq(creditCards.id, cardId))
     .get();
   if (!current) return;
-  if (current.statementDay === statementDay && current.dueDay === dueDay) return;
+  const anchorPatch =
+    current.statementCycleMode === "interval_days" && statementDate
+      ? { statementCycleAnchorDate: statementDate }
+      : {};
+  if (
+    current.statementDay === statementDay &&
+    current.dueDay === dueDay &&
+    (anchorPatch.statementCycleAnchorDate === undefined ||
+      current.statementCycleAnchorDate === anchorPatch.statementCycleAnchorDate)
+  ) {
+    return;
+  }
   await db
     .update(creditCards)
-    .set({ statementDay, dueDay, updatedAt: Date.now() })
+    .set({ statementDay, dueDay, ...anchorPatch, updatedAt: Date.now() })
     .where(eq(creditCards.id, cardId))
     .run();
 }

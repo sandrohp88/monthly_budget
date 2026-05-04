@@ -25,12 +25,15 @@ export async function POST(req: Request) {
   const data = await readJson(req, creditCardCreateSchema);
   if (data instanceof NextResponse) return data;
 
-  if (data.dueDay === data.statementDay) {
+  if (data.statementCycleMode === "calendar_day" && data.dueDay === data.statementDay) {
     return jsonError("statement day and due day must differ", 400);
   }
   const card = await createCreditCard(auth.userId, {
     name: data.name.trim(),
     statementDay: data.statementDay,
+    statementCycleMode: data.statementCycleMode,
+    statementCycleAnchorDate: data.statementCycleMode === "interval_days" ? data.statementCycleAnchorDate! : null,
+    statementCycleIntervalDays: data.statementCycleIntervalDays,
     dueDay: data.dueDay,
     autoPay: data.autoPay,
     notes: data.notes ?? null,

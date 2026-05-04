@@ -13,7 +13,7 @@ import {
 } from "./repos";
 import {
   dueDateFromStatement,
-  nextDayOfMonthOnOrAfter,
+  nextStatementDateOnOrAfter,
   projectPromoSchedule,
 } from "./credit-cards";
 import { computeProjection, type ProjectionInput, type ProjectionRow } from "./projection";
@@ -103,7 +103,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     const promoRemaining = promoRemainingByCard.get(card.id) ?? 0;
     const openCycleCents = Math.max(0, liveBalance - unpaid - promoRemaining);
     if (openCycleCents <= 0) continue;
-    const nextStatement = nextDayOfMonthOnOrAfter(today, card.statementDay);
+    const nextStatement = nextStatementDateOnOrAfter(today, card);
     openCycleExtras.push({
       date: dueDateFromStatement(nextStatement, card.dueDay),
       description: `${card.name} next payment (est)`,
