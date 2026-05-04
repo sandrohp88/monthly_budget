@@ -5,14 +5,19 @@ import { decryptToken } from "./plaid-crypto";
 import {
   listPlaidItems,
   listPlaidAccountsByItem,
+  listPlaidDrafts,
   upsertPlaidAccount,
   upsertPlaidDraft,
+  getPlaidDraft,
   updatePlaidItemCursor,
   getCreditCardByPlaidAccountId,
+  createPromo,
+  updatePlaidDraftStatus,
   updateCardCycleDays,
   upsertCreditCardStatementByDate,
 } from "./repos";
 import { dueDateFromStatement } from "./credit-cards";
+import { detectPromoPayoffDate } from "./plaid-promo-parser";
 import { log } from "./log";
 
 // Pure helpers live in plaid-helpers.ts so they don't drag in "server-only"
@@ -27,6 +32,75 @@ export interface SyncResult {
   removed: number;
   cardsUpdated: number;
   statementsCreated: number;
+}
+
+type PlaidTransactionWithOriginalDescription = {
+  original_description?: string | null;
+};
+
+function originalDescriptionOf(txn: PlaidTransactionWithOriginalDescription): string | null {
+  return txn.original_description ?? null;
+}
+
+async function autoCreatePromoFromTransaction(input: {
+  userId: string;
+  transactionId: string;
+  accountId: string;
+  date: string;
+  description: string;
+  originalDescription: string | null;
+  merchantName: string | null;
+  amountCents: number;
+}): Promise<void> {
+  if (input.amountCents <= 0) return;
+  const payoffDate = detectPromoPayoffDate([
+    input.originalDescription,
+    input.description,
+    input.merchantName,
+  ]);
+  if (!payoffDate) return;
+
+  const [card, draft] = await Promise.all([
+    getCreditCardByPlaidAccountId(input.userId, input.accountId),
+    getPlaidDraft(input.userId, input.transactionId),
+  ]);
+  if (!card || !draft || draft.linkedPromoId) return;
+
+  const promo = await createPromo(input.userId, card.id, {
+    description: input.merchantName ?? input.description,
+    originalAmountCents: input.amountCents,
+    remainingAmountCents: input.amountCents,
+    startDate: input.date,
+    endDate: payoffDate,
+    monthlyPaymentCents: null,
+    notes: input.originalDescription ?? null,
+    isActive: true,
+  });
+  await updatePlaidDraftStatus(input.userId, input.transactionId, {
+    status: "approved",
+    linkedPromoId: promo.id,
+  });
+}
+
+async function autoCreatePromosFromExistingDrafts(userId: string, itemId: string): Promise<void> {
+  const accounts = await listPlaidAccountsByItem(itemId);
+  const accountIds = new Set(accounts.map((account) => account.id));
+  if (accountIds.size === 0) return;
+
+  const drafts = await listPlaidDrafts(userId, "approved");
+  for (const draft of drafts) {
+    if (!accountIds.has(draft.accountId) || draft.linkedPromoId) continue;
+    await autoCreatePromoFromTransaction({
+      userId,
+      transactionId: draft.id,
+      accountId: draft.accountId,
+      date: draft.date,
+      description: draft.description,
+      originalDescription: draft.originalDescription,
+      merchantName: draft.merchantName,
+      amountCents: draft.amountCents,
+    });
+  }
 }
 
 /**
@@ -69,6 +143,9 @@ export async function syncPlaidTransactions(
           access_token: accessToken,
           cursor,
           count: 100,
+          options: {
+            include_original_description: true,
+          },
         });
 
         const data = response.data;
@@ -96,11 +173,13 @@ export async function syncPlaidTransactions(
           });
         }
 
-        // Added transactions → pending_review drafts.
+        // Added transactions -> approved ledger rows.
         for (const txn of data.added) {
           if (!accountIds.has(txn.account_id)) continue;
           // Skip pending transactions — we'll pick them up when they post.
           if (txn.pending) continue;
+          const originalDescription = originalDescriptionOf(txn);
+          const amountCents = toCents(txn.amount);
 
           await upsertPlaidDraft({
             id: txn.transaction_id,
@@ -108,31 +187,57 @@ export async function syncPlaidTransactions(
             accountId: txn.account_id,
             date: txn.date,
             description: txn.name,
-            amountCents: toCents(txn.amount),
+            originalDescription,
+            amountCents,
             plaidCategory: txn.personal_finance_category?.primary ?? null,
             merchantName: txn.merchant_name ?? null,
             pending: false,
-            status: "pending_review",
+            status: "approved",
             linkedExpenseId: null,
+            linkedPromoId: null,
+          });
+          await autoCreatePromoFromTransaction({
+            userId,
+            transactionId: txn.transaction_id,
+            accountId: txn.account_id,
+            date: txn.date,
+            description: txn.name,
+            originalDescription,
+            merchantName: txn.merchant_name ?? null,
+            amountCents,
           });
           added++;
         }
 
-        // Modified transactions — upsert again (will preserve status if already actioned).
+        // Modified transactions -> upsert again while preserving actioned status.
         for (const txn of data.modified) {
           if (!accountIds.has(txn.account_id)) continue;
+          const originalDescription = originalDescriptionOf(txn);
+          const amountCents = toCents(txn.amount);
           await upsertPlaidDraft({
             id: txn.transaction_id,
             userId,
             accountId: txn.account_id,
             date: txn.date,
             description: txn.name,
-            amountCents: toCents(txn.amount),
+            originalDescription,
+            amountCents,
             plaidCategory: txn.personal_finance_category?.primary ?? null,
             merchantName: txn.merchant_name ?? null,
             pending: txn.pending,
-            status: "pending_review",
+            status: "approved",
             linkedExpenseId: null,
+            linkedPromoId: null,
+          });
+          await autoCreatePromoFromTransaction({
+            userId,
+            transactionId: txn.transaction_id,
+            accountId: txn.account_id,
+            date: txn.date,
+            description: txn.name,
+            originalDescription,
+            merchantName: txn.merchant_name ?? null,
+            amountCents,
           });
           modified++;
         }
@@ -142,6 +247,7 @@ export async function syncPlaidTransactions(
 
       // Persist the advanced cursor.
       await updatePlaidItemCursor(item.id, cursor ?? "", Date.now());
+      await autoCreatePromosFromExistingDrafts(userId, item.id);
 
       totalAdded += added;
       totalModified += modified;

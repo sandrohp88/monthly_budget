@@ -14,7 +14,7 @@ export default async function ProjectionPage() {
 
   const projection = await buildProjection(userId);
   if (!projection) redirect("/setup");
-  const { rows, startDate, endDate, today } = projection;
+  const { rows, startDate, endDate, today, promoSummariesByCard } = projection;
 
   return (
     <div className="space-y-6 fade-in">
@@ -33,6 +33,7 @@ export default async function ProjectionPage() {
         startDate={startDate}
         endDate={endDate}
         today={today}
+        promoSummariesByCard={promoSummariesByCard}
       />
     </div>
   );

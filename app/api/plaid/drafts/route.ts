@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError } from "@/lib/api";
-import { listPlaidDrafts, listPlaidAccounts } from "@/lib/repos";
+import { listCreditCards, listPlaidDrafts, listPlaidAccounts } from "@/lib/repos";
+import { detectPromoPayoffDate } from "@/lib/plaid-promo-parser";
 import type { PlaidTransactionDraftRow, PlaidAccountRow } from "@/lib/db/schema";
 
 export type DraftWithAccount = PlaidTransactionDraftRow & {
   accountName: string;
   accountMask: string | null;
+  linkedCreditCardId: string | null;
+  linkedCreditCardName: string | null;
+  promoPayoffDate: string | null;
 };
 
 export async function GET(req: Request) {
@@ -21,17 +25,30 @@ export async function GET(req: Request) {
   }
 
   try {
-    const [drafts, accounts] = await Promise.all([
+    const [drafts, accounts, cards] = await Promise.all([
       listPlaidDrafts(auth.userId, statusParam as StatusParam),
       listPlaidAccounts(auth.userId),
+      listCreditCards(auth.userId, false),
     ]);
 
     const accountMap = new Map<string, PlaidAccountRow>(accounts.map((a) => [a.id, a]));
+    const cardMap = new Map(
+      cards
+        .filter((c) => c.plaidAccountId)
+        .map((c) => [c.plaidAccountId!, { id: c.id, name: c.name }]),
+    );
 
     const enriched: DraftWithAccount[] = drafts.map((d) => ({
       ...d,
       accountName: accountMap.get(d.accountId)?.name ?? "Unknown Account",
       accountMask: accountMap.get(d.accountId)?.mask ?? null,
+      linkedCreditCardId: cardMap.get(d.accountId)?.id ?? null,
+      linkedCreditCardName: cardMap.get(d.accountId)?.name ?? null,
+      promoPayoffDate: detectPromoPayoffDate([
+        d.originalDescription,
+        d.description,
+        d.merchantName,
+      ]),
     }));
 
     return NextResponse.json({ drafts: enriched });

@@ -214,15 +214,66 @@ export const plaidExchangeSchema = z.object({
 });
 
 /** User action on a single transaction draft. */
-export const plaidDraftActionSchema = z.object({
-  action: z.enum(["approve", "dismiss"]),
-  // approve path — user may override these before confirming
-  date: isoDate.optional(),
-  description: z.string().min(1).max(120).optional(),
-  amountCents: cents.optional(),
-  category: z.string().min(1).max(50).optional(),
-  notes: z.string().max(500).nullable().optional(),
-});
+export const plaidDraftActionSchema = z
+  .object({
+    action: z.enum(["approve", "dismiss", "create_promo", "update_transaction"]),
+    // approve path — user may override these before confirming
+    date: isoDate.optional(),
+    description: z.string().min(1).max(120).optional(),
+    amountCents: cents.optional(),
+    category: z.string().min(1).max(50).optional(),
+    notes: z.string().max(500).nullable().optional(),
+    // create_promo path — turns an imported linked-card purchase into a promo
+    cardId: z.string().optional(),
+    originalAmountCents: cents.refine((n) => n > 0, "Original amount must be positive").optional(),
+    remainingAmountCents: cents.refine((n) => n >= 0, "Remaining cannot be negative").optional(),
+    startDate: isoDate.optional(),
+    endDate: isoDate.optional(),
+    monthlyPaymentCents: cents.refine((n) => n >= 0, "Monthly payment cannot be negative").nullable().optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.action === "update_transaction") {
+      if (!v.description) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["description"], message: "Description is required" });
+      }
+      if (!v.date) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["date"], message: "Date is required" });
+      }
+      if (v.amountCents == null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["amountCents"], message: "Amount is required" });
+      }
+      return;
+    }
+    if (v.action !== "create_promo") return;
+    if (!v.description) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["description"], message: "Description is required" });
+    }
+    if (!v.cardId) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cardId"], message: "Card is required" });
+    }
+    if (v.originalAmountCents == null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["originalAmountCents"], message: "Original amount is required" });
+    }
+    if (!v.startDate) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["startDate"], message: "Start date is required" });
+    }
+    if (!v.endDate) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endDate"], message: "Payoff date is required" });
+    }
+    if (v.startDate && v.endDate && v.endDate < v.startDate) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endDate"], message: "Payoff date must be on or after purchase date" });
+    }
+    if (v.monthlyPaymentCents != null && v.monthlyPaymentCents <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["monthlyPaymentCents"], message: "Desired payment must be positive" });
+    }
+    if (
+      v.originalAmountCents != null &&
+      v.remainingAmountCents != null &&
+      v.remainingAmountCents > v.originalAmountCents
+    ) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["remainingAmountCents"], message: "Remaining cannot exceed original amount" });
+    }
+  });
 
 /** User-editable per-account settings (toggles). */
 export const plaidAccountUpdateSchema = z.object({
