@@ -17,7 +17,7 @@ import {
 import {
   dueDateFromStatement,
   nextStatementDateOnOrAfter,
-  projectPromoSchedule,
+  projectPromoScheduleWithBalances,
 } from "./credit-cards";
 import { computeProjection, type ProjectionInput, type ProjectionRow } from "./projection";
 
@@ -90,6 +90,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     promoPaymentsByPromoId.set(pp.promoId, list);
   }
   const activeCardIds = new Set(activeCards.map((c) => c.id));
+  const cardById = new Map(activeCards.map((c) => [c.id, c] as const));
   const billOverridesByBill = new Map<string, Array<{ date: string; amountCents: number }>>();
   for (const override of billPaymentOverrides) {
     const list = billOverridesByBill.get(override.billId) ?? [];
@@ -123,23 +124,12 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     (b) => b.paidViaCardId == null || !activeCardIds.has(b.paidViaCardId),
   );
 
-  // Unpaid credit-card statements become extras on their due date so the
-  // projection deducts them from the running balance. Paid statements are
-  // already reflected in the starting balance and are skipped.
-  const ccExtras = statements
-    .filter((s) => s.paidAmountCents == null)
-    .map((s) => ({
-      date: s.dueDate,
-      description: `${s.cardName} payment`,
-      amountCents: s.statementBalanceCents,
-    }));
-
   // Open-cycle estimate per Plaid-linked active card: the live card balance
   // minus any unpaid statements minus the unbilled promo principal is the
   // floor of what's been spent in the current open cycle, which will land on
   // the next statement and be due on the dueDate after that. Subtracting
-  // unpaid statements avoids double-counting them (they're already in
-  // ccExtras above). Subtracting promo remaining avoids projecting unbilled
+  // unpaid statements avoids double-counting them (they become ccExtras).
+  // Subtracting promo remaining avoids projecting unbilled
   // promo principal as a single lump on the next due date — promos contribute
   // their own monthly chunks via promoExtras below.
   const balanceByPlaidAccount = new Map(plaidAccts.map((a) => [a.id, a.balanceCents] as const));
@@ -156,6 +146,47 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       (promoRemainingByCard.get(p.cardId) ?? 0) + p.remainingAmountCents,
     );
   }
+  const liveBalanceForCard = (cardId: string): number | null => {
+    const card = cardById.get(cardId);
+    if (!card) return null;
+    if (card.plaidAccountId) {
+      return balanceByPlaidAccount.get(card.plaidAccountId) ?? card.currentBalanceCents ?? null;
+    }
+    return card.currentBalanceCents ?? null;
+  };
+  const displayBalanceForCard = (cardId: string, fallbackDueCents: number): number => {
+    const liveBalance = liveBalanceForCard(cardId);
+    return Math.max(
+      liveBalance ?? 0,
+      fallbackDueCents,
+      promoRemainingByCard.get(cardId) ?? 0,
+    );
+  };
+
+  // Unpaid credit-card statements become extras on their due date so the
+  // projection deducts them from the running balance. Paid statements are
+  // already reflected in the starting balance and are skipped. These events
+  // also carry card-balance metadata so a user can plan paying above the
+  // statement due amount when a 0% promo balance is present.
+  const ccExtras: ProjectionInput["extras"] = statements
+    .filter((s) => s.paidAmountCents == null)
+    .map((s) => {
+      const override = cardOverridesByCard.get(s.cardId)?.get(s.dueDate);
+      appliedCardOverrideKeys.add(overrideKey(s.cardId, s.dueDate));
+      const amountCents = override?.amountCents ?? s.statementBalanceCents;
+      return {
+        date: s.dueDate,
+        description: `${s.cardName} payment`,
+        amountCents,
+        sourceId: s.cardId,
+        sourceType: "creditCardPayment",
+        originalAmountCents: s.statementBalanceCents,
+        relatedDate: movedFromDate(override?.notes),
+        paymentDueCents: s.statementBalanceCents,
+        paymentBalanceCents: displayBalanceForCard(s.cardId, s.statementBalanceCents),
+      };
+    });
+
   const openCycleExtras: ProjectionInput["extras"] = [];
   for (const card of activeCards) {
     const liveBalance = card.plaidAccountId
@@ -180,6 +211,8 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
         sourceType: "creditCardPayment",
         originalAmountCents: openCycleCents,
         relatedDate: movedFromDate(override?.notes),
+        paymentDueCents: openCycleCents,
+        paymentBalanceCents: Math.max(liveBalance, openCycleCents),
       });
     }
   }
@@ -200,7 +233,6 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     }
     set.add(s.dueDate);
   }
-  const cardById = new Map(activeCards.map((c) => [c.id, c] as const));
   const promoChunksByCardDate = new Map<
     string,
     {
@@ -208,6 +240,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       cardName: string;
       dueDate: string;
       amountCents: number;
+      balanceCents: number;
       descriptions: string[];
     }
   >();
@@ -216,12 +249,13 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     if (!card) continue; // archived card → promo also pauses (promo monthly cash floats away)
     const skip = recordedDueDatesByCard.get(promo.cardId) ?? new Set<string>();
     const sched = promoPaymentsByPromoId.get(promo.id) ?? [];
-    const schedule = projectPromoSchedule(promo, card, today, skip, sched);
+    const schedule = projectPromoScheduleWithBalances(promo, card, today, skip, sched);
     for (const chunk of schedule) {
       const key = overrideKey(card.id, chunk.dueDate);
       const existing = promoChunksByCardDate.get(key);
       if (existing) {
         existing.amountCents += chunk.amountCents;
+        existing.balanceCents += chunk.balanceBeforeCents;
         existing.descriptions.push(promo.description);
       } else {
         promoChunksByCardDate.set(key, {
@@ -229,6 +263,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
           cardName: card.name,
           dueDate: chunk.dueDate,
           amountCents: chunk.amountCents,
+          balanceCents: chunk.balanceBeforeCents,
           descriptions: [promo.description],
         });
       }
@@ -249,6 +284,8 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       sourceType: "creditCardPayment",
       originalAmountCents: chunk.amountCents,
       relatedDate: movedFromDate(override?.notes),
+      paymentDueCents: chunk.amountCents,
+      paymentBalanceCents: chunk.balanceCents,
     });
   }
 
@@ -267,6 +304,8 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
         sourceType: "creditCardPayment",
         originalAmountCents: 0,
         relatedDate: movedFromDate(override.notes),
+        paymentDueCents: 0,
+        paymentBalanceCents: displayBalanceForCard(cardId, 0),
       });
     }
   }

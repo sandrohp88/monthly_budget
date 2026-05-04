@@ -21,7 +21,12 @@ import { __resetDbCacheForTests, getDb, runMigrations } from "./db/client";
 import { settings, users } from "./db/schema";
 import { newId } from "./ids";
 import { buildProjection } from "./projection-server";
-import { createCreditCard, createPromo, createStatement } from "./repos";
+import {
+  createCreditCard,
+  createPromo,
+  createStatement,
+  upsertCreditCardPaymentOverride,
+} from "./repos";
 
 let dbDir: string;
 
@@ -78,6 +83,7 @@ async function seedPromoProjection(statementBalanceCents: number) {
     name: "PayPal",
     statementDay: 15,
     dueDay: 10,
+    currentBalanceCents: 1_000_00,
     autoPay: false,
     isActive: true,
   });
@@ -131,5 +137,67 @@ describe("buildProjection promo statement reconciliation", () => {
         }),
       ]),
     );
+  });
+
+  it("carries card balance and amount-due metadata on promo projection rows", async () => {
+    const row = await seedPromoProjection(0);
+    expect(row?.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "PayPal promo (0% APR purchase)",
+          amountCents: 125_00,
+          originalAmountCents: 125_00,
+          paymentDueCents: 125_00,
+          paymentBalanceCents: 875_00,
+        }),
+      ]),
+    );
+  });
+
+  it("allows a planned card payment above the statement due amount", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "PayPal",
+      statementDay: 15,
+      dueDay: 10,
+      currentBalanceCents: 1_000_00,
+      autoPay: false,
+      isActive: true,
+    });
+    await createStatement(card.id, {
+      statementDate: "2026-05-15",
+      dueDate: "2026-06-10",
+      statementBalanceCents: 125_00,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    await createPromo(user.id, card.id, {
+      description: "0% APR purchase",
+      originalAmountCents: 1_000_00,
+      remainingAmountCents: 1_000_00,
+      startDate: "2026-05-01",
+      endDate: "2026-12-31",
+      monthlyPaymentCents: 125_00,
+      notes: null,
+      isActive: true,
+    });
+    await upsertCreditCardPaymentOverride(user.id, card.id, {
+      dueDate: "2026-06-10",
+      amountCents: 300_00,
+      notes: null,
+    });
+
+    const projection = await buildProjection(user.id);
+    const event = projection?.rows
+      .find((r) => r.date === "2026-06-10")
+      ?.events.find((e) => e.label === "PayPal payment");
+
+    expect(event).toMatchObject({
+      amountCents: 300_00,
+      originalAmountCents: 125_00,
+      paymentDueCents: 125_00,
+      paymentBalanceCents: 1_000_00,
+    });
   });
 });
