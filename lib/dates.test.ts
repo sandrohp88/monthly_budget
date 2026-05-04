@@ -4,6 +4,7 @@ import {
   daysBetween,
   endOfMonthsAhead,
   formatIso,
+  startOfMonthIso,
   todayIso,
 } from "./dates";
 
@@ -77,6 +78,14 @@ describe("dates", () => {
     });
     it("crosses year boundaries", () => {
       expect(endOfMonthsAhead("2025-11-15", 2)).toBe("2026-01-31");
+    });
+  });
+
+  // ── startOfMonthIso ──────────────────────────────────────────────────────
+  describe("startOfMonthIso", () => {
+    it("returns the first day of the containing month", () => {
+      expect(startOfMonthIso("2026-05-04")).toBe("2026-05-01");
+      expect(startOfMonthIso("2026-12-31")).toBe("2026-12-01");
     });
   });
 

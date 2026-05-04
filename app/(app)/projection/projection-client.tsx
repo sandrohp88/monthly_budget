@@ -17,7 +17,7 @@ import { Money } from "@/components/money";
 import { MoneyInput } from "@/components/money-input";
 import { DateLabel } from "@/components/date-label";
 import type { ProjectionRow } from "@/lib/projection";
-import { addDaysIso } from "@/lib/dates";
+import { addDaysIso, startOfMonthIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -50,6 +50,10 @@ function minIso(a: string, b: string): string {
   return a < b ? a : b;
 }
 
+function maxIso(a: string, b: string): string {
+  return a > b ? a : b;
+}
+
 function rangeForFilter(
   filter: FilterKey,
   today: string,
@@ -57,7 +61,7 @@ function rangeForFilter(
   fullEnd: string,
 ): { start: string; end: string } {
   if (filter === "ALL") return { start: fullStart, end: fullEnd };
-  const start = today;
+  const start = filter === "MONTH" ? maxIso(startOfMonthIso(today), fullStart) : today;
   if (filter === "MONTH") return { start, end: minIso(endOfMonth(today), fullEnd) };
   const days = filter === "3M" ? 90 : filter === "6M" ? 180 : 365;
   return { start, end: minIso(addDaysIso(today, days), fullEnd) };
