@@ -504,7 +504,7 @@ function TelemetryRow({
           : "text-[var(--text-0)]";
 
   return (
-    <div className="rounded-sm border border-[var(--border-raw)] bg-[rgba(0,0,0,0.16)] px-3 py-2.5">
+    <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-card)] px-3 py-2.5">
       <div className="mb-1 text-[9px] uppercase tracking-[0.18em] text-[var(--text-3)]">{label}</div>
       <div className={cn("text-[20px] font-bold leading-none tabular", color)}>{value}</div>
       {detail ? (

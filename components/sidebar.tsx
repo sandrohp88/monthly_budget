@@ -82,14 +82,14 @@ export function Sidebar({ displayName, role }: { displayName: string; role: stri
         key={item.href}
         href={item.href}
         className={cn(
-          "flex items-center gap-2.5 px-5 py-2.5 text-[11px] uppercase tracking-[0.1em] cursor-pointer",
-          "border-l-2 border-transparent transition-all",
+          "flex cursor-pointer items-center gap-3 px-4 py-2.5 text-[12px] font-semibold uppercase tracking-[0.06em]",
+          "border-l-2 border-transparent transition-colors",
           active
-            ? "bg-gradient-to-r from-[var(--mint-glow)] to-transparent text-[var(--mint)] border-l-[var(--mint)]"
+            ? "border-l-[var(--mint)] bg-[var(--mint-glow)] text-[var(--mint)]"
             : "text-[var(--text-1)] hover:bg-[var(--bg-2)] hover:text-[var(--text-0)]",
         )}
       >
-        <Icon className="h-3.5 w-3.5" />
+        <Icon className="h-4 w-4" />
         <span className="flex-1">{item.label}</span>
         <kbd className="text-[9px] text-[var(--text-3)] tracking-normal">g {item.shortcut}</kbd>
       </Link>
@@ -97,7 +97,7 @@ export function Sidebar({ displayName, role }: { displayName: string; role: stri
   };
 
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-[var(--border-raw)] bg-[var(--bg-1)] md:flex relative">
+    <aside className="relative hidden w-60 shrink-0 flex-col border-r border-[var(--border-raw)] bg-[var(--sidebar-bg)] backdrop-blur-xl md:flex">
       {/* mint glow on the right edge */}
       <div
         aria-hidden
@@ -109,65 +109,56 @@ export function Sidebar({ displayName, role }: { displayName: string; role: stri
       />
 
       {/* brand */}
-      <div className="flex items-center gap-2.5 border-b border-[var(--border-raw)] px-5 py-[14px]">
+      <div className="flex items-center gap-2.5 border-b border-[var(--border-raw)] px-5 py-4">
         <div
-          className="grid h-7 w-7 place-items-center rounded-sm bg-[var(--mint)] text-[14px] font-extrabold text-[var(--bg-0)] tracking-tight"
-          style={{ boxShadow: "0 0 14px var(--mint-glow)" }}
+          className="grid h-8 w-8 place-items-center rounded-sm bg-[var(--mint)] text-[14px] font-extrabold text-white tracking-tight dark:text-[var(--bg-0)]"
         >
           $
         </div>
         <div>
-          <div className="text-[12px] font-bold uppercase tracking-[0.1em]">FINANCE_OS</div>
-          <div className="text-[9px] uppercase tracking-[0.1em] text-[var(--text-3)] mt-0.5">
-            v1.0.0 // local
+          <div className="text-[13px] font-bold uppercase tracking-[0.08em]">FINANCE_OS</div>
+          <div className="mt-0.5 text-[10px] uppercase tracking-[0.08em] text-[var(--text-3)]">
+            Local budget console
           </div>
         </div>
       </div>
 
-      {/* status block */}
-      <div className="border-b border-[var(--border-raw)] px-5 py-3 text-[10px] tracking-wider text-[var(--text-2)] leading-[1.9]">
-        <Row k="// SYSTEM" v="ONLINE" />
-        <Row k="// SYNC" v="OK" />
-        <Row k="// MODE" v="LOCAL" />
-        <Row k="// BUILD" v="1.0.0" />
+      <div className="border-b border-[var(--border-raw)] px-5 py-3">
+        <div className="flex items-center justify-between rounded-sm border border-[var(--border-dim)] bg-[var(--bg-card)] px-3 py-2">
+          <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">System</span>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--mint)]">
+            Online
+          </span>
+        </div>
       </div>
 
       {/* nav */}
       <nav className="flex-1 overflow-y-auto py-3">
-        <SectionLabel>NAV_01</SectionLabel>
+        <SectionLabel>Primary</SectionLabel>
         {NAV.filter((n) => n.section === 1).map(renderItem)}
-        <SectionLabel className="mt-4">NAV_02</SectionLabel>
+        <SectionLabel className="mt-4">System</SectionLabel>
         {NAV.filter((n) => n.section === 2).map(renderItem)}
       </nav>
 
       {armed ? (
-        <div className="mx-3 mb-2 rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-2)] px-3 py-1.5 text-[9px] uppercase tracking-[0.15em] text-[var(--mint)]">
-      press: d b a c p e x s
+        <div className="mx-3 mb-2 rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-2)] px-3 py-1.5 text-[9px] uppercase tracking-[0.12em] text-[var(--mint)]">
+          press: d b a c p e x s
         </div>
       ) : null}
 
       {/* user card */}
       <div className="flex items-center gap-2.5 border-t border-[var(--border-raw)] px-4 py-3">
-        <div className="grid h-7 w-7 place-items-center rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-3)] text-[10px] font-bold text-[var(--mint)]">
+        <div className="grid h-8 w-8 place-items-center rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-3)] text-[10px] font-bold text-[var(--mint)]">
           {initials}
         </div>
         <div className="min-w-0">
-          <div className="truncate text-[11px] font-semibold text-[var(--text-0)]">
+          <div className="truncate text-[12px] font-semibold text-[var(--text-0)]">
             {displayName.toUpperCase()}
           </div>
           <div className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">{role}</div>
         </div>
       </div>
     </aside>
-  );
-}
-
-function Row({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="flex justify-between">
-      <span>{k}</span>
-      <span className="text-[var(--mint)]">{v}</span>
-    </div>
   );
 }
 
@@ -181,11 +172,11 @@ function SectionLabel({
   return (
     <div
       className={cn(
-        "px-5 pt-2 pb-1.5 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]",
+        "px-5 pb-1.5 pt-2 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]",
         className,
       )}
     >
-      {`// ${children}`}
+      {children}
     </div>
   );
 }

@@ -20,19 +20,19 @@ export function PageHead({
   className?: string;
 }) {
   return (
-    <div className={cn("mb-7", className)}>
+    <div className={cn("mb-6", className)}>
       {module ? (
-        <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-3)]">
-          {`// ${module}`}
+        <div className="mb-2 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+          {module}
         </div>
       ) : null}
       <div className="flex flex-wrap items-end justify-between gap-6">
         <div>
-          <h1 className="mb-2 text-[38px] font-extrabold leading-none tracking-[-1px] uppercase text-[var(--text-0)]">
+          <h1 className="mb-2 text-[32px] font-extrabold leading-none uppercase tracking-[0.06em] text-[var(--text-0)] sm:text-[36px]">
             {title}
           </h1>
           {subtitle ? (
-            <p className="text-[12px] tracking-wide text-[var(--text-2)]">{subtitle}</p>
+            <p className="max-w-3xl text-[14px] text-[var(--text-2)]">{subtitle}</p>
           ) : null}
         </div>
         {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
@@ -45,11 +45,11 @@ export function ModuleTag({ children, className }: { children: React.ReactNode; 
   return (
     <div
       className={cn(
-        "text-[10px] uppercase tracking-[0.2em] text-[var(--text-3)]",
+        "text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]",
         className,
       )}
     >
-      {`// ${children}`}
+      {children}
     </div>
   );
 }
@@ -58,11 +58,11 @@ export function CardSubTag({ children, className }: { children: React.ReactNode;
   return (
     <div
       className={cn(
-        "text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]",
+        "text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]",
         className,
       )}
     >
-      {`// ${children}`}
+      {children}
     </div>
   );
 }

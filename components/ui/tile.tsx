@@ -29,22 +29,22 @@ export function Tile({
     <div
       className={cn(
         "relative overflow-hidden rounded-sm border border-[var(--border-raw)] bg-[var(--bg-card)] " +
-          "px-[18px] py-4 transition-colors hover:border-[var(--border-2)]",
+          "px-5 py-4 transition-colors hover:border-[var(--border-2)]",
         className,
       )}
     >
-      <span className="absolute right-2 top-2 h-2 w-2 border-r border-t border-[var(--mint-dim)]" />
-      <span className="absolute bottom-2 left-2 h-2 w-2 border-b border-l border-[var(--mint-dim)]" />
+      <span className="absolute right-2.5 top-2.5 h-2 w-2 border-r border-t border-[var(--mint-dim)] opacity-45" />
+      <span className="absolute bottom-2.5 left-2.5 h-2 w-2 border-b border-l border-[var(--mint-dim)] opacity-45" />
 
-      <div className="mb-3 flex items-center justify-between text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-2)]">
+      <div className="mb-3 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--text-2)]">
         <span>{label}</span>
         {badge}
       </div>
-      <div className={cn("mb-1 text-[26px] font-bold leading-none tracking-tight tabular", valueColor)}>
+      <div className={cn("mb-1 text-[25px] font-bold leading-none tabular", valueColor)}>
         {value}
       </div>
       {delta != null ? (
-        <div className="text-[10px] tracking-wide text-[var(--text-2)]">{delta}</div>
+        <div className="text-[12px] text-[var(--text-2)]">{delta}</div>
       ) : null}
     </div>
   );
@@ -67,5 +67,5 @@ export function TileGrid({
         : cols === 4
           ? "grid-cols-2 lg:grid-cols-4"
           : "grid-cols-[repeat(auto-fit,minmax(220px,1fr))]";
-  return <div className={cn("grid gap-3.5", colsClass, className)}>{children}</div>;
+  return <div className={cn("grid gap-4", colsClass, className)}>{children}</div>;
 }

@@ -16,7 +16,7 @@ const SheetOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
-    className={cn("fixed inset-0 z-50 bg-black/65 backdrop-blur-[2px]", className)}
+    className={cn("fixed inset-0 z-50 bg-[var(--overlay-bg)] backdrop-blur-[2px]", className)}
     {...props}
   />
 ));
@@ -31,9 +31,9 @@ export const SheetContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed inset-y-0 z-50 flex w-full max-w-[480px] flex-col gap-0 bg-[var(--bg-1)] p-0 " +
-          "shadow-[-20px_0_40px_rgba(0,0,0,0.4),-1px_0_20px_var(--mint-glow)]",
-        side === "right" ? "right-0 border-l border-[var(--mint-dim)]" : "left-0 border-r border-[var(--mint-dim)]",
+        "fixed inset-y-0 z-50 flex w-full max-w-[480px] flex-col gap-0 bg-[var(--bg-card)] p-0 " +
+          "shadow-[0_24px_70px_rgba(15,23,42,0.24)]",
+        side === "right" ? "right-0 border-l border-[var(--border-2)]" : "left-0 border-r border-[var(--border-2)]",
         className,
       )}
       {...props}
@@ -71,7 +71,7 @@ export const SheetTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn("text-[14px] font-bold uppercase tracking-[0.15em] text-[var(--text-0)]", className)}
+    className={cn("text-[16px] font-bold uppercase tracking-[0.08em] text-[var(--text-0)]", className)}
     {...props}
   />
 ));
@@ -83,7 +83,7 @@ export const SheetDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn("text-[10px] tracking-wider text-[var(--text-2)]", className)}
+    className={cn("text-[13px] text-[var(--text-2)]", className)}
     {...props}
   />
 ));

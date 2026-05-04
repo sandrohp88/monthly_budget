@@ -59,86 +59,158 @@
 
 @layer base {
   :root {
-    /* ── Home Apps raw palette ──────────────────────────────────────────── */
+    color-scheme: light;
 
-    /* Backgrounds */
-    --bg-0: #080B0E;          /* tactical black — deepest */
-    --bg-1: #0E1318;          /* panels, cards */
-    --bg-2: #141A22;          /* elevated cards, modals */
-    --bg-3: #1A2232;          /* dropdowns, popovers */
-    --bg-card: #0E1318;
-    --bg-inset: #060A0D;      /* inputs, wells */
+    /* Light command-center palette: clean surfaces, still technical. */
+    --bg-0: #F5F7FA;
+    --bg-1: #FFFFFF;
+    --bg-2: #EEF3F7;
+    --bg-3: #E5EDF4;
+    --bg-card: rgba(255, 255, 255, 0.92);
+    --bg-inset: #F1F5F9;
+    --header-bg: rgba(255, 255, 255, 0.84);
+    --sidebar-bg: rgba(247, 250, 252, 0.94);
+    --overlay-bg: rgba(15, 23, 42, 0.42);
 
-    /* Primary (electric cyan — cyberpunk scanner) */
-    --cyan: #00E5FF;
-    --cyan-bright: #22F3FF;
-    --cyan-dim: #0099BB;
-    --cyan-glow: rgba(0, 229, 255, 0.35);
+    --cyan: #007C95;
+    --cyan-bright: #009DB8;
+    --cyan-dim: #0B6F83;
+    --cyan-glow: rgba(0, 124, 149, 0.14);
 
-    /* Accent (phosphor green — terminal/matrix) */
-    --phosphor: #39FF14;
-    --phosphor-dim: #22CC00;
-    --phosphor-glow: rgba(57, 255, 20, 0.30);
+    --phosphor: #238636;
+    --phosphor-dim: #1F7A31;
+    --phosphor-glow: rgba(35, 134, 54, 0.12);
 
-    /* Military olive (structural / secondary actions) */
-    --olive: #6B7C4A;
-    --olive-dark: #3D4A2B;
+    --olive: #66785F;
+    --olive-dark: #44513F;
 
-    /* Aliases — preserve existing FINANCE_OS variable names so the 26
-       components already using var(--mint*) pick up the cyan automatically.
-       New code should prefer --cyan / --phosphor for clarity. */
     --mint: var(--cyan);
     --mint-bright: var(--cyan-bright);
     --mint-dim: var(--cyan-dim);
     --mint-glow: var(--cyan-glow);
 
-    /* Status */
-    --amber: #FF8C00;          /* military orange / caution */
-    --red: #FF1744;            /* abort */
-    --red-glow: rgba(255, 23, 68, 0.20);
-    --success: #00E676;
-    --info: #448AFF;
+    --amber: #B45309;
+    --red: #DC2626;
+    --red-glow: rgba(220, 38, 38, 0.10);
+    --success: 137 70% 29%;
+    --info: #2563EB;
 
-    /* Text hierarchy */
-    --text-0: #E8EDF2;         /* primary */
-    --text-1: #B8C5D2;         /* secondary */
-    --text-2: #8A9BB0;         /* muted */
-    --text-3: #4A5C6E;         /* tertiary / placeholder */
+    --text-0: #111827;
+    --text-1: #334155;
+    --text-2: #64748B;
+    --text-3: #94A3B8;
 
-    /* Borders */
-    --border-raw: #1F2B38;
-    --border-2: #2A3E54;       /* hover/active */
-    --border-dim: #131C26;     /* nested */
+    --border-raw: #D7E1EA;
+    --border-2: #B8C7D7;
+    --border-dim: #E7EDF4;
+    --grid-color: rgba(148, 163, 184, 0.20);
+    --grid-opacity: 0.32;
 
-    /* shadcn HSL bridge — every token maps onto the tactical palette */
-    --background: 210 28% 5%;          /* bg-0  (#080B0E) */
-    --foreground: 213 18% 93%;         /* text-0 */
-    --card: 213 27% 8%;                /* bg-1  (#0E1318) */
-    --card-foreground: 213 18% 93%;
-    --popover: 215 23% 14%;            /* bg-3  (#1A2232) */
-    --popover-foreground: 213 18% 93%;
-    --primary: 188 100% 50%;           /* cyan  (#00E5FF) */
-    --primary-foreground: 210 28% 5%;
-    --secondary: 215 24% 11%;          /* bg-2  (#141A22) */
-    --secondary-foreground: 213 25% 78%;
-    --muted: 215 24% 11%;
-    --muted-foreground: 213 16% 62%;   /* text-1 */
-    --accent: 105 100% 53%;            /* phosphor (#39FF14) */
-    --accent-foreground: 210 28% 5%;
-    --destructive: 348 100% 54%;       /* red (#FF1744) */
+    --chart-line: #007C95;
+    --chart-fill: rgba(0, 124, 149, 0.22);
+    --chart-grid: rgba(100, 116, 139, 0.20);
+    --chart-axis: #94A3B8;
+    --chart-tooltip-bg: #FFFFFF;
+
+    --background: 210 29% 97%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 190 100% 29%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 31% 95%;
+    --secondary-foreground: 215 25% 27%;
+    --muted: 210 31% 95%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 132 59% 33%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --success: 154 100% 45%;
-    --warning: 33 100% 50%;            /* amber (#FF8C00) */
-    --border: 210 30% 17%;             /* border-raw (#1F2B38) */
-    --input: 210 30% 17%;
-    --ring: 188 100% 38%;              /* cyan-dim */
+    --warning: 25 95% 35%;
+    --border: 211 32% 88%;
+    --input: 211 32% 88%;
+    --ring: 190 85% 28%;
 
-    /* Sharp by default per spec — radius is opt-in via --radius-chip */
-    --radius: 0px;
-    --radius-chip: 2px;
+    --radius: 6px;
+    --radius-chip: 4px;
   }
 
-  .dark { color-scheme: dark; }
+  .dark {
+    color-scheme: dark;
+
+    --bg-0: #090D12;
+    --bg-1: #10161D;
+    --bg-2: #171F29;
+    --bg-3: #1E2936;
+    --bg-card: rgba(16, 22, 29, 0.92);
+    --bg-inset: #080C10;
+    --header-bg: rgba(9, 13, 18, 0.82);
+    --sidebar-bg: rgba(14, 19, 25, 0.94);
+    --overlay-bg: rgba(0, 0, 0, 0.62);
+
+    --cyan: #00D4EF;
+    --cyan-bright: #45F2FF;
+    --cyan-dim: #0096B5;
+    --cyan-glow: rgba(0, 212, 239, 0.24);
+
+    --phosphor: #43E06F;
+    --phosphor-dim: #2EB85A;
+    --phosphor-glow: rgba(67, 224, 111, 0.20);
+
+    --olive: #7A8C62;
+    --olive-dark: #3D4A2B;
+
+    --mint: var(--cyan);
+    --mint-bright: var(--cyan-bright);
+    --mint-dim: var(--cyan-dim);
+    --mint-glow: var(--cyan-glow);
+
+    --amber: #F59E0B;
+    --red: #FF3B5C;
+    --red-glow: rgba(255, 59, 92, 0.15);
+    --success: 142 71% 45%;
+    --info: #60A5FA;
+
+    --text-0: #F1F5F9;
+    --text-1: #C8D3DF;
+    --text-2: #8FA1B5;
+    --text-3: #5E7186;
+
+    --border-raw: #223041;
+    --border-2: #34475D;
+    --border-dim: #182332;
+    --grid-color: rgba(82, 104, 128, 0.22);
+    --grid-opacity: 0.42;
+
+    --chart-line: #34D8EF;
+    --chart-fill: rgba(52, 216, 239, 0.24);
+    --chart-grid: rgba(143, 161, 181, 0.18);
+    --chart-axis: #5E7186;
+    --chart-tooltip-bg: #10161D;
+
+    --background: 213 33% 5%;
+    --foreground: 210 40% 96%;
+    --card: 213 29% 9%;
+    --card-foreground: 210 40% 96%;
+    --popover: 213 29% 9%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 187 100% 47%;
+    --primary-foreground: 213 33% 5%;
+    --secondary: 215 28% 13%;
+    --secondary-foreground: 211 26% 83%;
+    --muted: 215 28% 13%;
+    --muted-foreground: 212 18% 64%;
+    --accent: 140 71% 57%;
+    --accent-foreground: 213 33% 5%;
+    --destructive: 349 100% 62%;
+    --destructive-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --border: 213 31% 19%;
+    --input: 213 31% 19%;
+    --ring: 188 100% 36%;
+  }
 
   * {
     border-color: hsl(var(--border));
@@ -146,17 +218,16 @@
 
   html, body {
     font-family: var(--font-ui);
-    font-size: 14px;
-    line-height: 1.5;
+    font-size: 15px;
+    line-height: 1.55;
     -webkit-font-smoothing: antialiased;
     color: var(--text-0);
   }
 
   body {
-    background-color: var(--bg-0);
-    background-image:
-      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(0, 229, 255, 0.06), transparent 60%),
-      radial-gradient(ellipse 60% 40% at 100% 100%, rgba(57, 255, 20, 0.025), transparent 60%);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 50%, transparent), transparent 28rem),
+      var(--bg-0);
     background-attachment: fixed;
   }
 
@@ -166,33 +237,33 @@
     position: fixed;
     inset: 0;
     background-image:
-      linear-gradient(rgba(31, 43, 56, 0.35) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(31, 43, 56, 0.35) 1px, transparent 1px);
-    background-size: 48px 48px;
+      linear-gradient(var(--grid-color) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+    background-size: 56px 56px;
     pointer-events: none;
     z-index: 0;
-    opacity: 0.5;
+    opacity: var(--grid-opacity);
   }
 
   /* Heading typography — Orbitron, uppercase, wide tracking per Home Apps. */
   h1 {
     font-family: var(--font-display);
     font-weight: 900;
-    letter-spacing: 0.20em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     line-height: 1.15;
   }
   h2 {
     font-family: var(--font-display);
     font-weight: 700;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     line-height: 1.15;
   }
   h3 {
     font-family: var(--font-display);
     font-weight: 600;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
     line-height: 1.3;
   }

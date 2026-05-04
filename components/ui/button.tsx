@@ -16,8 +16,8 @@ import { cn } from "@/lib/cn";
      - link     : underlined mint
 */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm font-mono text-[10px] font-medium uppercase tracking-[0.12em] " +
-    "ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring " +
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm font-mono text-[10px] font-semibold uppercase tracking-[0.08em] " +
+    "ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring " +
     "disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
   {
     variants: {
@@ -26,7 +26,7 @@ const buttonVariants = cva(
           "bg-[var(--bg-2)] text-[var(--text-1)] border border-[var(--border-2)] hover:border-[var(--mint-dim)] hover:text-[var(--text-0)]",
         primary:
           "bg-[var(--mint)] text-[var(--bg-0)] border border-[var(--mint)] font-bold tracking-[0.15em] " +
-            "hover:bg-[var(--mint-bright)] hover:shadow-[0_0_16px_var(--mint-glow)]",
+            "hover:bg-[var(--mint-bright)] dark:text-[var(--bg-0)]",
         outline:
           "bg-[var(--bg-2)] text-[var(--text-1)] border border-[var(--border-2)] hover:border-[var(--mint-dim)] hover:text-[var(--text-0)]",
         ghost:
