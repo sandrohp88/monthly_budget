@@ -323,6 +323,11 @@ export type PromoCycleSchedule = {
   amountCents: number;
 };
 
+export type PromoCycleScheduleWithBalance = PromoCycleSchedule & {
+  /** Promo principal remaining immediately before this cycle's payment. */
+  balanceBeforeCents: number;
+};
+
 /**
  * Project a promo's payment schedule. Two modes:
  *
@@ -348,18 +353,47 @@ export function projectPromoSchedule(
   skipDueDates: ReadonlySet<string>,
   scheduledPayments: ReadonlyArray<Pick<CreditCardPromoPaymentRow, "dueDate" | "amountCents">> = [],
 ): PromoCycleSchedule[] {
+  return projectPromoScheduleWithBalances(
+    promo,
+    card,
+    fromIso,
+    skipDueDates,
+    scheduledPayments,
+  ).map(({ dueDate, amountCents }) => ({ dueDate, amountCents }));
+}
+
+export function projectPromoScheduleWithBalances(
+  promo: CreditCardPromoRow,
+  card: StatementCycleConfig & { dueDay: number },
+  fromIso: string,
+  skipDueDates: ReadonlySet<string>,
+  scheduledPayments: ReadonlyArray<Pick<CreditCardPromoPaymentRow, "dueDate" | "amountCents">> = [],
+): PromoCycleScheduleWithBalance[] {
   if (scheduledPayments.length > 0) {
     if (!promo.isActive) return [];
-    return scheduledPayments
-      .filter((p) => p.amountCents > 0 && p.dueDate >= fromIso && !skipDueDates.has(p.dueDate))
-      .map((p) => ({ dueDate: p.dueDate, amountCents: p.amountCents }))
+    let virtualRemaining = promo.remainingAmountCents;
+    const out: PromoCycleScheduleWithBalance[] = [];
+    const payments = scheduledPayments
+      .filter((p) => p.amountCents > 0 && p.dueDate >= fromIso)
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    for (const payment of payments) {
+      if (!skipDueDates.has(payment.dueDate)) {
+        out.push({
+          dueDate: payment.dueDate,
+          amountCents: payment.amountCents,
+          balanceBeforeCents: virtualRemaining,
+        });
+      }
+      virtualRemaining = Math.max(0, virtualRemaining - payment.amountCents);
+    }
+    return out;
   }
   if (promo.remainingAmountCents <= 0) return [];
   if (!promo.isActive) return [];
 
-  const out: PromoCycleSchedule[] = [];
+  const out: PromoCycleScheduleWithBalance[] = [];
   const scheduleChunk = (dueDate: string, asOfIso: string): void => {
+    const balanceBeforeCents = virtualRemaining;
     const chunk = promoMonthlyChunkAt(
       {
         remainingAmountCents: virtualRemaining,
@@ -369,7 +403,7 @@ export function projectPromoSchedule(
       asOfIso,
     );
     if (chunk > 0 && !skipDueDates.has(dueDate)) {
-      out.push({ dueDate, amountCents: chunk });
+      out.push({ dueDate, amountCents: chunk, balanceBeforeCents });
     }
     virtualRemaining -= chunk;
   };
@@ -403,7 +437,7 @@ export function projectPromoSchedule(
       // so the user sees the cliff.
       const chunk = virtualRemaining;
       if (!skipDueDates.has(dueDate)) {
-        out.push({ dueDate, amountCents: chunk });
+        out.push({ dueDate, amountCents: chunk, balanceBeforeCents: virtualRemaining });
       }
       virtualRemaining = 0;
       break;

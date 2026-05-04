@@ -97,6 +97,8 @@ type PaymentAdjustment = {
   relatedDate?: string;
   amountCents: number;
   originalAmountCents: number;
+  paymentDueCents?: number;
+  paymentBalanceCents?: number;
   promoSummaries?: PromoPaymentSummary[];
 };
 
@@ -528,6 +530,8 @@ function ProjectionEventItem({
   const isPromoPayment =
     targetType === "creditCardPayment" && event.label.toLowerCase().includes("promo");
   const baseLabel = targetType === "bill" ? "BILL" : isPromoPayment ? "PROMO" : "CARD EST";
+  const paymentDueCents = event.paymentDueCents ?? event.originalAmountCents;
+  const paymentBalanceCents = event.paymentBalanceCents;
   return (
     <span
       key={`${event.sourceId}-${row.date}-${eventIndex}`}
@@ -547,6 +551,8 @@ function ProjectionEventItem({
             relatedDate: event.relatedDate,
             amountCents: event.amountCents,
             originalAmountCents: event.originalAmountCents!,
+            paymentDueCents,
+            paymentBalanceCents,
             promoSummaries:
               targetType === "creditCardPayment"
                 ? (promoSummariesByCard[event.sourceId!] ?? [])
@@ -560,6 +566,18 @@ function ProjectionEventItem({
       {adjusted ? (
         <span className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
           BASE <Money cents={event.originalAmountCents} />
+        </span>
+      ) : null}
+      {targetType === "creditCardPayment" ? (
+        <span className="inline-flex flex-wrap items-center gap-1 text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+          <span>
+            DUE <Money cents={paymentDueCents} />
+          </span>
+          {paymentBalanceCents != null ? (
+            <span>
+              BAL <Money cents={paymentBalanceCents} />
+            </span>
+          ) : null}
         </span>
       ) : null}
     </span>
@@ -588,8 +606,13 @@ function PaymentAdjustmentDialog({
   const adjusted = amountCents !== adjustment.originalAmountCents;
   const dateAdjusted = Boolean(adjustment.relatedDate) || plannedDate !== adjustment.dueDate;
   const hasPlan = adjusted || dateAdjusted;
-  const baselineLabel =
-    adjustment.targetType === "bill" ? "Normal bill" : "Current estimate";
+  const baselineLabel = adjustment.targetType === "bill" ? "Normal bill" : "Amount due";
+  const paymentDueCents = adjustment.paymentDueCents ?? adjustment.originalAmountCents;
+  const paymentBalanceCents = adjustment.paymentBalanceCents;
+  const exceedsBalance =
+    adjustment.targetType === "creditCardPayment" &&
+    paymentBalanceCents != null &&
+    amountCents > paymentBalanceCents;
   const promoSummaries = adjustment.promoSummaries ?? [];
   const promoRemainingCents = promoSummaries.reduce(
     (total, promo) => total + promo.remainingAmountCents,
@@ -625,9 +648,17 @@ function PaymentAdjustmentDialog({
             <div className="flex items-center justify-between gap-3">
               <span>{baselineLabel}</span>
               <span className="text-[var(--text-0)]">
-                <Money cents={adjustment.originalAmountCents} />
+                <Money cents={paymentDueCents} />
               </span>
             </div>
+            {adjustment.targetType === "creditCardPayment" && paymentBalanceCents != null ? (
+              <div className="flex items-center justify-between gap-3">
+                <span>Current balance</span>
+                <span className="text-[var(--text-0)]">
+                  <Money cents={paymentBalanceCents} />
+                </span>
+              </div>
+            ) : null}
           </div>
 
           {adjustment.targetType === "creditCardPayment" ? (
@@ -661,6 +692,35 @@ function PaymentAdjustmentDialog({
               onChangeCents={setAmountCents}
               disabled={saving}
             />
+            {exceedsBalance ? (
+              <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--red)]">
+                Planned payment exceeds the displayed card balance.
+              </div>
+            ) : null}
+            {adjustment.targetType === "creditCardPayment" ? (
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setAmountCents(paymentDueCents)}
+                  disabled={saving}
+                >
+                  PAY DUE
+                </Button>
+                {paymentBalanceCents != null ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setAmountCents(paymentBalanceCents)}
+                    disabled={saving}
+                  >
+                    PAY BALANCE
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           {adjustment.targetType === "creditCardPayment" && promoSummaries.length > 0 ? (
@@ -718,7 +778,7 @@ function PaymentAdjustmentDialog({
               <Button
                 type="submit"
                 variant="primary"
-                disabled={saving || amountCents < 0 || !plannedDate}
+                disabled={saving || amountCents < 0 || !plannedDate || exceedsBalance}
               >
                 {saving ? "SAVING..." : "SAVE PLAN"}
               </Button>

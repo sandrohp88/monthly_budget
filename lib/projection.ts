@@ -39,6 +39,8 @@ export type OneTimeExpense = {
   sourceType?: "creditCardPayment";
   originalAmountCents?: number;
   relatedDate?: string;
+  paymentDueCents?: number;
+  paymentBalanceCents?: number;
 };
 
 export type ProjectionEventKind = "paycheck" | "bill" | "extra";
@@ -52,6 +54,8 @@ export type ProjectionEvent = {
   sourceType?: ProjectionEventSourceType;
   originalAmountCents?: number;
   relatedDate?: string;
+  paymentDueCents?: number;
+  paymentBalanceCents?: number;
 };
 
 export type ProjectionRow = {
@@ -158,6 +162,8 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
       sourceType: e.sourceType,
       originalAmountCents: e.originalAmountCents,
       relatedDate: e.relatedDate,
+      paymentDueCents: e.paymentDueCents,
+      paymentBalanceCents: e.paymentBalanceCents,
     });
   }
 

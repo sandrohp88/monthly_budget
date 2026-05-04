@@ -316,6 +316,8 @@ describe("projection engine", () => {
           sourceId: "card-1",
           sourceType: "creditCardPayment",
           originalAmountCents: 600_00,
+          paymentDueCents: 250_00,
+          paymentBalanceCents: 1_000_00,
         },
       ],
     });
@@ -327,6 +329,8 @@ describe("projection engine", () => {
       sourceId: "card-1",
       sourceType: "creditCardPayment",
       originalAmountCents: 600_00,
+      paymentDueCents: 250_00,
+      paymentBalanceCents: 1_000_00,
     });
   });
 
