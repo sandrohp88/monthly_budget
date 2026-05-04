@@ -343,11 +343,38 @@ export function projectPromoSchedule(
   if (!promo.isActive) return [];
 
   const out: PromoCycleSchedule[] = [];
+  const scheduleChunk = (dueDate: string, asOfIso: string): void => {
+    const chunk = promoMonthlyChunkAt(
+      {
+        remainingAmountCents: virtualRemaining,
+        monthlyPaymentCents: promo.monthlyPaymentCents,
+        endDate: promo.endDate,
+      },
+      asOfIso,
+    );
+    if (chunk > 0 && !skipDueDates.has(dueDate)) {
+      out.push({ dueDate, amountCents: chunk });
+    }
+    virtualRemaining -= chunk;
+  };
   // Walk forward one cycle at a time. The "cycle" pointer is a date inside the
   // billing window; nextDayOfMonthOnOrAfter gives us its statement close, then
   // dueDateFromStatement turns that into the payment due date.
   let cursor = fromIso;
   let virtualRemaining = promo.remainingAmountCents;
+  const firstStatement = nextStatementDateOnOrAfter(cursor, card);
+  const firstStatementDueDate = dueDateFromStatement(firstStatement, card.dueDay);
+  const activeFrom = fromIso > promo.startDate ? fromIso : promo.startDate;
+  const currentCycleDueDate = nextDayOfMonthOnOrAfter(activeFrom, card.dueDay);
+  const currentPaymentDate =
+    currentCycleDueDate > promo.endDate ? promo.endDate : currentCycleDueDate;
+  if (
+    currentPaymentDate >= fromIso &&
+    currentPaymentDate < firstStatementDueDate &&
+    virtualRemaining > 0
+  ) {
+    scheduleChunk(currentPaymentDate, currentPaymentDate);
+  }
   // Hard cap on iterations to avoid runaway loops if dates ever go sideways.
   for (let i = 0; i < 240 && virtualRemaining > 0; i++) {
     const statement = nextStatementDateOnOrAfter(cursor, card);
@@ -365,18 +392,7 @@ export function projectPromoSchedule(
       virtualRemaining = 0;
       break;
     }
-    const chunk = promoMonthlyChunkAt(
-      {
-        remainingAmountCents: virtualRemaining,
-        monthlyPaymentCents: promo.monthlyPaymentCents,
-        endDate: promo.endDate,
-      },
-      statement,
-    );
-    if (chunk > 0 && !skipDueDates.has(dueDate)) {
-      out.push({ dueDate, amountCents: chunk });
-    }
-    virtualRemaining -= chunk;
+    scheduleChunk(dueDate, statement);
     // Advance cursor past this cycle to find the next one
     cursor = addDaysIso(statement, 1);
   }
