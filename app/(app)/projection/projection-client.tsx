@@ -181,6 +181,7 @@ export function ProjectionClient({
 }) {
   const router = useRouter();
   const [filter, setFilter] = React.useState<FilterKey>("ALL");
+  const [cardsOnly, setCardsOnly] = React.useState(false);
   const [adjustingPayment, setAdjustingPayment] = React.useState<PaymentAdjustment | null>(null);
   const [savingAdjustment, setSavingAdjustment] = React.useState(false);
 
@@ -195,11 +196,21 @@ export function ProjectionClient({
     [rows, range.start, range.end],
   );
 
-  // The visible ledger rows — only days where money moved
-  const eventRows = React.useMemo(
-    () => windowRows.filter((r) => r.events.length > 0),
-    [windowRows],
-  );
+  // The visible ledger rows — only days where money moved.
+  // When `cardsOnly` is on, strip non-card events from each row and drop rows
+  // that have nothing card-related. The balance column still reflects the
+  // full projected balance (paychecks + bills are still in the ledger
+  // computation upstream), so the view stays useful as a cash-flow check.
+  const eventRows = React.useMemo(() => {
+    const all = windowRows.filter((r) => r.events.length > 0);
+    if (!cardsOnly) return all;
+    return all
+      .map((r) => ({
+        ...r,
+        events: r.events.filter((e) => e.sourceType === "creditCardPayment"),
+      }))
+      .filter((r) => r.events.length > 0);
+  }, [windowRows, cardsOnly]);
   const ledgerSections = React.useMemo(() => buildLedgerSections(eventRows), [eventRows]);
 
   const overridePath = (adjustment: PaymentAdjustment) =>
@@ -304,6 +315,10 @@ export function ProjectionClient({
             {f.label}
           </Tab>
         ))}
+        <span className="mx-1 h-4 w-px bg-[var(--border-raw)]" aria-hidden />
+        <Tab active={cardsOnly} onClick={() => setCardsOnly((v) => !v)}>
+          CARDS + PROMOS
+        </Tab>
         <div className="ml-auto text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
           <DateLabel iso={range.start} format="short" /> -{" "}
           <DateLabel iso={range.end} format="short" />
@@ -336,13 +351,17 @@ export function ProjectionClient({
                     colSpan={5}
                     className="px-4 py-8 text-center text-[10px] uppercase tracking-[0.2em] text-[var(--text-3)]"
                   >
-                    No income or expense events in this window
+                    {cardsOnly
+                      ? "No credit-card or promo payments in this window"
+                      : "No income or expense events in this window"}
                   </td>
                 </tr>
               ) : null}
               {ledgerSections.map((section, sectionIndex) => (
                 <React.Fragment key={section.key}>
-                  <PaycheckSectionHeader section={section} index={sectionIndex} />
+                  {cardsOnly ? null : (
+                    <PaycheckSectionHeader section={section} index={sectionIndex} />
+                  )}
                   {section.rows.map((r) => {
                     const isPayday = hasPaycheck(r);
                     const isNegativeBalance = r.balanceCents < 0;
