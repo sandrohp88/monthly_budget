@@ -26,6 +26,8 @@ import { log } from "./log";
 export { toCents, looksLikePaid } from "./plaid-helpers";
 import { toCents, looksLikePaid } from "./plaid-helpers";
 
+const PLAID_TRANSACTION_HISTORY_DAYS = 730;
+
 export interface SyncResult {
   added: number;
   modified: number;
@@ -295,6 +297,7 @@ export async function createLinkToken(userId: string): Promise<string> {
     client_name: "FINANCE_OS",
     products: [Products.Transactions],
     optional_products: [Products.Liabilities],
+    transactions: { days_requested: PLAID_TRANSACTION_HISTORY_DAYS },
     country_codes: [CountryCode.Us],
     language: "en",
     ...(redirectUri ? { redirect_uri: redirectUri } : {}),
