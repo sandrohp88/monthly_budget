@@ -21,6 +21,14 @@ GitHub-based CI/CD workflow for the repo.
      money, dates, validation, repos, migrations, tests, and deployment.
 
 2. Create or use the right branch.
+   - Default to single-thread development in the root checkout at
+     `E:\code\monthly_budget`.
+   - Do not create or use Git worktrees for normal feature work.
+   - Use worktrees only when the user explicitly asks for parallel agent work
+     or side-by-side implementations.
+   - If a worktree is used, record its path and branch, keep it off `main`,
+     and remove it with `git worktree remove <path>` as soon as the task is
+     merged or abandoned.
    - For non-trivial work, use a feature branch from current `main`.
    - Branch names should be short and descriptive, such as
      `feat/import-rules`, `fix/projection-card-due-date`, or
