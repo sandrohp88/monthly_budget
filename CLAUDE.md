@@ -482,6 +482,7 @@ These bit us before. Don't repeat:
 17. **Statement upsert preserves manual paid records** — `upsertCreditCardStatementByDate` will not overwrite `paidAmountCents`/`paidDate` when Plaid returns no payment data. Cycle date updates still apply. Don't "simplify" this away.
 18. **Promo auto-decrement only fires on unpaid→paid edge** — `applyPromoChunksForPaidStatement` is idempotency-by-edge: the route checks `wasUnpaid && isNowPaid` before calling it. Re-saving an already-paid statement won't double-decrement. Don't move the call into the repo or strip the guard. See §17a.
 19. **Promo chunks never get added to a cycle that has a recorded statement** — the statement balance entered by the user is assumed to already include any promo principal billed in that cycle. `projectPromoSchedule` takes a `skipDueDates` set fed from `recordedDueDatesByCard` in `projection-server.ts`. Skip the skip-set and you double-count.
+20. **Plaid promo detection needs raw transaction text at sync time** — drafts only persist a small subset of Plaid's transaction payload. If you need issuer-specific promo clues, inspect nested fields from the live Transaction object (`payment_meta`, `counterparties`, category, location, etc.) before storing the draft; don't infer a promo from generic PayPal `LOAN_PAYMENTS` rows.
 
 ---
 

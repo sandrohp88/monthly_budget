@@ -7,6 +7,8 @@ import type { PlaidTransactionDraftRow, PlaidAccountRow } from "@/lib/db/schema"
 export type DraftWithAccount = PlaidTransactionDraftRow & {
   accountName: string;
   accountMask: string | null;
+  accountType: string | null;
+  accountSubtype: string | null;
   linkedCreditCardId: string | null;
   linkedCreditCardName: string | null;
   promoPayoffDate: string | null;
@@ -42,6 +44,8 @@ export async function GET(req: Request) {
       ...d,
       accountName: accountMap.get(d.accountId)?.name ?? "Unknown Account",
       accountMask: accountMap.get(d.accountId)?.mask ?? null,
+      accountType: accountMap.get(d.accountId)?.type ?? null,
+      accountSubtype: accountMap.get(d.accountId)?.subtype ?? null,
       linkedCreditCardId: cardMap.get(d.accountId)?.id ?? null,
       linkedCreditCardName: cardMap.get(d.accountId)?.name ?? null,
       promoPayoffDate: detectPromoPayoffDate([

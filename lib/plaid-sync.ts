@@ -17,7 +17,7 @@ import {
   upsertCreditCardStatementByDate,
 } from "./repos";
 import { dueDateFromStatement } from "./credit-cards";
-import { detectPromoPayoffDate } from "./plaid-promo-parser";
+import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
 import { log } from "./log";
 
 // Pure helpers live in plaid-helpers.ts so they don't drag in "server-only"
@@ -53,9 +53,11 @@ async function autoCreatePromoFromTransaction(input: {
   originalDescription: string | null;
   merchantName: string | null;
   amountCents: number;
+  promoTexts?: string[];
 }): Promise<void> {
   if (input.amountCents <= 0) return;
   const payoffDate = detectPromoPayoffDate([
+    ...(input.promoTexts ?? []),
     input.originalDescription,
     input.description,
     input.merchantName,
@@ -207,6 +209,7 @@ export async function syncPlaidTransactions(
             originalDescription,
             merchantName: txn.merchant_name ?? null,
             amountCents,
+            promoTexts: plaidTransactionPromoTexts(txn),
           });
           added++;
         }
@@ -240,6 +243,7 @@ export async function syncPlaidTransactions(
             originalDescription,
             merchantName: txn.merchant_name ?? null,
             amountCents,
+            promoTexts: plaidTransactionPromoTexts(txn),
           });
           modified++;
         }

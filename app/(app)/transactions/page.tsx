@@ -35,6 +35,8 @@ export default async function TransactionsPage() {
     ...d,
     accountName: accountMap.get(d.accountId)?.name ?? "Unknown Account",
     accountMask: accountMap.get(d.accountId)?.mask ?? null,
+    accountType: accountMap.get(d.accountId)?.type ?? null,
+    accountSubtype: accountMap.get(d.accountId)?.subtype ?? null,
     linkedCreditCardId: cardMap.get(d.accountId)?.id ?? null,
     linkedCreditCardName: cardMap.get(d.accountId)?.name ?? null,
     promoPayoffDate: detectPromoPayoffDate([
