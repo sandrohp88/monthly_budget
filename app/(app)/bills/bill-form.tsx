@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Money } from "@/components/money";
+import { nextBillOccurrence } from "@/lib/bills";
 import { CategoryDialog } from "@/components/category-dialog";
 import { todayIso } from "@/lib/dates";
 import type { BillRow } from "@/lib/db/schema";
@@ -73,7 +74,10 @@ export function BillForm({
   const [intervalPreset, setIntervalPreset] = React.useState<string>(
     initial ? presetForMonths(initial.intervalMonths) : "1",
   );
-  const [anchorDate, setAnchorDate] = React.useState<string>(initial?.anchorDate ?? todayIso());
+  const today = todayIso();
+  const [anchorDate, setAnchorDate] = React.useState<string>(
+    initial ? nextBillOccurrence(initial, today) : today,
+  );
   const [autoPay, setAutoPay] = React.useState<boolean>(initial?.autoPay ?? false);
   const [paidViaCardId, setPaidViaCardId] = React.useState<string>(
     initial?.paidViaCardId ?? CASH_OPTION,
