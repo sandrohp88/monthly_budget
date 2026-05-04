@@ -99,6 +99,13 @@
       "when": 1778630000000,
       "tag": "0013_auto_approve_plaid_transactions",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1778710000000,
+      "tag": "0014_add_promo_payment_schedule",
+      "breakpoints": true
     }
   ]
 }

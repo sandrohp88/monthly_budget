@@ -9,6 +9,7 @@ import {
   FileText,
   Sparkles,
   Scale,
+  CalendarDays,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -69,6 +70,12 @@ import type {
 } from "@/lib/db/schema";
 
 type StatementWithCard = CreditCardStatementRow & { cardName: string; cardId: string };
+export type PromoScheduledPayment = {
+  id: string;
+  dueDate: string;
+  amountCents: number;
+  note: string | null;
+};
 type StatementCycleMode = "calendar_day" | "interval_days";
 
 export type CycleEstimate = {
@@ -91,12 +98,15 @@ function statementCycleLabel(card: CreditCardRow): string {
 
 export function CreditCardsClient({
   initialCards,
+  initialPaymentsByPromoId,
 }: {
   initialCards: CardWithStatementsAndEstimate[];
+  initialPaymentsByPromoId: Record<string, PromoScheduledPayment[]>;
 }) {
   // No setter — the refresh handler does a full reload so the server can
   // recompute the cycle estimate from fresh bills + statements together.
   const cards = initialCards;
+  const paymentsByPromoId = initialPaymentsByPromoId;
   const [createCardOpen, setCreateCardOpen] = React.useState(false);
   const [editCard, setEditCard] = React.useState<CreditCardRow | null>(null);
   const [statementCard, setStatementCard] = React.useState<CreditCardRow | null>(null);
@@ -105,6 +115,7 @@ export function CreditCardsClient({
   const [editPromo, setEditPromo] = React.useState<{ card: CreditCardRow; promo: CreditCardPromoRow } | null>(null);
   const [whatIfPromo, setWhatIfPromo] = React.useState<{ card: CreditCardRow; promo: CreditCardPromoRow } | null>(null);
   const [whatIfCard, setWhatIfCard] = React.useState<{ card: CreditCardRow; promos: CreditCardPromoRow[] } | null>(null);
+  const [schedulePromo, setSchedulePromo] = React.useState<{ card: CreditCardRow; promo: CreditCardPromoRow } | null>(null);
 
   const today = todayIso();
 
@@ -278,6 +289,7 @@ export function CreditCardsClient({
               estimate={estimate}
               linkedBillCount={linkedBillCount}
               promos={promos}
+              paymentsByPromoId={paymentsByPromoId}
               today={today}
               onAddStatement={() => setStatementCard(card)}
               onEdit={() => setEditCard(card)}
@@ -289,6 +301,7 @@ export function CreditCardsClient({
               onCardPromoWhatIf={() =>
                 setWhatIfCard({ card, promos: promos.filter((p) => p.isActive) })
               }
+              onPromoSchedule={(p) => setSchedulePromo({ card, promo: p })}
             />
           ))}
         </div>
@@ -373,6 +386,7 @@ export function CreditCardsClient({
           scope="promo"
           card={whatIfPromo.card}
           promos={[whatIfPromo.promo]}
+          paymentsByPromoId={paymentsByPromoId}
           onClose={() => setWhatIfPromo(null)}
         />
       ) : null}
@@ -383,7 +397,22 @@ export function CreditCardsClient({
           scope="card"
           card={whatIfCard.card}
           promos={whatIfCard.promos}
+          paymentsByPromoId={paymentsByPromoId}
           onClose={() => setWhatIfCard(null)}
+        />
+      ) : null}
+
+      {/* Promo payment-schedule editor */}
+      {schedulePromo ? (
+        <PromoScheduleSheet
+          card={schedulePromo.card}
+          promo={schedulePromo.promo}
+          initialPayments={paymentsByPromoId[schedulePromo.promo.id] ?? []}
+          onClose={() => setSchedulePromo(null)}
+          onSaved={async () => {
+            setSchedulePromo(null);
+            await refresh();
+          }}
         />
       ) : null}
     </div>
@@ -400,6 +429,7 @@ function CreditCardTile({
   estimate,
   linkedBillCount,
   promos,
+  paymentsByPromoId,
   today,
   onAddStatement,
   onEdit,
@@ -409,12 +439,14 @@ function CreditCardTile({
   onEditPromo,
   onPromoWhatIf,
   onCardPromoWhatIf,
+  onPromoSchedule,
 }: {
   card: CreditCardRow;
   statements: CreditCardStatementRow[];
   estimate: CycleEstimate | null;
   linkedBillCount: number;
   promos: CreditCardPromoRow[];
+  paymentsByPromoId: Record<string, PromoScheduledPayment[]>;
   today: string;
   onAddStatement: () => void;
   onEdit: () => void;
@@ -424,6 +456,7 @@ function CreditCardTile({
   onEditPromo: (p: CreditCardPromoRow) => void;
   onPromoWhatIf: (p: CreditCardPromoRow) => void;
   onCardPromoWhatIf: () => void;
+  onPromoSchedule: (p: CreditCardPromoRow) => void;
 }) {
   const current = currentStatementOf(statements);
   const isOpen = current ? isStatementOpen(current) : false;
@@ -663,11 +696,13 @@ function CreditCardTile({
       <PromosSection
         card={card}
         promos={promos}
+        paymentsByPromoId={paymentsByPromoId}
         today={today}
         onAdd={onAddPromo}
         onEdit={onEditPromo}
         onWhatIf={onPromoWhatIf}
         onCardWhatIf={onCardPromoWhatIf}
+        onSchedule={onPromoSchedule}
       />
 
       {/* recent statement history */}
@@ -1247,19 +1282,23 @@ function ActualVsEstimate({
 function PromosSection({
   card,
   promos,
+  paymentsByPromoId,
   today,
   onAdd,
   onEdit,
   onWhatIf,
   onCardWhatIf,
+  onSchedule,
 }: {
   card: CreditCardRow;
   promos: CreditCardPromoRow[];
+  paymentsByPromoId: Record<string, PromoScheduledPayment[]>;
   today: string;
   onAdd: () => void;
   onEdit: (p: CreditCardPromoRow) => void;
   onWhatIf: (p: CreditCardPromoRow) => void;
   onCardWhatIf: () => void;
+  onSchedule: (p: CreditCardPromoRow) => void;
 }) {
   const active = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);
   const totalRemaining = active.reduce((s, p) => s + p.remainingAmountCents, 0);
@@ -1293,7 +1332,11 @@ function PromosSection({
 
           <ul className="space-y-1.5">
             {active.map((p) => {
-              const chunk = promoMonthlyChunkAt(p, today);
+              const sched = paymentsByPromoId[p.id] ?? [];
+              const hasManualSchedule = sched.length > 0;
+              const chunk = hasManualSchedule
+                ? (sched.find((s) => s.dueDate >= today)?.amountCents ?? 0)
+                : promoMonthlyChunkAt(p, today);
               const daysLeft = daysBetween(today, p.endDate);
               const tone =
                 daysLeft < 0
@@ -1311,19 +1354,34 @@ function PromosSection({
                     onClick={() => onEdit(p)}
                     className="min-w-0 flex-1 text-left"
                   >
-                    <div className="truncate text-[11px] tracking-tight text-[var(--text-0)]">
-                      {p.description}
+                    <div className="flex items-center gap-1.5 truncate text-[11px] tracking-tight text-[var(--text-0)]">
+                      <span className="truncate">{p.description}</span>
+                      {hasManualSchedule ? (
+                        <span className="shrink-0 rounded-sm border border-[var(--cyan)] px-1 py-[1px] text-[8px] uppercase tracking-[0.14em] text-[var(--cyan)]">
+                          PLAN
+                        </span>
+                      ) : null}
                     </div>
                     <div className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">
                       <span className="tabular text-[var(--text-1)]">
                         <Money cents={chunk} />
                       </span>
-                      {"/MO · ENDS "}
+                      {hasManualSchedule
+                        ? ` NEXT · ${sched.length} PLANNED · ENDS `
+                        : "/MO · ENDS "}
                       <span className={tone}>
                         <DateLabel iso={p.endDate} format="short" />
                       </span>
                     </div>
                   </button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onSchedule(p)}
+                    title={hasManualSchedule ? "Edit payment schedule" : "Set custom payment schedule"}
+                  >
+                    <CalendarDays className="h-3 w-3" />
+                  </Button>
                   <Button
                     size="sm"
                     variant="ghost"
@@ -1574,20 +1632,30 @@ function PromoWhatIfSheet({
   scope,
   card,
   promos,
+  paymentsByPromoId,
   onClose,
 }: {
   scope: "promo" | "card";
   card: CreditCardRow;
   promos: CreditCardPromoRow[];
+  paymentsByPromoId: Record<string, PromoScheduledPayment[]>;
   onClose: () => void;
 }) {
   const today = todayIso();
   const whatIf = React.useMemo(() => {
     if (scope === "promo" && promos.length === 1) {
-      return promoWhatIf(promos[0]!, card, today);
+      return promoWhatIf(
+        promos[0]!,
+        card,
+        today,
+        paymentsByPromoId[promos[0]!.id] ?? [],
+      );
     }
-    return cardPromoWhatIf(promos, card, today);
-  }, [scope, promos, card, today]);
+    const map = new Map(
+      promos.map((p) => [p.id, paymentsByPromoId[p.id] ?? []] as const),
+    );
+    return cardPromoWhatIf(promos, card, today, map);
+  }, [scope, promos, card, today, paymentsByPromoId]);
 
   const title =
     scope === "promo" && promos.length === 1
@@ -1697,6 +1765,315 @@ function PromoWhatIfSheet({
         <SheetFooter>
           <Button variant="outline" onClick={onClose}>
             CLOSE
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Payment-schedule editor: split a promo's remaining balance across custom
+// (date, amount) rows. When any rows exist, the projection uses them verbatim
+// instead of the auto-spread / monthlyPaymentCents logic.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type DraftPayment = {
+  /** Stable key for React (UUID-ish via Math.random — not persisted). */
+  key: string;
+  dueDate: string;
+  amountCents: number;
+  note: string | null;
+};
+
+function makeDraftKey() {
+  return Math.random().toString(36).slice(2);
+}
+
+function PromoScheduleSheet({
+  card,
+  promo,
+  initialPayments,
+  onClose,
+  onSaved,
+}: {
+  card: CreditCardRow;
+  promo: CreditCardPromoRow;
+  initialPayments: PromoScheduledPayment[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const today = todayIso();
+  const [drafts, setDrafts] = React.useState<DraftPayment[]>(() =>
+    initialPayments.map((p) => ({
+      key: p.id,
+      dueDate: p.dueDate,
+      amountCents: p.amountCents,
+      note: p.note,
+    })),
+  );
+  const [saving, setSaving] = React.useState(false);
+
+  const sorted = React.useMemo(
+    () => [...drafts].sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
+    [drafts],
+  );
+
+  const totalScheduled = sorted.reduce((s, d) => s + d.amountCents, 0);
+  const original = promo.originalAmountCents;
+  const remaining = promo.remainingAmountCents;
+  // Compare scheduled total against the *current* remaining (what still needs
+  // to be paid), not the original. The user often opens this AFTER some
+  // amount has already been paid down via prior statements.
+  const gap = remaining - totalScheduled; // positive: short, negative: over
+
+  const addRow = () => {
+    setDrafts((d) => [
+      ...d,
+      {
+        key: makeDraftKey(),
+        dueDate: today,
+        amountCents: 0,
+        note: null,
+      },
+    ]);
+  };
+
+  const updateRow = (key: string, patch: Partial<DraftPayment>) => {
+    setDrafts((d) => d.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  };
+
+  const deleteRow = (key: string) => {
+    setDrafts((d) => d.filter((r) => r.key !== key));
+  };
+
+  const fillEvenly = () => {
+    if (drafts.length === 0) {
+      toast.error("Add at least one payment row first");
+      return;
+    }
+    const each = Math.floor(remaining / drafts.length);
+    const extra = remaining - each * drafts.length;
+    setDrafts((d) =>
+      d
+        .slice()
+        .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+        .map((r, i) => ({ ...r, amountCents: each + (i === 0 ? extra : 0) })),
+    );
+  };
+
+  const save = async () => {
+    // Validate: dates required, amounts > 0
+    for (const d of sorted) {
+      if (!d.dueDate) {
+        toast.error("Every row needs a date");
+        return;
+      }
+      if (d.amountCents <= 0) {
+        toast.error("Every row needs a positive amount");
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/credit-cards/promos/${promo.id}/payments`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          payments: sorted.map((d) => ({
+            dueDate: d.dueDate,
+            amountCents: d.amountCents,
+            note: d.note?.trim() ? d.note.trim() : null,
+          })),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "save failed");
+      toast.success(
+        sorted.length === 0 ? "Schedule cleared (auto-spread)" : "Schedule saved",
+      );
+      onSaved();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearAll = () => {
+    if (drafts.length === 0) return;
+    if (!confirm("Clear all scheduled payments? Promo will fall back to auto-spread.")) return;
+    setDrafts([]);
+  };
+
+  // Running remaining-after-each-payment, computed on the sorted list so the
+  // user always sees the math by date order regardless of input sequence.
+  let running = remaining;
+  const rowsWithRunning = sorted.map((d) => {
+    running = running - d.amountCents;
+    return { ...d, runningAfter: running };
+  });
+
+  return (
+    <Sheet open onOpenChange={(o) => !o && onClose()}>
+      <SheetContent>
+        <SheetHeader>
+          <CardSubTag>{`${card.name.toUpperCase()} // PAYMENT_PLAN`}</CardSubTag>
+          <SheetTitle>{promo.description.toUpperCase()}</SheetTitle>
+        </SheetHeader>
+        <SheetBody className="space-y-4">
+          <div className="grid grid-cols-3 gap-2 text-[10px] uppercase tracking-[0.12em]">
+            <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-2">
+              <div className="text-[var(--text-3)]">ORIGINAL</div>
+              <div className="mt-0.5 text-[14px] font-bold tabular text-[var(--text-1)]">
+                <Money cents={original} />
+              </div>
+            </div>
+            <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-2">
+              <div className="text-[var(--text-3)]">REMAINING</div>
+              <div className="mt-0.5 text-[14px] font-bold tabular text-[var(--text-0)]">
+                <Money cents={remaining} />
+              </div>
+            </div>
+            <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-2">
+              <div className="text-[var(--text-3)]">DEADLINE</div>
+              <div className="mt-0.5 text-[12px] font-bold uppercase tracking-[0.12em] text-[var(--text-1)]">
+                <DateLabel iso={promo.endDate} format="short" />
+              </div>
+            </div>
+          </div>
+
+          <div className="text-[11px] tracking-wide text-[var(--text-2)]">
+            Pick exact dates and amounts. While any rows exist, the projection uses
+            them verbatim instead of auto-spread.
+          </div>
+
+          {sorted.length === 0 ? (
+            <div className="rounded-sm border border-dashed border-[var(--border-raw)] bg-[var(--bg-2)] p-4 text-center text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+              NO MANUAL PAYMENTS — PROMO USES AUTO-SPREAD
+              <div className="mt-2">
+                <Button size="sm" variant="primary" onClick={addRow}>
+                  <Plus className="h-3 w-3" /> ADD FIRST PAYMENT
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)]">
+              <div className="grid grid-cols-[1fr_1fr_1.2fr_1fr_auto] items-center gap-2 border-b border-[var(--border-raw)] px-3 py-1.5 text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                <span>DUE</span>
+                <span className="text-right">AMOUNT</span>
+                <span>NOTE</span>
+                <span className="text-right">REMAINING AFTER</span>
+                <span className="w-6"></span>
+              </div>
+              {rowsWithRunning.map((r) => {
+                const overdraw = r.runningAfter < 0;
+                return (
+                  <div
+                    key={r.key}
+                    className="grid grid-cols-[1fr_1fr_1.2fr_1fr_auto] items-center gap-2 border-b border-[var(--border-raw)] px-3 py-1.5 last:border-0"
+                  >
+                    <Input
+                      type="date"
+                      value={r.dueDate}
+                      onChange={(e) => updateRow(r.key, { dueDate: e.target.value })}
+                      className="h-8 text-[11px]"
+                    />
+                    <MoneyInput
+                      valueCents={r.amountCents}
+                      onChangeCents={(v) => updateRow(r.key, { amountCents: v })}
+                    />
+                    <Input
+                      placeholder="optional"
+                      maxLength={500}
+                      value={r.note ?? ""}
+                      onChange={(e) =>
+                        updateRow(r.key, { note: e.target.value || null })
+                      }
+                      className="h-8 text-[11px]"
+                    />
+                    <span
+                      className={cn(
+                        "text-right text-[11px] tabular",
+                        overdraw ? "text-[var(--red)]" : "text-[var(--text-1)]",
+                      )}
+                    >
+                      <Money cents={r.runningAfter} />
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => deleteRow(r.key)}
+                      title="Remove"
+                    >
+                      <Trash2 className="h-3 w-3 text-[var(--red)]" />
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {sorted.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" onClick={addRow}>
+                <Plus className="h-3 w-3" /> ADD ROW
+              </Button>
+              <Button size="sm" variant="outline" onClick={fillEvenly}>
+                FILL EVENLY ACROSS ROWS
+              </Button>
+              <Button size="sm" variant="ghost" onClick={clearAll}>
+                CLEAR ALL
+              </Button>
+            </div>
+          ) : null}
+
+          <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+            <div className="flex items-baseline justify-between">
+              <span>SCHEDULED TOTAL</span>
+              <span className="text-[14px] font-bold tabular text-[var(--text-0)]">
+                <Money cents={totalScheduled} />
+              </span>
+            </div>
+            <div className="mt-1 flex items-baseline justify-between">
+              <span>VS REMAINING</span>
+              <span
+                className={cn(
+                  "text-[12px] font-bold tabular",
+                  gap > 0
+                    ? "text-[var(--amber)]"
+                    : gap < 0
+                      ? "text-[var(--red)]"
+                      : "text-[var(--phosphor)]",
+                )}
+              >
+                {gap > 0 ? (
+                  <>
+                    SHORT <Money cents={gap} />
+                  </>
+                ) : gap < 0 ? (
+                  <>
+                    OVER <Money cents={-gap} />
+                  </>
+                ) : (
+                  "EXACT"
+                )}
+              </span>
+            </div>
+            {sorted.length > 0 ? (
+              <div className="mt-2 text-[var(--text-3)]">
+                LAST PAYMENT{" "}
+                <DateLabel iso={sorted[sorted.length - 1]!.dueDate} format="short" />
+              </div>
+            ) : null}
+          </div>
+        </SheetBody>
+        <SheetFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            CANCEL
+          </Button>
+          <Button variant="primary" onClick={save} disabled={saving}>
+            {saving ? "SAVING…" : "SAVE SCHEDULE"}
           </Button>
         </SheetFooter>
       </SheetContent>

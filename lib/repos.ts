@@ -7,6 +7,7 @@ import {
   creditCards,
   creditCardPaymentOverrides,
   creditCardPromos,
+  creditCardPromoPayments,
   creditCardStatements,
   oneTimeExpenses,
   paychecks,
@@ -19,6 +20,7 @@ import {
   type BillPaymentOverrideRow,
   type CategoryRow,
   type CreditCardPromoRow,
+  type CreditCardPromoPaymentRow,
   type CreditCardPaymentOverrideRow,
   type CreditCardRow,
   type CreditCardStatementRow,
@@ -28,6 +30,7 @@ import {
   type NewCreditCard,
   type NewCreditCardPaymentOverride,
   type NewCreditCardPromo,
+  type NewCreditCardPromoPayment,
   type NewCreditCardStatement,
   type NewOneTimeExpense,
   type NewPaycheck,
@@ -834,6 +837,75 @@ export async function updatePromo(
 
 export async function archivePromo(userId: string, id: string): Promise<void> {
   await updatePromo(userId, id, { isActive: false });
+}
+
+// ── credit card promo payment schedule ──────────────────────────────────────
+
+export async function listPromoPayments(
+  userId: string,
+  promoId: string,
+): Promise<CreditCardPromoPaymentRow[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(creditCardPromoPayments)
+    .where(
+      and(
+        eq(creditCardPromoPayments.userId, userId),
+        eq(creditCardPromoPayments.promoId, promoId),
+      ),
+    )
+    .orderBy(asc(creditCardPromoPayments.dueDate))
+    .all();
+}
+
+/** Read every scheduled promo payment for a user (projection batch read). */
+export async function listAllPromoPayments(
+  userId: string,
+): Promise<CreditCardPromoPaymentRow[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(creditCardPromoPayments)
+    .where(eq(creditCardPromoPayments.userId, userId))
+    .orderBy(asc(creditCardPromoPayments.dueDate))
+    .all();
+}
+
+/**
+ * Replace the entire payment schedule for one promo. Bulk path so the UI can
+ * save the full edited list with one round-trip and avoid the "delete-then-add"
+ * race that per-row CRUD invites.
+ */
+export async function replacePromoPayments(
+  userId: string,
+  promoId: string,
+  payments: ReadonlyArray<{ dueDate: string; amountCents: number; note?: string | null }>,
+): Promise<CreditCardPromoPaymentRow[]> {
+  const db = getDb();
+  const newRows: NewCreditCardPromoPayment[] = payments.map((p) => ({
+    id: newId(),
+    userId,
+    promoId,
+    dueDate: p.dueDate,
+    amountCents: p.amountCents,
+    note: p.note ?? null,
+  }));
+  db.transaction((tx) => {
+    tx
+      .delete(creditCardPromoPayments)
+      .where(
+        and(
+          eq(creditCardPromoPayments.userId, userId),
+          eq(creditCardPromoPayments.promoId, promoId),
+        ),
+      )
+      .run();
+    for (const r of newRows) {
+      tx.insert(creditCardPromoPayments).values(r).run();
+    }
+  });
+  return listPromoPayments(userId, promoId);
 }
 
 /**

@@ -9,6 +9,7 @@ import {
   listExtras,
   listPaychecks,
   listPlaidAccounts,
+  listAllPromoPayments,
   listPromos,
   listStatementsForUser,
   getPrimaryLinkedBalance,
@@ -64,6 +65,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     linkedBalance,
     plaidAccts,
     promos,
+    promoPayments,
   ] =
     await Promise.all([
       listBills(userId, false),
@@ -76,7 +78,17 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       getPrimaryLinkedBalance(userId),
       listPlaidAccounts(userId),
       listPromos(userId, false),
+      listAllPromoPayments(userId),
     ]);
+  const promoPaymentsByPromoId = new Map<
+    string,
+    Array<{ dueDate: string; amountCents: number }>
+  >();
+  for (const pp of promoPayments) {
+    const list = promoPaymentsByPromoId.get(pp.promoId) ?? [];
+    list.push({ dueDate: pp.dueDate, amountCents: pp.amountCents });
+    promoPaymentsByPromoId.set(pp.promoId, list);
+  }
   const activeCardIds = new Set(activeCards.map((c) => c.id));
   const billOverridesByBill = new Map<string, Array<{ date: string; amountCents: number }>>();
   for (const override of billPaymentOverrides) {
@@ -191,24 +203,33 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   const cardById = new Map(activeCards.map((c) => [c.id, c] as const));
   const promoChunksByCardDate = new Map<
     string,
-    { cardId: string; cardName: string; dueDate: string; amountCents: number }
+    {
+      cardId: string;
+      cardName: string;
+      dueDate: string;
+      amountCents: number;
+      descriptions: string[];
+    }
   >();
   for (const promo of promos) {
     const card = cardById.get(promo.cardId);
     if (!card) continue; // archived card → promo also pauses (promo monthly cash floats away)
     const skip = recordedDueDatesByCard.get(promo.cardId) ?? new Set<string>();
-    const schedule = projectPromoSchedule(promo, card, today, skip);
+    const sched = promoPaymentsByPromoId.get(promo.id) ?? [];
+    const schedule = projectPromoSchedule(promo, card, today, skip, sched);
     for (const chunk of schedule) {
       const key = overrideKey(card.id, chunk.dueDate);
       const existing = promoChunksByCardDate.get(key);
       if (existing) {
         existing.amountCents += chunk.amountCents;
+        existing.descriptions.push(promo.description);
       } else {
         promoChunksByCardDate.set(key, {
           cardId: card.id,
           cardName: card.name,
           dueDate: chunk.dueDate,
           amountCents: chunk.amountCents,
+          descriptions: [promo.description],
         });
       }
     }
@@ -219,9 +240,10 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     appliedCardOverrideKeys.add(overrideKey(chunk.cardId, chunk.dueDate));
     const amountCents = override?.amountCents ?? chunk.amountCents;
     if (amountCents <= 0) continue;
+    const descLabel = chunk.descriptions.join(", ");
     promoExtras.push({
       date: chunk.dueDate,
-      description: `${chunk.cardName} promo payment`,
+      description: `${chunk.cardName} promo (${descLabel})`,
       amountCents,
       sourceId: chunk.cardId,
       sourceType: "creditCardPayment",

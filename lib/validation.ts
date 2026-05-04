@@ -204,6 +204,21 @@ export type StatementUpdateInput = z.infer<typeof statementUpdateSchema>;
 export type PromoCreateInput = z.infer<typeof promoCreateSchema>;
 export type PromoUpdateInput = z.infer<typeof promoUpdateSchema>;
 
+export const promoPaymentBaseSchema = z.object({
+  dueDate: isoDate,
+  amountCents: cents.refine((n) => n > 0, "Amount must be positive"),
+  note: z.string().max(500).nullable().optional(),
+});
+export const promoPaymentCreateSchema = promoPaymentBaseSchema;
+export const promoPaymentUpdateSchema = promoPaymentBaseSchema.partial();
+/** Bulk replace: write the entire schedule for a promo in one call. */
+export const promoPaymentBulkReplaceSchema = z.object({
+  payments: z.array(promoPaymentBaseSchema).max(120),
+});
+export type PromoPaymentCreateInput = z.infer<typeof promoPaymentCreateSchema>;
+export type PromoPaymentUpdateInput = z.infer<typeof promoPaymentUpdateSchema>;
+export type PromoPaymentBulkReplaceInput = z.infer<typeof promoPaymentBulkReplaceSchema>;
+
 // ── Plaid ───────────────────────────────────────────────────────────────────
 
 /** Body sent after Plaid Link completes: public_token + institution metadata. */

@@ -2,6 +2,7 @@ import { addDaysIso } from "@/lib/dates";
 import { computeProjection } from "@/lib/projection";
 import type {
   BillRow,
+  CreditCardPromoPaymentRow,
   CreditCardPromoRow,
   CreditCardRow,
   CreditCardStatementRow,
@@ -323,22 +324,37 @@ export type PromoCycleSchedule = {
 };
 
 /**
- * Project a promo's remaining balance as monthly chunks landing on each future
- * cycle's due date through the promo's `endDate`. Skips cycles whose due date
- * lies in `skipDueDates` — used by the projection to skip cycles already
- * covered by a recorded statement (those cycles are authoritative for any
- * promo cash they include).
+ * Project a promo's payment schedule. Two modes:
  *
- * Iterates one chunk at a time, decrementing a virtual remaining balance and
- * recomputing the per-cycle chunk so the schedule converges to zero by the
- * deadline.
+ *   1. **Manual schedule** — when `scheduledPayments` is non-empty, use those
+ *      verbatim (filtered to `>= fromIso` and not in `skipDueDates`). The user
+ *      has opted into custom control: no auto-spread, no convergence math,
+ *      no end-date lump. This is purely a projection input — if the schedule
+ *      doesn't sum to `remainingAmountCents`, the UI surfaces the gap but
+ *      the projection just uses what the user wrote.
+ *
+ *   2. **Auto-spread** (default) — chunks land on each future cycle's due
+ *      date through the promo's `endDate`. Iterates one chunk at a time,
+ *      decrementing a virtual remaining balance and recomputing the per-cycle
+ *      chunk so the schedule converges to zero by the deadline.
+ *
+ * `skipDueDates` skips cycles already covered by a recorded statement (those
+ * cycles are authoritative for any promo cash they include).
  */
 export function projectPromoSchedule(
   promo: CreditCardPromoRow,
   card: StatementCycleConfig & { dueDay: number },
   fromIso: string,
   skipDueDates: ReadonlySet<string>,
+  scheduledPayments: ReadonlyArray<Pick<CreditCardPromoPaymentRow, "dueDate" | "amountCents">> = [],
 ): PromoCycleSchedule[] {
+  if (scheduledPayments.length > 0) {
+    if (!promo.isActive) return [];
+    return scheduledPayments
+      .filter((p) => p.amountCents > 0 && p.dueDate >= fromIso && !skipDueDates.has(p.dueDate))
+      .map((p) => ({ dueDate: p.dueDate, amountCents: p.amountCents }))
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  }
   if (promo.remainingAmountCents <= 0) return [];
   if (!promo.isActive) return [];
 
@@ -418,8 +434,9 @@ export function promoWhatIf(
   promo: CreditCardPromoRow,
   card: StatementCycleConfig & { dueDay: number },
   todayIso: string,
+  scheduledPayments: ReadonlyArray<Pick<CreditCardPromoPaymentRow, "dueDate" | "amountCents">> = [],
 ): PromoWhatIf {
-  const chunks = projectPromoSchedule(promo, card, todayIso, new Set());
+  const chunks = projectPromoSchedule(promo, card, todayIso, new Set(), scheduledPayments);
   const totalScheduled = chunks.reduce((s, c) => s + c.amountCents, 0);
   return {
     payOffNow: {
@@ -442,12 +459,14 @@ export function cardPromoWhatIf(
   promos: ReadonlyArray<CreditCardPromoRow>,
   card: StatementCycleConfig & { dueDay: number },
   todayIso: string,
+  paymentsByPromoId: ReadonlyMap<string, ReadonlyArray<Pick<CreditCardPromoPaymentRow, "dueDate" | "amountCents">>> = new Map(),
 ): PromoWhatIf {
   const active = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);
   const payOffTotal = active.reduce((s, p) => s + p.remainingAmountCents, 0);
   const allChunks: PromoCycleSchedule[] = [];
   for (const p of active) {
-    allChunks.push(...projectPromoSchedule(p, card, todayIso, new Set()));
+    const sched = paymentsByPromoId.get(p.id) ?? [];
+    allChunks.push(...projectPromoSchedule(p, card, todayIso, new Set(), sched));
   }
   // Merge chunks landing on the same due date so the UI shows one entry per cycle.
   const byDate = new Map<string, number>();
