@@ -247,12 +247,13 @@ export const creditCardPaymentOverrides = sqliteTable(
  * treating the whole purchase as a single big payment.
  *
  * Reconciliation rule (see lib/projection-server.ts):
- *   - Recorded statements are authoritative for the cycle they cover —
- *     a promo's chunk for that cycle is assumed to be inside the statement
- *     balance the user already entered.
- *   - For future cycles with NO recorded statement, the projection injects
+ *   - Recorded statements with a positive due/paid amount are authoritative for
+ *     the cycle they cover — a promo's chunk for that cycle is assumed to be
+ *     inside the statement cash the user already entered.
+ *   - For future cycles with no positive statement cash, the projection injects
  *     one debit per cycle on the cycle's due date (chunk = override or
- *     remaining/months_left).
+ *     remaining/months_left). This keeps $0-due 0% APR statements from hiding
+ *     a desired monthly paydown.
  *   - Plaid open-cycle estimate subtracts `remainingAmountCents` so the
  *     unbilled promo principal isn't projected as a single lump.
  */

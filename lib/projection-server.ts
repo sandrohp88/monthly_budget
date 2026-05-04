@@ -149,13 +149,14 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   }
 
   // Promotional financing: each active promo contributes one debit per future
-  // cycle's due date through its endDate. Cycles already covered by a recorded
-  // statement (paid OR unpaid) are SKIPPED — recorded statements are
-  // authoritative for the cash they demand on their due date, and the
-  // statement balance entered by the user is assumed to already include any
-  // promo chunk billed in that cycle.
+  // cycle's due date through its endDate. Statement rows only suppress promo
+  // chunks when they already represent cash movement. This matters for 0% APR
+  // promos where the issuer can report $0 due to avoid interest, while the user
+  // still wants a planned monthly paydown in the current cycle.
   const recordedDueDatesByCard = new Map<string, Set<string>>();
   for (const s of statements) {
+    const coveredCashCents = s.paidAmountCents ?? s.statementBalanceCents;
+    if (coveredCashCents <= 0) continue;
     let set = recordedDueDatesByCard.get(s.cardId);
     if (!set) {
       set = new Set();

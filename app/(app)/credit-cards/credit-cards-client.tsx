@@ -1515,10 +1515,10 @@ function PromoDialog({
           </div>
           <label className="flex cursor-pointer items-center justify-between border-y border-[var(--border-raw)] py-3">
             <div>
-              <Label>OVERRIDE MONTHLY PAYMENT</Label>
+              <Label>SET DESIRED MONTHLY PAYMENT</Label>
               <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
                 {overrideMonthly
-                  ? "USING FIXED OVERRIDE"
+                  ? "INCLUDED IN EACH PROJECTED CYCLE"
                   : "AUTO: REMAINING ÷ MONTHS LEFT"}
               </div>
             </div>
@@ -1526,7 +1526,7 @@ function PromoDialog({
           </label>
           {overrideMonthly ? (
             <div className="space-y-1.5">
-              <Label>MONTHLY PAYMENT</Label>
+              <Label>DESIRED MONTHLY PAYMENT</Label>
               <MoneyInput valueCents={monthlyPaymentCents} onChangeCents={setMonthlyPayment} />
             </div>
           ) : null}

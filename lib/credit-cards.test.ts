@@ -471,6 +471,36 @@ describe("promoMonthlyChunkAt", () => {
 describe("projectPromoSchedule", () => {
   const card = { statementDay: 15, dueDay: 10 };
 
+  it("starts with the card's next due day in the current cycle", () => {
+    const schedule = projectPromoSchedule(
+      promo({
+        remainingAmountCents: 60_00,
+        startDate: "2026-05-01",
+        endDate: "2026-08-31",
+        monthlyPaymentCents: 20_00,
+      }),
+      card,
+      "2026-05-03",
+      new Set(),
+    );
+    expect(schedule[0]).toEqual({ dueDate: "2026-05-10", amountCents: 20_00 });
+  });
+
+  it("uses the promo deadline when it arrives before the current cycle due day", () => {
+    const schedule = projectPromoSchedule(
+      promo({
+        remainingAmountCents: 25_00,
+        startDate: "2026-05-04",
+        endDate: "2026-05-08",
+        monthlyPaymentCents: 30_00,
+      }),
+      card,
+      "2026-05-04",
+      new Set(),
+    );
+    expect(schedule).toEqual([{ dueDate: "2026-05-08", amountCents: 25_00 }]);
+  });
+
   it("schedules monthly chunks landing on each due date through endDate", () => {
     const schedule = projectPromoSchedule(
       promo({ remainingAmountCents: 60_00, startDate: "2026-05-01", endDate: "2026-10-31" }),
