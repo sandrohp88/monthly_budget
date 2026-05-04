@@ -4,6 +4,7 @@ import {
   getSettings,
   listBillPaymentOverridesForUser,
   listBills,
+  listCreditCardPaymentOverridesForUser,
   listCreditCards,
   listExtras,
   listPaychecks,
@@ -44,6 +45,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   const [
     bills,
     billPaymentOverrides,
+    creditCardPaymentOverrides,
     paychecks,
     extras,
     statements,
@@ -55,6 +57,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     await Promise.all([
       listBills(userId, false),
       listBillPaymentOverridesForUser(userId),
+      listCreditCardPaymentOverridesForUser(userId),
       listPaychecks(userId),
       listExtras(userId),
       listStatementsForUser(userId),
@@ -69,6 +72,15 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     const list = billOverridesByBill.get(override.billId) ?? [];
     list.push({ date: override.dueDate, amountCents: override.amountCents });
     billOverridesByBill.set(override.billId, list);
+  }
+  const cardOverridesByCard = new Map<string, Map<string, number>>();
+  for (const override of creditCardPaymentOverrides) {
+    let byDate = cardOverridesByCard.get(override.cardId);
+    if (!byDate) {
+      byDate = new Map<string, number>();
+      cardOverridesByCard.set(override.cardId, byDate);
+    }
+    byDate.set(override.dueDate, override.amountCents);
   }
 
   // Bills paid via an ACTIVE credit card don't move cash on their own — the
@@ -112,20 +124,26 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       (promoRemainingByCard.get(p.cardId) ?? 0) + p.remainingAmountCents,
     );
   }
-  const openCycleExtras: { date: string; description: string; amountCents: number }[] = [];
+  const openCycleExtras: ProjectionInput["extras"] = [];
   for (const card of activeCards) {
-    if (!card.plaidAccountId) continue;
-    const liveBalance = balanceByPlaidAccount.get(card.plaidAccountId);
+    const liveBalance = card.plaidAccountId
+      ? balanceByPlaidAccount.get(card.plaidAccountId)
+      : card.currentBalanceCents;
     if (liveBalance == null || liveBalance <= 0) continue;
     const unpaid = unpaidByCard.get(card.id) ?? 0;
     const promoRemaining = promoRemainingByCard.get(card.id) ?? 0;
     const openCycleCents = Math.max(0, liveBalance - unpaid - promoRemaining);
     if (openCycleCents <= 0) continue;
     const nextStatement = nextStatementDateOnOrAfter(today, card);
+    const dueDate = dueDateFromStatement(nextStatement, card.dueDay);
+    const override = cardOverridesByCard.get(card.id)?.get(dueDate);
     openCycleExtras.push({
-      date: dueDateFromStatement(nextStatement, card.dueDay),
+      date: dueDate,
       description: `${card.name} next payment (est)`,
-      amountCents: openCycleCents,
+      amountCents: override ?? openCycleCents,
+      sourceId: card.id,
+      sourceType: "creditCardPayment",
+      originalAmountCents: openCycleCents,
     });
   }
 
@@ -182,7 +200,9 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       paymentOverrides: billOverridesByBill.get(b.id) ?? [],
     })),
     extras: [
-      ...extras.map((e) => ({
+      ...extras
+        .filter((e) => e.paidViaCardId == null || !activeCardIds.has(e.paidViaCardId))
+        .map((e) => ({
         date: e.date,
         description: e.description,
         amountCents: e.amountCents,

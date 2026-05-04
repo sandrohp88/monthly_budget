@@ -31,7 +31,7 @@ import { CategoryDialog } from "@/components/category-dialog";
 import { Plus as PlusIcon } from "lucide-react";
 import { addDaysIso, todayIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
-import type { OneTimeExpenseRow } from "@/lib/db/schema";
+import type { CreditCardRow, OneTimeExpenseRow } from "@/lib/db/schema";
 
 type FilterKey = "30" | "60" | "90" | "all";
 
@@ -48,9 +48,11 @@ function formatMonthKey(key: string): string {
 export function ExtrasClient({
   initialExtras,
   categories,
+  creditCards,
 }: {
   initialExtras: OneTimeExpenseRow[];
   categories: ReadonlyArray<string>;
+  creditCards: CreditCardRow[];
 }) {
   const [items, setItems] = React.useState<OneTimeExpenseRow[]>(initialExtras);
   const [categoriesState, setCategoriesState] = React.useState<string[]>(() => [...categories]);
@@ -88,6 +90,10 @@ export function ExtrasClient({
     null,
   );
   const categoryCount = new Set(visible.map((e) => e.category)).size;
+  const cardNameById = React.useMemo(
+    () => new Map(creditCards.map((card) => [card.id, card.name] as const)),
+    [creditCards],
+  );
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -185,6 +191,7 @@ export function ExtrasClient({
                 <TableHead>DATE</TableHead>
                 <TableHead>DESCRIPTION</TableHead>
                 <TableHead>CATEGORY</TableHead>
+                <TableHead>PAID WITH</TableHead>
                 <TableHead className="text-right">AMOUNT</TableHead>
                 <TableHead>NOTES</TableHead>
                 <TableHead />
@@ -194,7 +201,7 @@ export function ExtrasClient({
               {grouped.map((g) => (
                 <React.Fragment key={g.month}>
                   <tr className="border-y border-[var(--border-2)] bg-[var(--bg-1)]">
-                    <td colSpan={6} className="px-4 py-2.5 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--mint)]">
+                    <td colSpan={7} className="px-4 py-2.5 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--mint)]">
                       {`// ${formatMonthKey(g.month)} — ${g.rows.length} EXPENSE${g.rows.length === 1 ? "" : "S"} — `}
                       <Money cents={g.total} />
                     </td>
@@ -208,6 +215,9 @@ export function ExtrasClient({
                         {e.description}
                       </TableCell>
                       <TableCell className="text-[var(--text-2)]">{e.category}</TableCell>
+                      <TableCell className="text-[var(--text-2)]">
+                        {e.paidViaCardId ? (cardNameById.get(e.paidViaCardId) ?? "Archived card") : "Cash"}
+                      </TableCell>
                       <TableCell className="text-right">
                         <Money cents={e.amountCents} />
                       </TableCell>
@@ -229,7 +239,7 @@ export function ExtrasClient({
             </TableBody>
             <TableFooter>
               <TableRow>
-                <TableCell colSpan={3} className="text-[var(--text-0)] uppercase tracking-[0.15em]">
+                <TableCell colSpan={4} className="text-[var(--text-0)] uppercase tracking-[0.15em]">
                   TOTAL · {visible.length} EXPENSE{visible.length === 1 ? "" : "S"}
                 </TableCell>
                 <TableCell className="text-right text-[var(--mint)]">
@@ -250,6 +260,7 @@ export function ExtrasClient({
           </DialogHeader>
           <CreateExtraForm
             categories={categoriesState}
+            creditCards={creditCards}
             onCategoryAdded={(c) => setCategoriesState((prev) => [...prev, c])}
             onCancel={() => setCreateOpen(false)}
             onCreated={(e) => {
@@ -289,11 +300,13 @@ function Tab({
 
 function CreateExtraForm({
   categories,
+  creditCards,
   onCancel,
   onCreated,
   onCategoryAdded,
 }: {
   categories: ReadonlyArray<string>;
+  creditCards: CreditCardRow[];
   onCancel: () => void;
   onCreated: (e: OneTimeExpenseRow) => void;
   onCategoryAdded?: (name: string) => void;
@@ -303,6 +316,7 @@ function CreateExtraForm({
   const [description, setDescription] = React.useState("");
   const [amountCents, setAmountCents] = React.useState(0);
   const [category, setCategory] = React.useState(categories[0] ?? "Other");
+  const [paidViaCardId, setPaidViaCardId] = React.useState<string>("cash");
   const [notes, setNotes] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const [categoryDialogOpen, setCategoryDialogOpen] = React.useState(false);
@@ -322,6 +336,7 @@ function CreateExtraForm({
               description: description.trim(),
               amountCents,
               category,
+              paidViaCardId: paidViaCardId === "cash" ? null : paidViaCardId,
               notes: notes.trim() || null,
             }),
           });
@@ -373,6 +388,22 @@ function CreateExtraForm({
               {categories.map((c) => (
                 <SelectItem key={c} value={c}>
                   {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="col-span-2 space-y-1.5">
+          <Label>PAID WITH</Label>
+          <Select value={paidViaCardId} onValueChange={setPaidViaCardId}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cash">CASH / BANK</SelectItem>
+              {creditCards.map((card) => (
+                <SelectItem key={card.id} value={card.id}>
+                  {card.name}
                 </SelectItem>
               ))}
             </SelectContent>

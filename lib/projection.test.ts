@@ -301,6 +301,35 @@ describe("projection engine", () => {
     expect(describeEvents(day.events)).toBe("Internet + Concert tickets");
   });
 
+  it("carries adjustment metadata for credit card payment estimate extras", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-04-10",
+      endDate: "2025-04-10",
+      startingBalanceCents: 1000_00,
+      bills: [],
+      extras: [
+        {
+          date: "2025-04-10",
+          description: "Card next payment (est)",
+          amountCents: 250_00,
+          sourceId: "card-1",
+          sourceType: "creditCardPayment",
+          originalAmountCents: 600_00,
+        },
+      ],
+    });
+
+    expect(rows[0]!.events[0]).toMatchObject({
+      kind: "extra",
+      label: "Card next payment (est)",
+      amountCents: 250_00,
+      sourceId: "card-1",
+      sourceType: "creditCardPayment",
+      originalAmountCents: 600_00,
+    });
+  });
+
   it("12-month window produces exactly the right number of daily rows", () => {
     const rows = computeProjection({
       ...baseInput(),

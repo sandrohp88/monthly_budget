@@ -15,6 +15,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       description: data.description,
       amountCents: data.amountCents,
       category: data.category,
+      paidViaCardId: data.paidViaCardId ?? null,
       notes: data.notes ?? null,
     });
     if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });

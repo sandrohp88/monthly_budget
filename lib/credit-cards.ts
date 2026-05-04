@@ -5,6 +5,7 @@ import type {
   CreditCardPromoRow,
   CreditCardRow,
   CreditCardStatementRow,
+  OneTimeExpenseRow,
 } from "@/lib/db/schema";
 
 /** Clamp a day-of-month to the actual number of days in that month (UTC). */
@@ -202,6 +203,8 @@ export function currentCycleWindow(
 
 export type LinkedBillEstimate = {
   billId: string;
+  sourceId: string;
+  sourceType: "bill" | "extra";
   name: string;
   date: string;       // when it lands in this cycle
   amountCents: number;
@@ -217,11 +220,23 @@ export function estimateCurrentCycle(
   card: StatementCycleConfig & { dueDay: number },
   linkedBills: ReadonlyArray<BillRow>,
   fromIso: string,
+  linkedExtras: ReadonlyArray<OneTimeExpenseRow> = [],
 ): { window: { start: string; end: string }; charges: LinkedBillEstimate[]; totalCents: number } {
   const window = currentCycleWindow(card, fromIso);
-  if (linkedBills.length === 0) {
+  if (linkedBills.length === 0 && linkedExtras.length === 0) {
     return { window, charges: [], totalCents: 0 };
   }
+
+  const charges: LinkedBillEstimate[] = linkedExtras
+    .filter((e) => e.date >= window.start && e.date <= window.end)
+    .map((e) => ({
+      sourceId: e.id,
+      billId: e.id,
+      sourceType: "extra" as const,
+      name: e.description,
+      date: e.date,
+      amountCents: e.amountCents,
+    }));
 
   const rows = computeProjection({
     startingBalanceCents: 0,
@@ -238,7 +253,6 @@ export function estimateCurrentCycle(
     extras: [],
   });
 
-  const charges: LinkedBillEstimate[] = [];
   for (const row of rows) {
     for (const ev of row.events) {
       if (ev.kind !== "bill") continue;
@@ -246,7 +260,9 @@ export function estimateCurrentCycle(
       // may have the same display label)
       const source = linkedBills.find((b) => b.name === ev.label) ?? linkedBills[0]!;
       charges.push({
+        sourceId: source.id,
         billId: source.id,
+        sourceType: "bill",
         name: ev.label,
         date: row.date,
         amountCents: ev.amountCents,

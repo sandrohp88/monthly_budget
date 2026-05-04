@@ -35,15 +35,20 @@ export type OneTimeExpense = {
   date: string;
   description: string;
   amountCents: number;
+  sourceId?: string;
+  sourceType?: "creditCardPayment";
+  originalAmountCents?: number;
 };
 
 export type ProjectionEventKind = "paycheck" | "bill" | "extra";
+export type ProjectionEventSourceType = "bill" | "creditCardPayment";
 
 export type ProjectionEvent = {
   kind: ProjectionEventKind;
   label: string;
   amountCents: number;
   sourceId?: string;
+  sourceType?: ProjectionEventSourceType;
   originalAmountCents?: number;
 };
 
@@ -143,7 +148,14 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
   }
 
   for (const e of input.extras) {
-    addEvent(e.date, { kind: "extra", label: e.description, amountCents: e.amountCents });
+    addEvent(e.date, {
+      kind: "extra",
+      label: e.description,
+      amountCents: e.amountCents,
+      sourceId: e.sourceId,
+      sourceType: e.sourceType,
+      originalAmountCents: e.originalAmountCents,
+    });
   }
 
   const startDateObj = new Date(startTs);
@@ -182,6 +194,7 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
         label: b.name,
         amountCents: override ?? b.amountCents,
         sourceId: b.id,
+        sourceType: "bill",
         originalAmountCents: b.amountCents,
       });
     }

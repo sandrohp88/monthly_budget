@@ -29,6 +29,12 @@ export const billPaymentOverrideSchema = z.object({
   notes: z.string().max(500).nullable().optional(),
 });
 
+export const creditCardPaymentOverrideSchema = z.object({
+  dueDate: isoDate,
+  amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
+  notes: z.string().max(500).nullable().optional(),
+});
+
 export const paycheckCreateSchema = z.object({
   payDate: isoDate,
   amountCents: cents,
@@ -45,6 +51,7 @@ export const extraCreateSchema = z.object({
   description: z.string().min(1).max(120),
   amountCents: cents,
   category: z.string().min(1).max(50),
+  paidViaCardId: z.string().nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
 });
 
@@ -108,6 +115,7 @@ const creditCardBaseSchema = z.object({
   statementCycleAnchorDate: isoDate.nullable().optional(),
   statementCycleIntervalDays: z.number().int().min(1).max(366).default(31),
   dueDay: z.number().int().min(1).max(31),
+  currentBalanceCents: cents.refine((n) => n >= 0, "Balance must be non-negative").nullable().optional(),
   autoPay: z.boolean().default(false),
   notes: z.string().max(500).nullable().optional(),
 });

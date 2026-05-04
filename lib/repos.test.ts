@@ -22,6 +22,9 @@ import {
   listBillPaymentOverridesForUser,
   upsertBillPaymentOverride,
   deleteBillPaymentOverride,
+  listCreditCardPaymentOverridesForUser,
+  upsertCreditCardPaymentOverride,
+  deleteCreditCardPaymentOverride,
   // credit cards
   createCreditCard,
   getCreditCard,
@@ -159,6 +162,40 @@ describe("repos / foundation", () => {
 
     await deleteBillPaymentOverride(user.id, bill.id, "2026-05-01");
     expect(await listBillPaymentOverridesForUser(user.id)).toEqual([]);
+  });
+
+  it("upserts and deletes a per-cycle credit card payment override", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Linked Card",
+      statementDay: 3,
+      dueDay: 24,
+      autoPay: false,
+      isActive: true,
+    });
+
+    await upsertCreditCardPaymentOverride(user.id, card.id, {
+      dueDate: "2026-06-24",
+      amountCents: 300_00,
+      notes: null,
+    });
+    await upsertCreditCardPaymentOverride(user.id, card.id, {
+      dueDate: "2026-06-24",
+      amountCents: 125_00,
+      notes: "partial payment",
+    });
+
+    const overrides = await listCreditCardPaymentOverridesForUser(user.id);
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0]).toMatchObject({
+      cardId: card.id,
+      dueDate: "2026-06-24",
+      amountCents: 125_00,
+      notes: "partial payment",
+    });
+
+    await deleteCreditCardPaymentOverride(user.id, card.id, "2026-06-24");
+    expect(await listCreditCardPaymentOverridesForUser(user.id)).toEqual([]);
   });
 });
 
