@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { detectPromoPayoffDate } from "./plaid-promo-parser";
+import {
+  detectPromoPayoffDate,
+  isSpecialFinancingCandidate,
+  plaidTransactionPromoTexts,
+} from "./plaid-promo-parser";
 
 describe("detectPromoPayoffDate", () => {
   it("detects numeric PayPal-style paid-in-full dates", () => {
@@ -20,5 +24,54 @@ describe("detectPromoPayoffDate", () => {
 
   it("ignores dates without a promo signal", () => {
     expect(detectPromoPayoffDate(["PAYPAL PURCHASE 05/04/2026"])).toBeNull();
+  });
+
+  it("inspects nested Plaid transaction text for promo payoff dates", () => {
+    const texts = plaidTransactionPromoTexts({
+      name: "PayPal Credit Card",
+      payment_meta: {
+        reference_number: "No Interest if paid in full by 10/30/2026",
+      },
+      counterparties: [
+        { name: "PayPal Credit", type: "financial_institution" },
+      ],
+      personal_finance_category: {
+        primary: "LOAN_PAYMENTS",
+        detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+      },
+    });
+
+    expect(detectPromoPayoffDate(texts)).toBe("2026-10-30");
+  });
+
+  it("flags PayPal Credit purchases at the current financing threshold", () => {
+    expect(
+      isSpecialFinancingCandidate({
+        amountCents: 149_00,
+        linkedCreditCardId: "card_1",
+        linkedPromoId: null,
+        promoPayoffDate: null,
+        accountName: "PayPal Credit Card",
+        accountSubtype: "paypal",
+        linkedCreditCardName: "PayPal Credit",
+        plaidCategory: "GENERAL_MERCHANDISE",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat generic PayPal loan payments as promo purchases", () => {
+    expect(
+      isSpecialFinancingCandidate({
+        amountCents: 506_00,
+        linkedCreditCardId: "card_1",
+        linkedPromoId: null,
+        promoPayoffDate: null,
+        accountName: "PayPal Credit Card",
+        accountSubtype: "paypal",
+        linkedCreditCardName: "PayPal Credit",
+        description: "PayPal Credit Card",
+        plaidCategory: "LOAN_PAYMENTS",
+      }),
+    ).toBe(false);
   });
 });

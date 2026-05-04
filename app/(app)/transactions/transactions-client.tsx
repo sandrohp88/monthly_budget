@@ -22,6 +22,7 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { Switch } from "@/components/ui/switch";
 import { Tile, TileGrid } from "@/components/ui/tile";
 import { cn } from "@/lib/cn";
+import { isSpecialFinancingCandidate } from "@/lib/plaid-promo-parser";
 import type { DraftWithAccount } from "@/app/api/plaid/drafts/route";
 
 type FilterKey = "all" | "debits" | "credits" | "promos";
@@ -44,7 +45,7 @@ function displayName(txn: DraftWithAccount): string {
 }
 
 function isPromoCandidate(txn: DraftWithAccount): boolean {
-  return txn.amountCents >= 150_00 && txn.linkedCreditCardId !== null && !txn.linkedPromoId;
+  return isSpecialFinancingCandidate(txn);
 }
 
 export function TransactionsClient({
@@ -144,7 +145,7 @@ export function TransactionsClient({
         <Tile label="IMPORTED" value={transactions.length} delta="approved automatically" />
         <Tile label="DEBITS" value={debits.length} delta={<Money cents={debits.reduce((s, t) => s + t.amountCents, 0)} />} />
         <Tile label="CREDITS" value={credits.length} delta={<Money cents={Math.abs(credits.reduce((s, t) => s + t.amountCents, 0))} />} />
-        <Tile label="PROMO CANDIDATES" value={promoCandidates.length} variant={promoCandidates.length ? "amber" : "default"} delta="linked card purchases >= $150" />
+        <Tile label="PROMO CANDIDATES" value={promoCandidates.length} variant={promoCandidates.length ? "amber" : "default"} delta="API evidence or PayPal $149+" />
       </TileGrid>
 
       <div className="flex flex-wrap items-center justify-between gap-3">

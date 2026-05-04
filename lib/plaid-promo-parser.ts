@@ -25,6 +25,11 @@ const MONTHS: Record<string, number> = {
   december: 12,
 };
 
+const PROMO_SIGNAL =
+  /promo|promotion|promotional|deferred|interest|no interest|avoid interest|paid in full|pay in full/;
+
+type StringRecord = Record<string, unknown>;
+
 function iso(year: number, month: number, day: number): string | null {
   if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) {
     return null;
@@ -44,15 +49,60 @@ function normalizeYear(year: number): number {
   return year < 100 ? 2000 + year : year;
 }
 
+function pushText(out: string[], value: unknown): void {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed) out.push(trimmed);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) pushText(out, item);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const nested of Object.values(value as StringRecord)) pushText(out, nested);
+  }
+}
+
+/**
+ * Plaid's Transaction object contains useful text beyond the three fields we
+ * store on a draft. Inspect the raw response at sync time so issuer-specific
+ * promo clues in nested fields (payment_meta, counterparties, category, etc.)
+ * can still trigger a promo without persisting the whole Plaid payload.
+ */
+export function plaidTransactionPromoTexts(transaction: unknown): string[] {
+  const txn = transaction as StringRecord | null;
+  if (!txn || typeof txn !== "object") return [];
+
+  const texts: string[] = [];
+  const fields = [
+    "name",
+    "original_description",
+    "merchant_name",
+    "website",
+    "check_number",
+    "transaction_code",
+    "category_id",
+    "iso_currency_code",
+    "unofficial_currency_code",
+    "payment_channel",
+  ];
+  for (const field of fields) pushText(texts, txn[field]);
+  pushText(texts, txn.category);
+  pushText(texts, txn.personal_finance_category);
+  pushText(texts, txn.payment_meta);
+  pushText(texts, txn.counterparties);
+  pushText(texts, txn.location);
+
+  return [...new Set(texts)];
+}
+
 export function detectPromoPayoffDate(texts: ReadonlyArray<string | null | undefined>): string | null {
   const text = texts.filter(Boolean).join(" | ");
   if (!text) return null;
 
   const lowered = text.toLowerCase();
-  const hasPromoSignal =
-    /promo|promotion|promotional|deferred|interest|no interest|avoid interest|paid in full|pay in full/.test(
-      lowered,
-    );
+  const hasPromoSignal = PROMO_SIGNAL.test(lowered);
   if (!hasPromoSignal) return null;
 
   const numeric = lowered.match(
@@ -78,4 +128,53 @@ export function detectPromoPayoffDate(texts: ReadonlyArray<string | null | undef
   }
 
   return null;
+}
+
+function includesAny(value: string | null | undefined, needles: string[]): boolean {
+  const haystack = value?.toLowerCase() ?? "";
+  return needles.some((needle) => haystack.includes(needle));
+}
+
+function isPaymentLikeCategory(category: string | null | undefined): boolean {
+  const value = category?.toLowerCase() ?? "";
+  return (
+    value.includes("loan_payments") ||
+    value.includes("loan payments") ||
+    value.includes("transfer") ||
+    value.includes("payment")
+  );
+}
+
+export type PromoCandidateInput = {
+  amountCents: number;
+  linkedCreditCardId: string | null;
+  linkedPromoId: string | null;
+  promoPayoffDate: string | null;
+  accountName?: string | null;
+  accountSubtype?: string | null;
+  linkedCreditCardName?: string | null;
+  description?: string | null;
+  originalDescription?: string | null;
+  merchantName?: string | null;
+  plaidCategory?: string | null;
+};
+
+export function isSpecialFinancingCandidate(txn: PromoCandidateInput): boolean {
+  if (txn.amountCents <= 0 || !txn.linkedCreditCardId || txn.linkedPromoId) return false;
+  if (isPaymentLikeCategory(txn.plaidCategory)) return false;
+  if (txn.promoPayoffDate) return true;
+
+  const isPayPalCredit = [
+    txn.accountName,
+    txn.accountSubtype,
+    txn.linkedCreditCardName,
+    txn.description,
+    txn.originalDescription,
+    txn.merchantName,
+  ].some((text) => includesAny(text, ["paypal credit"]));
+
+  // PayPal currently advertises 6-month deferred-interest financing for
+  // qualifying purchases of $149+. Treat this only as a review candidate; the
+  // sync path still requires explicit API text before auto-creating a promo.
+  return isPayPalCredit && txn.amountCents >= 149_00;
 }
