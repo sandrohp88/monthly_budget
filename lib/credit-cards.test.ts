@@ -548,6 +548,70 @@ describe("projectPromoSchedule", () => {
     expect(schedule).toEqual([]);
   });
 
+  it("uses manual scheduled payments verbatim when present", () => {
+    const schedule = projectPromoSchedule(
+      promo({
+        remainingAmountCents: 60_00,
+        startDate: "2026-05-01",
+        endDate: "2026-12-31",
+      }),
+      card,
+      "2026-05-03",
+      new Set(),
+      [
+        { dueDate: "2026-06-15", amountCents: 25_00 },
+        { dueDate: "2026-08-15", amountCents: 35_00 },
+      ],
+    );
+    expect(schedule).toEqual([
+      { dueDate: "2026-06-15", amountCents: 25_00 },
+      { dueDate: "2026-08-15", amountCents: 35_00 },
+    ]);
+  });
+
+  it("manual schedule filters out past payments before fromIso", () => {
+    const schedule = projectPromoSchedule(
+      promo({ remainingAmountCents: 100_00, endDate: "2027-12-31" }),
+      card,
+      "2026-06-10",
+      new Set(),
+      [
+        { dueDate: "2026-05-01", amountCents: 20_00 },
+        { dueDate: "2026-07-15", amountCents: 80_00 },
+      ],
+    );
+    expect(schedule).toEqual([{ dueDate: "2026-07-15", amountCents: 80_00 }]);
+  });
+
+  it("manual schedule still respects skipDueDates (recorded statements)", () => {
+    const schedule = projectPromoSchedule(
+      promo({ remainingAmountCents: 60_00, endDate: "2027-12-31" }),
+      card,
+      "2026-05-01",
+      new Set(["2026-06-10"]),
+      [
+        { dueDate: "2026-06-10", amountCents: 30_00 },
+        { dueDate: "2026-07-10", amountCents: 30_00 },
+      ],
+    );
+    expect(schedule).toEqual([{ dueDate: "2026-07-10", amountCents: 30_00 }]);
+  });
+
+  it("manual schedule short-circuits the auto-spread end-date lump", () => {
+    // Manual rows total less than remaining → projection just uses what's
+    // there. No "force the rest onto endDate" lump like auto-spread does.
+    const schedule = projectPromoSchedule(
+      promo({ remainingAmountCents: 100_00, endDate: "2026-12-31" }),
+      card,
+      "2026-01-01",
+      new Set(),
+      [{ dueDate: "2026-06-01", amountCents: 25_00 }],
+    );
+    expect(schedule).toEqual([{ dueDate: "2026-06-01", amountCents: 25_00 }]);
+    const total = schedule.reduce((s, c) => s + c.amountCents, 0);
+    expect(total).toBe(25_00);
+  });
+
   it("converges to zero by the deadline (no overshoot, no shortfall)", () => {
     // Awkward number — $1,001 over 7 months: ceil($1001/7)=$143; the schedule
     // should still sum to exactly $1,001, with the final chunk absorbing the

@@ -287,6 +287,36 @@ export const creditCardPromos = sqliteTable(
   }),
 );
 
+/**
+ * User-defined manual payment plan for a promo. When any rows exist for a
+ * promo, the projection IGNORES the auto-spread / `monthlyPaymentCents`
+ * logic and uses these payments verbatim. The schedule is purely a projection
+ * input — `remainingAmountCents` on the promo is still the source of truth
+ * for what's owed, and is decremented by the unpaid→paid statement edge as
+ * before.
+ */
+export const creditCardPromoPayments = sqliteTable(
+  "credit_card_promo_payments",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    promoId: text("promo_id")
+      .notNull()
+      .references(() => creditCardPromos.id, { onDelete: "cascade" }),
+    dueDate: text("due_date").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    note: text("note"),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    promoIdx: index("cc_promo_payments_promo_idx").on(t.promoId),
+    userIdx: index("cc_promo_payments_user_idx").on(t.userId),
+  }),
+);
+
 export const categories = sqliteTable("categories", {
   id: text("id").primaryKey(),
   userId: text("user_id")
@@ -309,6 +339,7 @@ export type CreditCardRow = typeof creditCards.$inferSelect;
 export type CreditCardStatementRow = typeof creditCardStatements.$inferSelect;
 export type CreditCardPaymentOverrideRow = typeof creditCardPaymentOverrides.$inferSelect;
 export type CreditCardPromoRow = typeof creditCardPromos.$inferSelect;
+export type CreditCardPromoPaymentRow = typeof creditCardPromoPayments.$inferSelect;
 
 export type NewUser = typeof users.$inferInsert;
 export type NewSettings = typeof settings.$inferInsert;
@@ -321,6 +352,7 @@ export type NewCreditCard = typeof creditCards.$inferInsert;
 export type NewCreditCardStatement = typeof creditCardStatements.$inferInsert;
 export type NewCreditCardPaymentOverride = typeof creditCardPaymentOverrides.$inferInsert;
 export type NewCreditCardPromo = typeof creditCardPromos.$inferInsert;
+export type NewCreditCardPromoPayment = typeof creditCardPromoPayments.$inferInsert;
 
 // ── Plaid ─────────────────────────────────────────────────────────────────────
 

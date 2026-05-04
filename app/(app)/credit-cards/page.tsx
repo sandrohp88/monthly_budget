@@ -1,6 +1,13 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { listBills, listCreditCards, listExtras, listPromosForCard, listStatements } from "@/lib/repos";
+import {
+  listAllPromoPayments,
+  listBills,
+  listCreditCards,
+  listExtras,
+  listPromosForCard,
+  listStatements,
+} from "@/lib/repos";
 import { estimateCurrentCycle } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
 import { CreditCardsClient } from "./credit-cards-client";
@@ -12,11 +19,22 @@ export default async function CreditCardsPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [cards, allBills, allExtras] = await Promise.all([
+  const [cards, allBills, allExtras, allPromoPayments] = await Promise.all([
     listCreditCards(userId, true),
     listBills(userId, false), // active only — archived bills don't predict charges
     listExtras(userId),
+    listAllPromoPayments(userId),
   ]);
+
+  const paymentsByPromoId: Record<
+    string,
+    Array<{ id: string; dueDate: string; amountCents: number; note: string | null }>
+  > = {};
+  for (const pp of allPromoPayments) {
+    const list = paymentsByPromoId[pp.promoId] ?? [];
+    list.push({ id: pp.id, dueDate: pp.dueDate, amountCents: pp.amountCents, note: pp.note });
+    paymentsByPromoId[pp.promoId] = list;
+  }
 
   const today = todayIso();
 
@@ -43,5 +61,5 @@ export default async function CreditCardsPage() {
     }),
   );
 
-  return <CreditCardsClient initialCards={data} />;
+  return <CreditCardsClient initialCards={data} initialPaymentsByPromoId={paymentsByPromoId} />;
 }
