@@ -2,6 +2,7 @@ import "server-only";
 import { addDaysIso, todayIso } from "./dates";
 import {
   getSettings,
+  listBillPaymentOverridesForUser,
   listBills,
   listCreditCards,
   listExtras,
@@ -40,9 +41,20 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   // End date = today + projectionMonths (approx, using 31 days per month for a safe upper bound).
   const endDate = addDaysIso(today, settings.projectionMonths * 31);
 
-  const [bills, paychecks, extras, statements, activeCards, linkedBalance, plaidAccts, promos] =
+  const [
+    bills,
+    billPaymentOverrides,
+    paychecks,
+    extras,
+    statements,
+    activeCards,
+    linkedBalance,
+    plaidAccts,
+    promos,
+  ] =
     await Promise.all([
       listBills(userId, false),
+      listBillPaymentOverridesForUser(userId),
       listPaychecks(userId),
       listExtras(userId),
       listStatementsForUser(userId),
@@ -52,6 +64,12 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       listPromos(userId, false),
     ]);
   const activeCardIds = new Set(activeCards.map((c) => c.id));
+  const billOverridesByBill = new Map<string, Array<{ date: string; amountCents: number }>>();
+  for (const override of billPaymentOverrides) {
+    const list = billOverridesByBill.get(override.billId) ?? [];
+    list.push({ date: override.dueDate, amountCents: override.amountCents });
+    billOverridesByBill.set(override.billId, list);
+  }
 
   // Bills paid via an ACTIVE credit card don't move cash on their own — the
   // card's statement payment carries them. Skip them from the projection to
@@ -161,6 +179,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       amountCents: b.amountCents,
       intervalMonths: b.intervalMonths,
       anchorDate: b.anchorDate,
+      paymentOverrides: billOverridesByBill.get(b.id) ?? [],
     })),
     extras: [
       ...extras.map((e) => ({

@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
   bills,
+  billPaymentOverrides,
   categories,
   creditCards,
   creditCardPromos,
@@ -14,11 +15,13 @@ import {
   settings,
   users,
   type BillRow,
+  type BillPaymentOverrideRow,
   type CategoryRow,
   type CreditCardPromoRow,
   type CreditCardRow,
   type CreditCardStatementRow,
   type NewBill,
+  type NewBillPaymentOverride,
   type NewCategory,
   type NewCreditCard,
   type NewCreditCardPromo,
@@ -279,6 +282,82 @@ export async function updateBill(
 
 export async function archiveBill(userId: string, id: string): Promise<void> {
   await updateBill(userId, id, { isActive: false });
+}
+
+export async function listBillPaymentOverridesForUser(
+  userId: string,
+): Promise<BillPaymentOverrideRow[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(billPaymentOverrides)
+    .where(eq(billPaymentOverrides.userId, userId))
+    .orderBy(asc(billPaymentOverrides.dueDate))
+    .all();
+}
+
+export async function upsertBillPaymentOverride(
+  userId: string,
+  billId: string,
+  data: Omit<NewBillPaymentOverride, "id" | "userId" | "billId" | "createdAt" | "updatedAt">,
+): Promise<BillPaymentOverrideRow | undefined> {
+  const db = getDb();
+  const bill = await getBill(userId, billId);
+  if (!bill) return undefined;
+
+  const existing = await db
+    .select()
+    .from(billPaymentOverrides)
+    .where(
+      and(
+        eq(billPaymentOverrides.userId, userId),
+        eq(billPaymentOverrides.billId, billId),
+        eq(billPaymentOverrides.dueDate, data.dueDate),
+      ),
+    )
+    .get();
+
+  if (existing) {
+    await db
+      .update(billPaymentOverrides)
+      .set({ amountCents: data.amountCents, notes: data.notes ?? null, updatedAt: Date.now() })
+      .where(eq(billPaymentOverrides.id, existing.id))
+      .run();
+    return db
+      .select()
+      .from(billPaymentOverrides)
+      .where(eq(billPaymentOverrides.id, existing.id))
+      .get();
+  }
+
+  const id = newId();
+  await db
+    .insert(billPaymentOverrides)
+    .values({ id, userId, billId, ...data, notes: data.notes ?? null })
+    .run();
+  return db
+    .select()
+    .from(billPaymentOverrides)
+    .where(eq(billPaymentOverrides.id, id))
+    .get();
+}
+
+export async function deleteBillPaymentOverride(
+  userId: string,
+  billId: string,
+  dueDate: string,
+): Promise<void> {
+  const db = getDb();
+  await db
+    .delete(billPaymentOverrides)
+    .where(
+      and(
+        eq(billPaymentOverrides.userId, userId),
+        eq(billPaymentOverrides.billId, billId),
+        eq(billPaymentOverrides.dueDate, dueDate),
+      ),
+    )
+    .run();
 }
 
 export async function listPaychecks(userId: string): Promise<PaycheckRow[]> {
@@ -1134,9 +1213,10 @@ export async function getPrimaryLinkedBalance(userId: string): Promise<number | 
 
 export async function exportAll(userId: string) {
   const db = getDb();
-  const [s, b, p, e, c, cc, ccs] = await Promise.all([
+  const [s, b, bo, p, e, c, cc, ccs] = await Promise.all([
     getSettings(userId),
     db.select().from(bills).where(eq(bills.userId, userId)).all(),
+    db.select().from(billPaymentOverrides).where(eq(billPaymentOverrides.userId, userId)).all(),
     db.select().from(paychecks).where(eq(paychecks.userId, userId)).orderBy(desc(paychecks.payDate)).all(),
     db.select().from(oneTimeExpenses).where(eq(oneTimeExpenses.userId, userId)).all(),
     db.select().from(categories).where(eq(categories.userId, userId)).all(),
@@ -1148,6 +1228,7 @@ export async function exportAll(userId: string) {
     schemaVersion: 3,
     settings: s,
     bills: b,
+    billPaymentOverrides: bo,
     paychecks: p,
     extras: e,
     categories: c,
@@ -1158,7 +1239,13 @@ export async function exportAll(userId: string) {
 
 export async function importAll(
   userId: string,
-  payload: { bills?: unknown[]; paychecks?: unknown[]; extras?: unknown[]; categories?: unknown[] },
+  payload: {
+    bills?: unknown[];
+    billPaymentOverrides?: unknown[];
+    paychecks?: unknown[];
+    extras?: unknown[];
+    categories?: unknown[];
+  },
 ): Promise<void> {
   const db = getDb();
   await db.delete(bills).where(eq(bills.userId, userId)).run();
@@ -1217,6 +1304,17 @@ export async function importAll(
       paidViaCardId: b.paidViaCardId ?? null,
       notes: b.notes ?? null,
       isActive: b.isActive ?? true,
+    }).run();
+  }
+  for (const o of (payload.billPaymentOverrides ?? []) as Array<Partial<BillPaymentOverrideRow>>) {
+    if (!o.billId || !o.dueDate || typeof o.amountCents !== "number") continue;
+    await db.insert(billPaymentOverrides).values({
+      id: o.id ?? newId(),
+      userId,
+      billId: o.billId,
+      dueDate: o.dueDate,
+      amountCents: o.amountCents,
+      notes: o.notes ?? null,
     }).run();
   }
   for (const p of (payload.paychecks ?? []) as Array<Partial<PaycheckRow>>) {

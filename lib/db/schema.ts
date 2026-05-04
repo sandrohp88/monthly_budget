@@ -96,6 +96,36 @@ export const bills = sqliteTable(
   }),
 );
 
+/**
+ * Per-occurrence planned bill payments. This lets a user keep the normal
+ * recurring bill amount intact while adjusting one projected cycle when cash
+ * is tight. Keyed by bill + dueDate because due dates are generated.
+ */
+export const billPaymentOverrides = sqliteTable(
+  "bill_payment_overrides",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    billId: text("bill_id")
+      .notNull()
+      .references(() => bills.id, { onDelete: "cascade" }),
+    dueDate: text("due_date").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    notes: text("notes"),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    userDate: index("bill_payment_overrides_user_date_idx").on(t.userId, t.dueDate),
+    billDateUnique: uniqueIndex("bill_payment_overrides_bill_date_unique_idx").on(
+      t.billId,
+      t.dueDate,
+    ),
+  }),
+);
+
 export const oneTimeExpenses = sqliteTable(
   "one_time_expenses",
   {
@@ -239,6 +269,7 @@ export type UserSafe = Omit<UserRow, "passwordHash">;
 export type SettingsRow = typeof settings.$inferSelect;
 export type PaycheckRow = typeof paychecks.$inferSelect;
 export type BillRow = typeof bills.$inferSelect;
+export type BillPaymentOverrideRow = typeof billPaymentOverrides.$inferSelect;
 export type OneTimeExpenseRow = typeof oneTimeExpenses.$inferSelect;
 export type CategoryRow = typeof categories.$inferSelect;
 export type CreditCardRow = typeof creditCards.$inferSelect;
@@ -249,6 +280,7 @@ export type NewUser = typeof users.$inferInsert;
 export type NewSettings = typeof settings.$inferInsert;
 export type NewPaycheck = typeof paychecks.$inferInsert;
 export type NewBill = typeof bills.$inferInsert;
+export type NewBillPaymentOverride = typeof billPaymentOverrides.$inferInsert;
 export type NewOneTimeExpense = typeof oneTimeExpenses.$inferInsert;
 export type NewCategory = typeof categories.$inferInsert;
 export type NewCreditCard = typeof creditCards.$inferInsert;

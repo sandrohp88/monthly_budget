@@ -229,6 +229,38 @@ describe("projection engine", () => {
     expect(day.balanceCents).toBe(300_00);
   });
 
+  it("uses a bill payment override for one generated occurrence only", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-01-01",
+      endDate: "2025-03-31",
+      startingBalanceCents: 1000_00,
+      bills: [
+        {
+          id: "rent",
+          name: "Rent",
+          amountCents: 700_00,
+          intervalMonths: 1,
+          anchorDate: "2025-01-15",
+          paymentOverrides: [{ date: "2025-02-15", amountCents: 400_00 }],
+        },
+      ],
+    });
+
+    const jan = rows.find((r) => r.date === "2025-01-15")!;
+    const feb = rows.find((r) => r.date === "2025-02-15")!;
+    const mar = rows.find((r) => r.date === "2025-03-15")!;
+
+    expect(jan.expenseCents).toBe(700_00);
+    expect(feb.expenseCents).toBe(400_00);
+    expect(feb.events[0]).toMatchObject({
+      sourceId: "rent",
+      amountCents: 400_00,
+      originalAmountCents: 700_00,
+    });
+    expect(mar.expenseCents).toBe(700_00);
+  });
+
   it("negative balances are produced correctly", () => {
     const rows = computeProjection({
       ...baseInput(),

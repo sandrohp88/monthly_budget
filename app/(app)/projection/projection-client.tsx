@@ -1,14 +1,22 @@
 "use client";
 
 import * as React from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { CardSubTag } from "@/components/ui/page-head";
 import { StatusPill } from "@/components/ui/status-pill";
-import { Tile, TileGrid } from "@/components/ui/tile";
 import { Money } from "@/components/money";
+import { MoneyInput } from "@/components/money-input";
 import { DateLabel } from "@/components/date-label";
-import { ProjectionChart } from "@/components/projection-chart";
-import { describeEvents, findWorstDay, type ProjectionRow } from "@/lib/projection";
+import type { ProjectionRow } from "@/lib/projection";
 import { addDaysIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 
@@ -25,6 +33,9 @@ const FILTERS: ReadonlyArray<{ key: FilterKey; label: string }> = [
   { key: "1Y", label: "1 YEAR" },
   { key: "ALL", label: "ALL" },
 ];
+
+const NEGATIVE_BALANCE_TOOLTIP =
+  "Projected balance is negative after this day's income and expenses. The bills due by this row exceed the cash available to pay them.";
 
 /** Last day of the month containing isoDate, in YYYY-MM-DD. */
 function endOfMonth(isoDate: string): string {
@@ -62,12 +73,6 @@ function balanceClass(cents: number) {
   return "text-[var(--mint)]";
 }
 
-function riskLabel(cents: number): { label: string; variant: "default" | "amber" | "danger" } {
-  if (cents < 0) return { label: "BREACH", variant: "danger" };
-  if (cents < 50000) return { label: "LOW BUFFER", variant: "amber" };
-  return { label: "NOMINAL", variant: "default" };
-}
-
 type LedgerSection = {
   key: string;
   sourceDate?: string;
@@ -77,6 +82,14 @@ type LedgerSection = {
   billCount: number;
   rows: ProjectionRow[];
   isOpeningBalance: boolean;
+};
+
+type BillAdjustment = {
+  billId: string;
+  billName: string;
+  dueDate: string;
+  amountCents: number;
+  originalAmountCents: number;
 };
 
 function hasPaycheck(row: ProjectionRow): boolean {
@@ -147,15 +160,17 @@ export function ProjectionClient({
   endDate: string;
   today: string;
 }) {
+  const router = useRouter();
   const [filter, setFilter] = React.useState<FilterKey>("ALL");
+  const [adjustingBill, setAdjustingBill] = React.useState<BillAdjustment | null>(null);
+  const [savingAdjustment, setSavingAdjustment] = React.useState(false);
 
   const range = React.useMemo(
     () => rangeForFilter(filter, today, startDate, endDate),
     [filter, today, startDate, endDate],
   );
 
-  // All rows in the filter window (every day, including no-event days) — used
-  // for tile math (peak/trough/start/end) so the numbers reflect the picker.
+  // All rows in the filter window (every day, including no-event days).
   const windowRows = React.useMemo(
     () => rows.filter((r) => r.date >= range.start && r.date <= range.end),
     [rows, range.start, range.end],
@@ -163,159 +178,77 @@ export function ProjectionClient({
 
   // The visible ledger rows — only days where money moved
   const eventRows = React.useMemo(
-    () => windowRows.filter((r) => r.incomeCents > 0 || r.expenseCents > 0),
+    () => windowRows.filter((r) => r.events.length > 0),
     [windowRows],
   );
   const ledgerSections = React.useMemo(() => buildLedgerSections(eventRows), [eventRows]);
 
-  // Tile derivations (off windowRows, not eventRows, so balance peaks between
-  // events still register correctly)
-  const startBal = windowRows[0]?.balanceCents ?? 0;
-  const endBal = windowRows[windowRows.length - 1]?.balanceCents ?? startBal;
-  const peak =
-    windowRows.length > 0
-      ? windowRows.reduce((p, r) => (r.balanceCents > p.balanceCents ? r : p), windowRows[0]!)
-      : null;
-  const trough = findWorstDay(windowRows);
-  const worstDate = trough?.date;
-  const risk = riskLabel(trough?.balanceCents ?? endBal);
-  const totals = React.useMemo(
-    () =>
-      windowRows.reduce(
-        (acc, row) => ({
-          incomeCents: acc.incomeCents + row.incomeCents,
-          expenseCents: acc.expenseCents + row.expenseCents,
-          activeDays: acc.activeDays + (row.incomeCents > 0 || row.expenseCents > 0 ? 1 : 0),
-        }),
-        { incomeCents: 0, expenseCents: 0, activeDays: 0 },
-      ),
-    [windowRows],
-  );
-  const netCents = totals.incomeCents - totals.expenseCents;
+  const saveBillAdjustment = async (adjustment: BillAdjustment, amountCents: number) => {
+    setSavingAdjustment(true);
+    try {
+      const qs = new URLSearchParams({ dueDate: adjustment.dueDate });
+      const res =
+        amountCents === adjustment.originalAmountCents
+          ? await fetch(`/api/bills/${adjustment.billId}/payment-overrides?${qs}`, {
+              method: "DELETE",
+            })
+          : await fetch(`/api/bills/${adjustment.billId}/payment-overrides`, {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ dueDate: adjustment.dueDate, amountCents }),
+            });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "save failed");
+      toast.success(
+        amountCents === adjustment.originalAmountCents
+          ? "Planned payment reset"
+          : "Planned payment updated",
+      );
+      setAdjustingBill(null);
+      router.refresh();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSavingAdjustment(false);
+    }
+  };
+
+  const resetBillAdjustment = async (adjustment: BillAdjustment) => {
+    setSavingAdjustment(true);
+    try {
+      const qs = new URLSearchParams({ dueDate: adjustment.dueDate });
+      const res = await fetch(`/api/bills/${adjustment.billId}/payment-overrides?${qs}`, {
+        method: "DELETE",
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "reset failed");
+      toast.success("Planned payment reset");
+      setAdjustingBill(null);
+      router.refresh();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSavingAdjustment(false);
+    }
+  };
 
   return (
-    <div className="space-y-5">
-      <div className="bracketed relative overflow-hidden rounded-sm border border-[var(--border-raw)] bg-[linear-gradient(135deg,var(--cyan-tint),var(--surface-veil)_42%,var(--phosphor-tint-soft))] p-3">
-        <div className="pointer-events-none absolute inset-0 bg-[repeating-linear-gradient(90deg,rgba(255,255,255,0.025)_0,rgba(255,255,255,0.025)_1px,transparent_1px,transparent_54px)]" />
-        <div className="relative flex flex-wrap items-center gap-2">
-          <div className="mr-2 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
-            WINDOW_SELECT
-          </div>
-          {FILTERS.map((f) => (
-            <Tab key={f.key} active={filter === f.key} onClick={() => setFilter(f.key)}>
-              {f.label}
-            </Tab>
-          ))}
-          <div className="ml-auto flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
-            <StatusPill variant={risk.variant}>{risk.label}</StatusPill>
-            <span>
-              <DateLabel iso={range.start} format="short" /> – <DateLabel iso={range.end} format="short" />
-              {" · "}
-              {windowRows.length} DAY{windowRows.length === 1 ? "" : "S"}
-            </span>
-          </div>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {FILTERS.map((f) => (
+          <Tab key={f.key} active={filter === f.key} onClick={() => setFilter(f.key)}>
+            {f.label}
+          </Tab>
+        ))}
+        <div className="ml-auto text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
+          <DateLabel iso={range.start} format="short" /> -{" "}
+          <DateLabel iso={range.end} format="short" />
+          {" · "}
+          {windowRows.length} DAY{windowRows.length === 1 ? "" : "S"}
         </div>
       </div>
 
-      <TileGrid cols={4}>
-        <Tile
-          label="START"
-          value={<Money cents={startBal} />}
-          delta={
-            windowRows[0] ? <DateLabel iso={windowRows[0].date} format="short" /> : null
-          }
-        />
-        <Tile
-          label="PEAK"
-          value={peak ? <Money cents={peak.balanceCents} /> : "—"}
-          delta={peak ? <DateLabel iso={peak.date} format="short" /> : null}
-          variant="mint"
-        />
-        <Tile
-          label="TROUGH"
-          value={trough ? <Money cents={trough.balanceCents} /> : "—"}
-          delta={trough ? <DateLabel iso={trough.date} format="short" /> : null}
-          variant={trough && trough.balanceCents < 50000 ? "red" : "default"}
-        />
-        <Tile
-          label="END"
-          value={
-            windowRows[windowRows.length - 1] ? <Money cents={endBal} /> : "—"
-          }
-          delta={
-            windowRows[windowRows.length - 1] ? (
-              <DateLabel iso={windowRows[windowRows.length - 1]!.date} format="short" />
-            ) : null
-          }
-          variant={endBal >= startBal ? "mint" : "red"}
-        />
-      </TileGrid>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
-        <Card className="overflow-hidden border-[var(--cyan-tint-edge)] bg-[linear-gradient(180deg,var(--cyan-tint-soft),var(--surface-veil-strong)_36%)]">
-          <CardHeader>
-            <div>
-              <CardSubTag>CHART_05</CardSubTag>
-              <CardTitle className="mt-0.5">BALANCE TRACE</CardTitle>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
-              <StatusPill variant={netCents >= 0 ? "default" : "danger"}>
-                NET {netCents >= 0 ? "+" : "-"}
-                <Money cents={Math.abs(netCents)} />
-              </StatusPill>
-              <span>{totals.activeDays} EVENT DAYS</span>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-5">
-            <ProjectionChart
-              data={windowRows.map((r) => ({ date: r.date, balanceCents: r.balanceCents }))}
-            />
-          </CardContent>
-        </Card>
-
-        <Card className="overflow-hidden bg-[linear-gradient(160deg,var(--phosphor-tint),var(--surface-veil)_48%,var(--amber-tint-soft))]">
-          <CardHeader>
-            <div>
-              <CardSubTag>READOUT_05</CardSubTag>
-              <CardTitle className="mt-0.5">WINDOW TELEMETRY</CardTitle>
-            </div>
-            <StatusPill variant={risk.variant}>{risk.label}</StatusPill>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <TelemetryRow label="INFLOW" value={<Money cents={totals.incomeCents} />} variant="mint" />
-            <TelemetryRow label="OUTFLOW" value={<Money cents={totals.expenseCents} />} variant="red" />
-            <TelemetryRow
-              label="NET DRIFT"
-              value={
-                <span className={netCents >= 0 ? "text-[var(--mint)]" : "text-[var(--red)]"}>
-                  {netCents >= 0 ? "+" : "-"}
-                  <Money cents={Math.abs(netCents)} />
-                </span>
-              }
-            />
-            <TelemetryRow
-              label="WORST DAY"
-              value={trough ? <Money cents={trough.balanceCents} /> : "—"}
-              detail={trough ? <DateLabel iso={trough.date} format="short" /> : undefined}
-              variant={risk.variant === "danger" ? "red" : risk.variant === "amber" ? "amber" : "mint"}
-            />
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="overflow-hidden">
-        <CardHeader>
-          <div>
-            <CardSubTag>LEDGER_VIRTUAL</CardSubTag>
-            <CardTitle className="mt-0.5">DAILY PROJECTION</CardTitle>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
-            <StatusPill variant="off">{eventRows.length} EVENTS</StatusPill>
-            <StatusPill variant="off">{ledgerSections.length} PAY PERIODS</StatusPill>
-            <span>{windowRows.length} TOTAL DAYS</span>
-          </div>
-        </CardHeader>
-        <div className="max-h-[70vh] overflow-auto">
+      <div className="max-h-[76vh] overflow-auto border border-[var(--border-raw)]">
           <table className="w-full text-[11px] font-mono tabular">
             <thead className="sticky top-0 z-10 bg-[var(--bg-1)] shadow-[0_1px_0_var(--border-raw)]">
               <tr className="border-b border-[var(--border-raw)]">
@@ -348,7 +281,7 @@ export function ProjectionClient({
                   <PaycheckSectionHeader section={section} index={sectionIndex} />
                   {section.rows.map((r) => {
                     const isPayday = hasPaycheck(r);
-                    const isWorst = r.date === worstDate;
+                    const isNegativeBalance = r.balanceCents < 0;
                     const fundedByLabel = section.isOpeningBalance
                       ? "OPENING BALANCE"
                       : `PAYCHECK ${section.sourceDate?.slice(5)}`;
@@ -356,7 +289,7 @@ export function ProjectionClient({
                       "border-b border-[var(--border-raw)] last:border-0 transition-colors hover:bg-[var(--cyan-tint-hover)]",
                       "border-l-2",
                       section.isOpeningBalance ? "border-l-[var(--amber)]" : "border-l-[var(--mint-dim)]",
-                      isWorst
+                      isNegativeBalance
                         ? "bg-[var(--red-glow)] border-l-[var(--red)]"
                         : isPayday
                           ? "bg-[var(--phosphor-tint-row)]"
@@ -367,20 +300,20 @@ export function ProjectionClient({
                         <td
                           className={cn(
                             "whitespace-nowrap px-4 py-3 font-semibold uppercase tracking-tight",
-                            isWorst
+                            isNegativeBalance
                               ? "text-[var(--red)]"
                               : isPayday
                                 ? "text-[var(--mint)]"
                                 : "text-[var(--text-1)]",
                           )}
                         >
-                          {isWorst ? "⚠ " : ""}
+                          {isNegativeBalance ? <NegativeBalanceMarker /> : null}
                           <DateLabel iso={r.date} format="short" />
                         </td>
                         <td
                           className={cn(
                             "px-4 py-3",
-                            isWorst
+                            isNegativeBalance
                               ? "text-[var(--red)] font-semibold"
                               : isPayday
                                 ? "text-[var(--mint)] font-semibold"
@@ -388,14 +321,19 @@ export function ProjectionClient({
                           )}
                         >
                           <div className="flex flex-wrap items-center gap-2">
-                            {isWorst ? <StatusPill variant="danger">TROUGH</StatusPill> : null}
+                            {isNegativeBalance ? (
+                              <StatusPill variant="danger">NEGATIVE</StatusPill>
+                            ) : null}
                             {isPayday ? <StatusPill>PAYCHECK SOURCE</StatusPill> : null}
                             {!isPayday && r.expenseCents > 0 ? (
                               <StatusPill variant={section.isOpeningBalance ? "amber" : "off"}>
                                 FUNDED BY {fundedByLabel}
                               </StatusPill>
                             ) : null}
-                            <span>{describeEvents(r.events)}</span>
+                            <ProjectionEventList
+                              row={r}
+                              onAdjustBill={setAdjustingBill}
+                            />
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right">
@@ -431,9 +369,174 @@ export function ProjectionClient({
               ))}
             </tbody>
           </table>
-        </div>
-      </Card>
+      </div>
+      {adjustingBill ? (
+        <BillPaymentAdjustmentDialog
+          adjustment={adjustingBill}
+          saving={savingAdjustment}
+          onClose={() => setAdjustingBill(null)}
+          onSave={saveBillAdjustment}
+          onReset={resetBillAdjustment}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function NegativeBalanceMarker() {
+  return (
+    <span
+      className="group relative mr-1 inline-flex cursor-help items-center"
+      aria-label={NEGATIVE_BALANCE_TOOLTIP}
+      tabIndex={0}
+    >
+      <span aria-hidden="true">⚠</span>
+      <span className="pointer-events-none absolute left-0 top-5 z-20 hidden w-72 whitespace-normal rounded-sm border border-[rgba(239,68,68,0.45)] bg-[var(--bg-1)] px-3 py-2 text-left text-[10px] font-medium uppercase leading-snug tracking-[0.12em] text-[var(--text-1)] shadow-[0_8px_24px_rgba(0,0,0,0.45)] group-hover:block group-focus:block">
+        {NEGATIVE_BALANCE_TOOLTIP}
+      </span>
+    </span>
+  );
+}
+
+function ProjectionEventList({
+  row,
+  onAdjustBill,
+}: {
+  row: ProjectionRow;
+  onAdjustBill: (adjustment: BillAdjustment) => void;
+}) {
+  return (
+    <>
+      {row.events.map((event, index) => {
+        if (event.kind !== "bill" || !event.sourceId || event.originalAmountCents == null) {
+          return <span key={`${event.kind}-${event.label}-${index}`}>{event.label}</span>;
+        }
+
+        const adjusted = event.amountCents !== event.originalAmountCents;
+        return (
+          <span
+            key={`${event.sourceId}-${row.date}-${index}`}
+            className="inline-flex flex-wrap items-center gap-1.5"
+          >
+            <StatusPill variant={adjusted ? "amber" : "off"}>
+              {adjusted ? "PLANNED" : "BILL"}
+            </StatusPill>
+            <button
+              type="button"
+              onClick={() =>
+                onAdjustBill({
+                  billId: event.sourceId!,
+                  billName: event.label,
+                  dueDate: row.date,
+                  amountCents: event.amountCents,
+                  originalAmountCents: event.originalAmountCents!,
+                })
+              }
+              className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-[var(--text-1)] hover:border-[var(--mint-dim)] hover:text-[var(--text-0)]"
+            >
+              {event.label} <Money cents={event.amountCents} />
+            </button>
+            {adjusted ? (
+              <span className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                BASE <Money cents={event.originalAmountCents} />
+              </span>
+            ) : null}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+function BillPaymentAdjustmentDialog({
+  adjustment,
+  saving,
+  onClose,
+  onSave,
+  onReset,
+}: {
+  adjustment: BillAdjustment;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (adjustment: BillAdjustment, amountCents: number) => Promise<void>;
+  onReset: (adjustment: BillAdjustment) => Promise<void>;
+}) {
+  const [amountCents, setAmountCents] = React.useState(adjustment.amountCents);
+  const adjusted = adjustment.amountCents !== adjustment.originalAmountCents;
+
+  React.useEffect(() => {
+    setAmountCents(adjustment.amountCents);
+  }, [adjustment]);
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <CardSubTag>BILL_PAYMENT_PLAN</CardSubTag>
+          <DialogTitle>{adjustment.billName.toUpperCase()}</DialogTitle>
+        </DialogHeader>
+        <form
+          className="space-y-4 pt-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onSave(adjustment, amountCents);
+          }}
+        >
+          <div className="grid gap-3 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-[10px] uppercase tracking-[0.14em] text-[var(--text-2)]">
+            <div className="flex items-center justify-between gap-3">
+              <span>Due date</span>
+              <span className="text-[var(--text-0)]">
+                <DateLabel iso={adjustment.dueDate} format="short" />
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span>Normal bill</span>
+              <span className="text-[var(--text-0)]">
+                <Money cents={adjustment.originalAmountCents} />
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label
+              htmlFor="planned-payment-cents"
+              className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]"
+            >
+              Planned payment for this cycle
+            </label>
+            <MoneyInput
+              id="planned-payment-cents"
+              valueCents={amountCents}
+              onChangeCents={setAmountCents}
+              disabled={saving}
+            />
+          </div>
+
+          <DialogFooter>
+            {adjusted ? (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => void onReset(adjustment)}
+                disabled={saving}
+              >
+                RESET
+              </Button>
+            ) : (
+              <span />
+            )}
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+                CANCEL
+              </Button>
+              <Button type="submit" variant="primary" disabled={saving || amountCents < 0}>
+                {saving ? "SAVING..." : "SAVE PLAN"}
+              </Button>
+            </div>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -480,39 +583,6 @@ function PaycheckSectionHeader({
         </div>
       </td>
     </tr>
-  );
-}
-
-function TelemetryRow({
-  label,
-  value,
-  detail,
-  variant = "default",
-}: {
-  label: React.ReactNode;
-  value: React.ReactNode;
-  detail?: React.ReactNode;
-  variant?: "default" | "mint" | "red" | "amber";
-}) {
-  const color =
-    variant === "mint"
-      ? "text-[var(--mint)]"
-      : variant === "red"
-        ? "text-[var(--red)]"
-        : variant === "amber"
-          ? "text-[var(--amber)]"
-          : "text-[var(--text-0)]";
-
-  return (
-    <div className="rounded-sm border border-[var(--border-raw)] bg-[rgba(0,0,0,0.16)] px-3 py-2.5">
-      <div className="mb-1 text-[9px] uppercase tracking-[0.18em] text-[var(--text-3)]">{label}</div>
-      <div className={cn("text-[20px] font-bold leading-none tabular", color)}>{value}</div>
-      {detail ? (
-        <div className="mt-1.5 text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
-          {detail}
-        </div>
-      ) : null}
-    </div>
   );
 }
 

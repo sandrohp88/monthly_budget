@@ -18,6 +18,10 @@ import { newId } from "./ids";
 import {
   // settings
   getSettings,
+  createBill,
+  listBillPaymentOverridesForUser,
+  upsertBillPaymentOverride,
+  deleteBillPaymentOverride,
   // credit cards
   createCreditCard,
   getCreditCard,
@@ -117,6 +121,44 @@ describe("repos / foundation", () => {
     const all = await listCreditCards(user.id, true);
     expect(all.map((c) => c.name).sort()).toEqual(["Active", "Archived"]);
     expect((await getCreditCard(user.id, a.id))?.name).toBe("Active");
+  });
+
+  it("upserts and deletes a per-occurrence bill payment override", async () => {
+    const user = await makeUser();
+    const bill = await createBill(user.id, {
+      name: "Rent",
+      category: "Housing",
+      amountCents: 1200_00,
+      intervalMonths: 1,
+      anchorDate: "2026-05-01",
+      autoPay: false,
+      paidViaCardId: null,
+      notes: null,
+      isActive: true,
+    });
+
+    await upsertBillPaymentOverride(user.id, bill.id, {
+      dueDate: "2026-05-01",
+      amountCents: 800_00,
+      notes: null,
+    });
+    await upsertBillPaymentOverride(user.id, bill.id, {
+      dueDate: "2026-05-01",
+      amountCents: 500_00,
+      notes: "split across paychecks",
+    });
+
+    const overrides = await listBillPaymentOverridesForUser(user.id);
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0]).toMatchObject({
+      billId: bill.id,
+      dueDate: "2026-05-01",
+      amountCents: 500_00,
+      notes: "split across paychecks",
+    });
+
+    await deleteBillPaymentOverride(user.id, bill.id, "2026-05-01");
+    expect(await listBillPaymentOverridesForUser(user.id)).toEqual([]);
   });
 });
 

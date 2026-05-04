@@ -27,6 +27,8 @@ export type Bill = {
   intervalMonths: number;
   /** ISO YYYY-MM-DD of one known occurrence. */
   anchorDate: string;
+  /** Optional planned payment amounts for specific generated due dates. */
+  paymentOverrides?: Array<{ date: string; amountCents: number }>;
 };
 
 export type OneTimeExpense = {
@@ -41,6 +43,8 @@ export type ProjectionEvent = {
   kind: ProjectionEventKind;
   label: string;
   amountCents: number;
+  sourceId?: string;
+  originalAmountCents?: number;
 };
 
 export type ProjectionRow = {
@@ -151,6 +155,9 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
 
   for (const b of input.bills) {
     if (b.intervalMonths < 1) continue;
+    const overrides = new Map(
+      (b.paymentOverrides ?? []).map((o) => [o.date, o.amountCents] as const),
+    );
     const anchorTs = parseIsoDate(b.anchorDate);
     const anchorObj = new Date(anchorTs);
     const anchorY = anchorObj.getUTCFullYear();
@@ -169,10 +176,13 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
     for (let k = kStart; k <= kEnd; k++) {
       const occ = addMonthsClamped(anchorY, anchorM, anchorD, k * b.intervalMonths);
       const date = `${String(occ.year).padStart(4, "0")}-${String(occ.month).padStart(2, "0")}-${String(occ.day).padStart(2, "0")}`;
+      const override = overrides.get(date);
       addEvent(date, {
         kind: "bill",
         label: b.name,
-        amountCents: b.amountCents,
+        amountCents: override ?? b.amountCents,
+        sourceId: b.id,
+        originalAmountCents: b.amountCents,
       });
     }
   }

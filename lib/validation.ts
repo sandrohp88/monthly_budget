@@ -23,6 +23,12 @@ export const billUpdateSchema = billCreateSchema.and(
   z.object({ isActive: z.boolean().optional() }),
 );
 
+export const billPaymentOverrideSchema = z.object({
+  dueDate: isoDate,
+  amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
+  notes: z.string().max(500).nullable().optional(),
+});
+
 export const paycheckCreateSchema = z.object({
   payDate: isoDate,
   amountCents: cents,
