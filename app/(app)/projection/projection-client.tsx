@@ -195,7 +195,7 @@ export function ProjectionClient({
 
   return (
     <div className="space-y-5">
-      <div className="bracketed relative overflow-hidden rounded-sm border border-[var(--border-raw)] bg-[linear-gradient(135deg,rgba(0,229,255,0.10),rgba(14,19,24,0.92)_42%,rgba(57,255,20,0.05))] p-3">
+      <div className="bracketed relative overflow-hidden rounded-sm border border-[var(--border-raw)] bg-[linear-gradient(135deg,var(--cyan-tint),var(--surface-veil)_42%,var(--phosphor-tint-soft))] p-3">
         <div className="pointer-events-none absolute inset-0 bg-[repeating-linear-gradient(90deg,rgba(255,255,255,0.025)_0,rgba(255,255,255,0.025)_1px,transparent_1px,transparent_54px)]" />
         <div className="relative flex flex-wrap items-center gap-2">
           <div className="mr-2 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
@@ -252,7 +252,7 @@ export function ProjectionClient({
       </TileGrid>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
-        <Card className="overflow-hidden border-[rgba(0,229,255,0.24)] bg-[linear-gradient(180deg,rgba(0,229,255,0.06),rgba(14,19,24,0.96)_36%)]">
+        <Card className="overflow-hidden border-[var(--cyan-tint-edge)] bg-[linear-gradient(180deg,var(--cyan-tint-soft),var(--surface-veil-strong)_36%)]">
           <CardHeader>
             <div>
               <CardSubTag>CHART_05</CardSubTag>
@@ -273,7 +273,7 @@ export function ProjectionClient({
           </CardContent>
         </Card>
 
-        <Card className="overflow-hidden bg-[linear-gradient(160deg,rgba(57,255,20,0.06),rgba(14,19,24,0.92)_48%,rgba(251,191,36,0.05))]">
+        <Card className="overflow-hidden bg-[linear-gradient(160deg,var(--phosphor-tint),var(--surface-veil)_48%,var(--amber-tint-soft))]">
           <CardHeader>
             <div>
               <CardSubTag>READOUT_05</CardSubTag>
@@ -353,14 +353,14 @@ export function ProjectionClient({
                       ? "OPENING BALANCE"
                       : `PAYCHECK ${section.sourceDate?.slice(5)}`;
                     const rowClass = cn(
-                      "border-b border-[var(--border-raw)] last:border-0 transition-colors hover:bg-[rgba(0,229,255,0.08)]",
+                      "border-b border-[var(--border-raw)] last:border-0 transition-colors hover:bg-[var(--cyan-tint-hover)]",
                       "border-l-2",
                       section.isOpeningBalance ? "border-l-[var(--amber)]" : "border-l-[var(--mint-dim)]",
                       isWorst
-                        ? "bg-[rgba(239,68,68,0.18)] border-l-[var(--red)]"
+                        ? "bg-[var(--red-glow)] border-l-[var(--red)]"
                         : isPayday
-                          ? "bg-[rgba(57,255,20,0.085)]"
-                          : "bg-[rgba(0,229,255,0.018)]",
+                          ? "bg-[var(--phosphor-tint-row)]"
+                          : "bg-[var(--cyan-tint-zebra)]",
                     );
                     return (
                       <tr id={`d-${r.date}`} key={`${section.key}-${r.date}`} className={rowClass}>
@@ -448,7 +448,7 @@ function PaycheckSectionHeader({
   const title = section.isOpeningBalance ? "OPENING BALANCE BUFFER" : `PAYCHECK CYCLE ${index + 1}`;
 
   return (
-    <tr className="border-y border-[rgba(0,229,255,0.28)] bg-[linear-gradient(90deg,rgba(0,229,255,0.14),rgba(14,19,24,0.96)_48%,rgba(57,255,20,0.06))]">
+    <tr className="border-y border-[var(--cyan-tint-edge-hi)] bg-[linear-gradient(90deg,var(--cyan-tint-row),var(--surface-veil-strong)_48%,var(--phosphor-tint))]">
       <td colSpan={5} className="px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>

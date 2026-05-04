@@ -37,7 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="en"
-      className={`dark ${mono.variable} ${display.variable} ${ui.variable}`}
+      className={`${mono.variable} ${display.variable} ${ui.variable}`}
       suppressHydrationWarning
     >
       <body className="min-h-screen antialiased">

@@ -136,9 +136,132 @@
     /* Sharp by default per spec — radius is opt-in via --radius-chip */
     --radius: 0px;
     --radius-chip: 2px;
+
+    /* Theme-driven decorations — body gradient + header glass.
+       Overridden in .light below; using CSS vars keeps them swappable. */
+    --bg-glow-1: rgba(0, 229, 255, 0.06);
+    --bg-glow-2: rgba(57, 255, 20, 0.025);
+    --bg-grid:   rgba(31, 43, 56, 0.35);
+    --header-glass: rgba(10, 14, 12, 0.85);
+
+    /* Tint palette — used by decorative gradients (projection cards, hero
+       banner, sticky table rows). Light theme remaps each so the gradients
+       read correctly on paper. */
+    --surface-veil:        rgba(14, 19, 24, 0.92);  /* deep panel veil */
+    --surface-veil-strong: rgba(14, 19, 24, 0.96);
+    --cyan-tint-soft:      rgba(0, 229, 255, 0.06);
+    --cyan-tint:           rgba(0, 229, 255, 0.10);
+    --cyan-tint-row:       rgba(0, 229, 255, 0.14);
+    --cyan-tint-edge:      rgba(0, 229, 255, 0.24);
+    --cyan-tint-edge-hi:   rgba(0, 229, 255, 0.28);
+    --cyan-tint-hover:     rgba(0, 229, 255, 0.08);
+    --cyan-tint-zebra:     rgba(0, 229, 255, 0.018);
+    --phosphor-tint-soft:  rgba(57, 255, 20, 0.05);
+    --phosphor-tint:       rgba(57, 255, 20, 0.06);
+    --phosphor-tint-row:   rgba(57, 255, 20, 0.085);
+    --amber-tint-soft:     rgba(251, 191, 36, 0.05);
   }
 
-  .dark { color-scheme: dark; }
+  .dark, [data-theme="dark"] { color-scheme: dark; }
+
+  /* ── LIGHT THEME ────────────────────────────────────────────────────────
+     Field-manual paper base, navy-teal primary, forest accent. Same token
+     names as the dark default — every component using var(--bg-*) /
+     var(--text-*) / var(--mint) flips automatically.
+
+     Both `.light` (next-themes class) and `[data-theme="light"]` (the
+     design-system selector) are accepted so the source-of-truth CSS in
+     `colors_and_type.css` works verbatim. */
+  .light, [data-theme="light"] {
+    color-scheme: light;
+
+    /* Backgrounds — cool field-manual paper */
+    --bg-0: #EEF1F5;
+    --bg-1: #E4E8EE;
+    --bg-2: #F6F8FA;
+    --bg-3: #FFFFFF;
+    --bg-card: #E4E8EE;
+    --bg-inset: #D8DCE4;
+
+    /* Primary — readable navy-teal */
+    --cyan: #007A99;
+    --cyan-bright: #009FC4;
+    --cyan-dim: #005C75;
+    --cyan-glow: rgba(0, 122, 153, 0.20);
+
+    /* Accent — forest phosphor */
+    --phosphor: #2A8C00;
+    --phosphor-dim: #1C6000;
+    --phosphor-glow: rgba(42, 140, 0, 0.18);
+
+    /* Olive — slightly deeper for light surfaces */
+    --olive: #5A6B3A;
+    --olive-dark: #3A4A22;
+
+    /* Status — print-safe mid-tones */
+    --amber: #B85C00;
+    --red: #C0002E;
+    --red-glow: rgba(192, 0, 46, 0.20);
+    --success: #007A3D;
+    --info: #1A5FCC;
+
+    /* Text — near-black → muted blue-grey */
+    --text-0: #111820;
+    --text-1: #3A4E62;
+    --text-2: #5A6E82;
+    --text-3: #7A8FA0;
+
+    /* Borders — visible against paper */
+    --border-raw: #B8C4D0;
+    --border-2:   #8A9BB0;
+    --border-dim: #D0D8E2;
+
+    /* shadcn HSL bridge — light remap */
+    --background: 215 27% 91%;
+    --foreground: 211 28% 9%;
+    --card: 215 17% 85%;
+    --card-foreground: 211 28% 9%;
+    --popover: 213 23% 97%;
+    --popover-foreground: 211 28% 9%;
+    --primary: 192 100% 30%;
+    --primary-foreground: 215 27% 91%;
+    --secondary: 219 16% 87%;
+    --secondary-foreground: 213 26% 31%;
+    --muted: 219 16% 87%;
+    --muted-foreground: 211 14% 56%;
+    --accent: 102 100% 27%;
+    --accent-foreground: 215 27% 91%;
+    --destructive: 346 100% 38%;
+    --destructive-foreground: 215 27% 91%;
+    --success: 150 100% 24%;
+    --warning: 30 100% 36%;
+    --border: 212 18% 77%;
+    --input: 212 18% 77%;
+    --ring: 192 100% 30%;
+
+    /* Decorations — softer paper wash, no neon halo */
+    --bg-glow-1: rgba(0, 122, 153, 0.06);
+    --bg-glow-2: rgba(42, 140, 0, 0.04);
+    --bg-grid:   rgba(58, 78, 98, 0.10);
+    --header-glass: rgba(246, 248, 250, 0.85);
+
+    /* Tint palette — light remap. Surface veils now lift the panel toward
+       paper instead of sinking it into pitch; accent tints use the deepened
+       primary/accent so washes still read against an off-white base. */
+    --surface-veil:        rgba(228, 232, 238, 0.92);
+    --surface-veil-strong: rgba(228, 232, 238, 0.96);
+    --cyan-tint-soft:      rgba(0, 122, 153, 0.08);
+    --cyan-tint:           rgba(0, 122, 153, 0.12);
+    --cyan-tint-row:       rgba(0, 122, 153, 0.14);
+    --cyan-tint-edge:      rgba(0, 122, 153, 0.30);
+    --cyan-tint-edge-hi:   rgba(0, 122, 153, 0.40);
+    --cyan-tint-hover:     rgba(0, 122, 153, 0.08);
+    --cyan-tint-zebra:     rgba(0, 122, 153, 0.025);
+    --phosphor-tint-soft:  rgba(42, 140, 0, 0.07);
+    --phosphor-tint:       rgba(42, 140, 0, 0.08);
+    --phosphor-tint-row:   rgba(42, 140, 0, 0.10);
+    --amber-tint-soft:     rgba(184, 92, 0, 0.07);
+  }
 
   * {
     border-color: hsl(var(--border));
@@ -155,19 +278,19 @@
   body {
     background-color: var(--bg-0);
     background-image:
-      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(0, 229, 255, 0.06), transparent 60%),
-      radial-gradient(ellipse 60% 40% at 100% 100%, rgba(57, 255, 20, 0.025), transparent 60%);
+      radial-gradient(ellipse 80% 50% at 50% -10%, var(--bg-glow-1), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 100% 100%, var(--bg-glow-2), transparent 60%);
     background-attachment: fixed;
   }
 
-  /* Subtle tactical grid — uses border color so it matches panel edges. */
+  /* Subtle tactical grid — uses theme grid color so it matches panel edges. */
   body::before {
     content: '';
     position: fixed;
     inset: 0;
     background-image:
-      linear-gradient(rgba(31, 43, 56, 0.35) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(31, 43, 56, 0.35) 1px, transparent 1px);
+      linear-gradient(var(--bg-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
     background-size: 48px 48px;
     pointer-events: none;
     z-index: 0;
