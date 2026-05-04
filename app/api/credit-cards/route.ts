@@ -35,6 +35,7 @@ export async function POST(req: Request) {
     statementCycleAnchorDate: data.statementCycleMode === "interval_days" ? data.statementCycleAnchorDate! : null,
     statementCycleIntervalDays: data.statementCycleIntervalDays,
     dueDay: data.dueDay,
+    currentBalanceCents: data.currentBalanceCents ?? null,
     autoPay: data.autoPay,
     notes: data.notes ?? null,
   });

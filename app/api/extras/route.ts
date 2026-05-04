@@ -20,6 +20,7 @@ export async function POST(req: Request) {
       description: data.description,
       amountCents: data.amountCents,
       category: data.category,
+      paidViaCardId: data.paidViaCardId ?? null,
       notes: data.notes ?? null,
     });
     return NextResponse.json({ extra: created });

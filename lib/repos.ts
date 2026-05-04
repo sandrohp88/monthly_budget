@@ -5,6 +5,7 @@ import {
   billPaymentOverrides,
   categories,
   creditCards,
+  creditCardPaymentOverrides,
   creditCardPromos,
   creditCardStatements,
   oneTimeExpenses,
@@ -18,12 +19,14 @@ import {
   type BillPaymentOverrideRow,
   type CategoryRow,
   type CreditCardPromoRow,
+  type CreditCardPaymentOverrideRow,
   type CreditCardRow,
   type CreditCardStatementRow,
   type NewBill,
   type NewBillPaymentOverride,
   type NewCategory,
   type NewCreditCard,
+  type NewCreditCardPaymentOverride,
   type NewCreditCardPromo,
   type NewCreditCardStatement,
   type NewOneTimeExpense,
@@ -355,6 +358,82 @@ export async function deleteBillPaymentOverride(
         eq(billPaymentOverrides.userId, userId),
         eq(billPaymentOverrides.billId, billId),
         eq(billPaymentOverrides.dueDate, dueDate),
+      ),
+    )
+    .run();
+}
+
+export async function listCreditCardPaymentOverridesForUser(
+  userId: string,
+): Promise<CreditCardPaymentOverrideRow[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(creditCardPaymentOverrides)
+    .where(eq(creditCardPaymentOverrides.userId, userId))
+    .orderBy(asc(creditCardPaymentOverrides.dueDate))
+    .all();
+}
+
+export async function upsertCreditCardPaymentOverride(
+  userId: string,
+  cardId: string,
+  data: Omit<NewCreditCardPaymentOverride, "id" | "userId" | "cardId" | "createdAt" | "updatedAt">,
+): Promise<CreditCardPaymentOverrideRow | undefined> {
+  const db = getDb();
+  const card = await getCreditCard(userId, cardId);
+  if (!card) return undefined;
+
+  const existing = await db
+    .select()
+    .from(creditCardPaymentOverrides)
+    .where(
+      and(
+        eq(creditCardPaymentOverrides.userId, userId),
+        eq(creditCardPaymentOverrides.cardId, cardId),
+        eq(creditCardPaymentOverrides.dueDate, data.dueDate),
+      ),
+    )
+    .get();
+
+  if (existing) {
+    await db
+      .update(creditCardPaymentOverrides)
+      .set({ amountCents: data.amountCents, notes: data.notes ?? null, updatedAt: Date.now() })
+      .where(eq(creditCardPaymentOverrides.id, existing.id))
+      .run();
+    return db
+      .select()
+      .from(creditCardPaymentOverrides)
+      .where(eq(creditCardPaymentOverrides.id, existing.id))
+      .get();
+  }
+
+  const id = newId();
+  await db
+    .insert(creditCardPaymentOverrides)
+    .values({ id, userId, cardId, ...data, notes: data.notes ?? null })
+    .run();
+  return db
+    .select()
+    .from(creditCardPaymentOverrides)
+    .where(eq(creditCardPaymentOverrides.id, id))
+    .get();
+}
+
+export async function deleteCreditCardPaymentOverride(
+  userId: string,
+  cardId: string,
+  dueDate: string,
+): Promise<void> {
+  const db = getDb();
+  await db
+    .delete(creditCardPaymentOverrides)
+    .where(
+      and(
+        eq(creditCardPaymentOverrides.userId, userId),
+        eq(creditCardPaymentOverrides.cardId, cardId),
+        eq(creditCardPaymentOverrides.dueDate, dueDate),
       ),
     )
     .run();
@@ -1213,10 +1292,15 @@ export async function getPrimaryLinkedBalance(userId: string): Promise<number | 
 
 export async function exportAll(userId: string) {
   const db = getDb();
-  const [s, b, bo, p, e, c, cc, ccs] = await Promise.all([
+  const [s, b, bo, cpo, p, e, c, cc, ccs] = await Promise.all([
     getSettings(userId),
     db.select().from(bills).where(eq(bills.userId, userId)).all(),
     db.select().from(billPaymentOverrides).where(eq(billPaymentOverrides.userId, userId)).all(),
+    db
+      .select()
+      .from(creditCardPaymentOverrides)
+      .where(eq(creditCardPaymentOverrides.userId, userId))
+      .all(),
     db.select().from(paychecks).where(eq(paychecks.userId, userId)).orderBy(desc(paychecks.payDate)).all(),
     db.select().from(oneTimeExpenses).where(eq(oneTimeExpenses.userId, userId)).all(),
     db.select().from(categories).where(eq(categories.userId, userId)).all(),
@@ -1229,6 +1313,7 @@ export async function exportAll(userId: string) {
     settings: s,
     bills: b,
     billPaymentOverrides: bo,
+    creditCardPaymentOverrides: cpo,
     paychecks: p,
     extras: e,
     categories: c,
@@ -1242,12 +1327,17 @@ export async function importAll(
   payload: {
     bills?: unknown[];
     billPaymentOverrides?: unknown[];
+    creditCardPaymentOverrides?: unknown[];
     paychecks?: unknown[];
     extras?: unknown[];
     categories?: unknown[];
   },
 ): Promise<void> {
   const db = getDb();
+  await db
+    .delete(creditCardPaymentOverrides)
+    .where(eq(creditCardPaymentOverrides.userId, userId))
+    .run();
   await db.delete(bills).where(eq(bills.userId, userId)).run();
   await db.delete(paychecks).where(eq(paychecks.userId, userId)).run();
   await db.delete(oneTimeExpenses).where(eq(oneTimeExpenses.userId, userId)).run();
@@ -1317,6 +1407,19 @@ export async function importAll(
       notes: o.notes ?? null,
     }).run();
   }
+  for (const o of (payload.creditCardPaymentOverrides ?? []) as Array<
+    Partial<CreditCardPaymentOverrideRow>
+  >) {
+    if (!o.cardId || !o.dueDate || typeof o.amountCents !== "number") continue;
+    await db.insert(creditCardPaymentOverrides).values({
+      id: o.id ?? newId(),
+      userId,
+      cardId: o.cardId,
+      dueDate: o.dueDate,
+      amountCents: o.amountCents,
+      notes: o.notes ?? null,
+    }).run();
+  }
   for (const p of (payload.paychecks ?? []) as Array<Partial<PaycheckRow>>) {
     if (!p.payDate || typeof p.amountCents !== "number") continue;
     await db.insert(paychecks).values({
@@ -1338,6 +1441,7 @@ export async function importAll(
       description: e.description,
       amountCents: e.amountCents,
       category: e.category ?? "Other",
+      paidViaCardId: e.paidViaCardId ?? null,
       notes: e.notes ?? null,
     }).run();
   }

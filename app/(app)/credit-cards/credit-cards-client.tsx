@@ -123,7 +123,7 @@ export function CreditCardsClient({
   const totalExpectedThisCycle = cards
     .filter((c) => c.card.isActive)
     .reduce((sum, c) => sum + (c.estimate?.totalCents ?? 0), 0);
-  const totalLinkedBills = cards
+  const totalLinkedCardItems = cards
     .filter((c) => c.card.isActive)
     .reduce((sum, c) => sum + c.linkedBillCount, 0);
 
@@ -195,9 +195,9 @@ export function CreditCardsClient({
             )
           }
           delta={
-            totalLinkedBills > 0
-              ? `${totalLinkedBills} linked bill${totalLinkedBills === 1 ? "" : "s"}`
-              : "no bills linked yet"
+            totalLinkedCardItems > 0
+              ? `${totalLinkedCardItems} linked item${totalLinkedCardItems === 1 ? "" : "s"}`
+              : "no linked card spend yet"
           }
         />
         <Tile
@@ -493,6 +493,17 @@ function CreditCardTile({
         </div>
       </div>
 
+      {card.currentBalanceCents != null ? (
+        <div className="mb-3 flex items-center justify-between rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2">
+          <span className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-3)]">
+            CURRENT BALANCE
+          </span>
+          <span className="text-[14px] font-bold tabular text-[var(--text-0)]">
+            <Money cents={card.currentBalanceCents} />
+          </span>
+        </div>
+      ) : null}
+
       {/* current statement state */}
       <div className="my-4 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-3">
         {current == null ? (
@@ -589,7 +600,7 @@ function CreditCardTile({
         )}
       </div>
 
-      {/* expected charges this cycle (from linked bills) */}
+      {/* expected charges this cycle (from linked bills and one-time purchases) */}
       {linkedBillCount > 0 && estimate ? (
         <div className="mb-3 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3">
           <div className="mb-1.5 flex items-center justify-between text-[9px] uppercase tracking-[0.18em] text-[var(--text-3)]">
@@ -605,7 +616,7 @@ function CreditCardTile({
               <Money cents={estimate.totalCents} />
             </span>
             <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
-              {linkedBillCount} BILL{linkedBillCount === 1 ? "" : "S"} LINKED
+              {linkedBillCount} ITEM{linkedBillCount === 1 ? "" : "S"} LINKED
             </span>
           </div>
           {estimate.charges.length > 0 ? (
@@ -619,7 +630,7 @@ function CreditCardTile({
                     .slice()
                     .sort((a, b) => a.date.localeCompare(b.date))
                     .map((c) => (
-                      <tr key={`${c.billId}-${c.date}`} className="border-b border-[var(--border-raw)] last:border-0">
+                      <tr key={`${c.sourceType}-${c.sourceId}-${c.date}`} className="border-b border-[var(--border-raw)] last:border-0">
                         <td className="py-1 pr-2 text-[var(--text-2)] uppercase tracking-tight">
                           <DateLabel iso={c.date} format="short" />
                         </td>
@@ -636,7 +647,7 @@ function CreditCardTile({
             </details>
           ) : (
             <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-              No bill due-dates fall in this cycle window
+              No linked spend falls in this cycle window
             </div>
           )}
           {current && isOpen ? (
@@ -732,6 +743,12 @@ function CardDialog({
     card?.statementCycleIntervalDays ?? 31,
   );
   const [dueDay, setDueDay] = React.useState(card?.dueDay ?? 26);
+  const [currentBalanceCents, setCurrentBalance] = React.useState<number>(
+    card?.currentBalanceCents ?? 0,
+  );
+  const [trackCurrentBalance, setTrackCurrentBalance] = React.useState(
+    card?.currentBalanceCents != null,
+  );
   const [autoPay, setAutoPay] = React.useState(card?.autoPay ?? false);
   const [notes, setNotes] = React.useState(card?.notes ?? "");
   const [saving, setSaving] = React.useState(false);
@@ -751,6 +768,7 @@ function CardDialog({
             statementCycleMode === "interval_days" ? statementCycleAnchorDate : null,
           statementCycleIntervalDays,
           dueDay,
+          currentBalanceCents: trackCurrentBalance ? currentBalanceCents : null,
           autoPay,
           notes: notes.trim() || null,
         }),
@@ -867,6 +885,21 @@ function CardDialog({
             <Label>AUTOPAY</Label>
             <Switch checked={autoPay} onCheckedChange={setAutoPay} />
           </label>
+          <label className="flex cursor-pointer items-center justify-between border-y border-[var(--border-raw)] py-3">
+            <div>
+              <Label>TRACK CURRENT BALANCE</Label>
+              <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                Used to project the next card payment before a statement exists
+              </div>
+            </div>
+            <Switch checked={trackCurrentBalance} onCheckedChange={setTrackCurrentBalance} />
+          </label>
+          {trackCurrentBalance ? (
+            <div className="space-y-1.5">
+              <Label>CURRENT BALANCE</Label>
+              <MoneyInput valueCents={currentBalanceCents} onChangeCents={setCurrentBalance} />
+            </div>
+          ) : null}
           <div className="space-y-1.5">
             <Label htmlFor="cc-notes">NOTES</Label>
             <Input id="cc-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />

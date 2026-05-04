@@ -42,6 +42,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
       ? { statementCycleIntervalDays: data.statementCycleIntervalDays }
       : {}),
     ...(data.dueDay !== undefined ? { dueDay: data.dueDay } : {}),
+    ...(data.currentBalanceCents !== undefined
+      ? { currentBalanceCents: data.currentBalanceCents }
+      : {}),
     ...(data.autoPay !== undefined ? { autoPay: data.autoPay } : {}),
     ...(data.notes !== undefined ? { notes: data.notes ?? null } : {}),
     ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),

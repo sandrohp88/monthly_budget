@@ -137,6 +137,7 @@ export const oneTimeExpenses = sqliteTable(
     description: text("description").notNull(),
     amountCents: integer("amount_cents").notNull(),
     category: text("category").notNull(),
+    paidViaCardId: text("paid_via_card_id"),
     notes: text("notes"),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
   },
@@ -167,6 +168,7 @@ export const creditCards = sqliteTable(
     statementCycleAnchorDate: text("statement_cycle_anchor_date"),
     statementCycleIntervalDays: integer("statement_cycle_interval_days").notNull().default(31),
     dueDay: integer("due_day").notNull(),
+    currentBalanceCents: integer("current_balance_cents"),
     autoPay: integer("auto_pay", { mode: "boolean" }).notNull().default(false),
     notes: text("notes"),
     isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
@@ -204,6 +206,36 @@ export const creditCardStatements = sqliteTable(
   (t) => ({
     cardDue: index("cc_statements_card_due_idx").on(t.cardId, t.dueDate),
     cardDateUnique: uniqueIndex("cc_statements_card_date_unique_idx").on(t.cardId, t.statementDate),
+  }),
+);
+
+/**
+ * Per-cycle planned payments for Plaid-linked credit-card open-cycle estimates.
+ * Keyed by card + dueDate because the estimate is generated from live account
+ * data and projected onto the next card payment due date.
+ */
+export const creditCardPaymentOverrides = sqliteTable(
+  "credit_card_payment_overrides",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    cardId: text("card_id")
+      .notNull()
+      .references(() => creditCards.id, { onDelete: "cascade" }),
+    dueDate: text("due_date").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    notes: text("notes"),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    userDate: index("cc_payment_overrides_user_date_idx").on(t.userId, t.dueDate),
+    cardDateUnique: uniqueIndex("cc_payment_overrides_card_date_unique_idx").on(
+      t.cardId,
+      t.dueDate,
+    ),
   }),
 );
 
@@ -274,6 +306,7 @@ export type OneTimeExpenseRow = typeof oneTimeExpenses.$inferSelect;
 export type CategoryRow = typeof categories.$inferSelect;
 export type CreditCardRow = typeof creditCards.$inferSelect;
 export type CreditCardStatementRow = typeof creditCardStatements.$inferSelect;
+export type CreditCardPaymentOverrideRow = typeof creditCardPaymentOverrides.$inferSelect;
 export type CreditCardPromoRow = typeof creditCardPromos.$inferSelect;
 
 export type NewUser = typeof users.$inferInsert;
@@ -285,6 +318,7 @@ export type NewOneTimeExpense = typeof oneTimeExpenses.$inferInsert;
 export type NewCategory = typeof categories.$inferInsert;
 export type NewCreditCard = typeof creditCards.$inferInsert;
 export type NewCreditCardStatement = typeof creditCardStatements.$inferInsert;
+export type NewCreditCardPaymentOverride = typeof creditCardPaymentOverrides.$inferInsert;
 export type NewCreditCardPromo = typeof creditCardPromos.$inferInsert;
 
 // ── Plaid ─────────────────────────────────────────────────────────────────────

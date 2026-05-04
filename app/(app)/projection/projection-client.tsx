@@ -35,7 +35,7 @@ const FILTERS: ReadonlyArray<{ key: FilterKey; label: string }> = [
 ];
 
 const NEGATIVE_BALANCE_TOOLTIP =
-  "Projected balance is negative after this day's income and expenses. The bills due by this row exceed the cash available to pay them.";
+  "Projected balance is negative after this day's income and expenses. The payments due by this row exceed the cash available to pay them.";
 
 /** Last day of the month containing isoDate, in YYYY-MM-DD. */
 function endOfMonth(isoDate: string): string {
@@ -84,9 +84,10 @@ type LedgerSection = {
   isOpeningBalance: boolean;
 };
 
-type BillAdjustment = {
-  billId: string;
-  billName: string;
+type PaymentAdjustment = {
+  targetType: "bill" | "creditCardPayment";
+  targetId: string;
+  targetName: string;
   dueDate: string;
   amountCents: number;
   originalAmountCents: number;
@@ -162,7 +163,7 @@ export function ProjectionClient({
 }) {
   const router = useRouter();
   const [filter, setFilter] = React.useState<FilterKey>("ALL");
-  const [adjustingBill, setAdjustingBill] = React.useState<BillAdjustment | null>(null);
+  const [adjustingPayment, setAdjustingPayment] = React.useState<PaymentAdjustment | null>(null);
   const [savingAdjustment, setSavingAdjustment] = React.useState(false);
 
   const range = React.useMemo(
@@ -183,16 +184,22 @@ export function ProjectionClient({
   );
   const ledgerSections = React.useMemo(() => buildLedgerSections(eventRows), [eventRows]);
 
-  const saveBillAdjustment = async (adjustment: BillAdjustment, amountCents: number) => {
+  const overridePath = (adjustment: PaymentAdjustment) =>
+    adjustment.targetType === "bill"
+      ? `/api/bills/${adjustment.targetId}/payment-overrides`
+      : `/api/credit-cards/${adjustment.targetId}/payment-overrides`;
+
+  const savePaymentAdjustment = async (adjustment: PaymentAdjustment, amountCents: number) => {
     setSavingAdjustment(true);
     try {
       const qs = new URLSearchParams({ dueDate: adjustment.dueDate });
+      const path = overridePath(adjustment);
       const res =
         amountCents === adjustment.originalAmountCents
-          ? await fetch(`/api/bills/${adjustment.billId}/payment-overrides?${qs}`, {
+          ? await fetch(`${path}?${qs}`, {
               method: "DELETE",
             })
-          : await fetch(`/api/bills/${adjustment.billId}/payment-overrides`, {
+          : await fetch(path, {
               method: "PUT",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({ dueDate: adjustment.dueDate, amountCents }),
@@ -204,7 +211,7 @@ export function ProjectionClient({
           ? "Planned payment reset"
           : "Planned payment updated",
       );
-      setAdjustingBill(null);
+      setAdjustingPayment(null);
       router.refresh();
     } catch (err) {
       toast.error((err as Error).message);
@@ -213,17 +220,17 @@ export function ProjectionClient({
     }
   };
 
-  const resetBillAdjustment = async (adjustment: BillAdjustment) => {
+  const resetPaymentAdjustment = async (adjustment: PaymentAdjustment) => {
     setSavingAdjustment(true);
     try {
       const qs = new URLSearchParams({ dueDate: adjustment.dueDate });
-      const res = await fetch(`/api/bills/${adjustment.billId}/payment-overrides?${qs}`, {
+      const res = await fetch(`${overridePath(adjustment)}?${qs}`, {
         method: "DELETE",
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "reset failed");
       toast.success("Planned payment reset");
-      setAdjustingBill(null);
+      setAdjustingPayment(null);
       router.refresh();
     } catch (err) {
       toast.error((err as Error).message);
@@ -332,7 +339,7 @@ export function ProjectionClient({
                             ) : null}
                             <ProjectionEventList
                               row={r}
-                              onAdjustBill={setAdjustingBill}
+                              onAdjustPayment={setAdjustingPayment}
                             />
                           </div>
                         </td>
@@ -370,13 +377,13 @@ export function ProjectionClient({
             </tbody>
           </table>
       </div>
-      {adjustingBill ? (
-        <BillPaymentAdjustmentDialog
-          adjustment={adjustingBill}
+      {adjustingPayment ? (
+        <PaymentAdjustmentDialog
+          adjustment={adjustingPayment}
           saving={savingAdjustment}
-          onClose={() => setAdjustingBill(null)}
-          onSave={saveBillAdjustment}
-          onReset={resetBillAdjustment}
+          onClose={() => setAdjustingPayment(null)}
+          onSave={savePaymentAdjustment}
+          onReset={resetPaymentAdjustment}
         />
       ) : null}
     </div>
@@ -400,33 +407,41 @@ function NegativeBalanceMarker() {
 
 function ProjectionEventList({
   row,
-  onAdjustBill,
+  onAdjustPayment,
 }: {
   row: ProjectionRow;
-  onAdjustBill: (adjustment: BillAdjustment) => void;
+  onAdjustPayment: (adjustment: PaymentAdjustment) => void;
 }) {
   return (
     <>
       {row.events.map((event, index) => {
-        if (event.kind !== "bill" || !event.sourceId || event.originalAmountCents == null) {
+        const targetType =
+          event.kind === "bill" && event.sourceType === "bill"
+            ? "bill"
+            : event.kind === "extra" && event.sourceType === "creditCardPayment"
+              ? "creditCardPayment"
+              : null;
+        if (!targetType || !event.sourceId || event.originalAmountCents == null) {
           return <span key={`${event.kind}-${event.label}-${index}`}>{event.label}</span>;
         }
 
         const adjusted = event.amountCents !== event.originalAmountCents;
+        const baseLabel = targetType === "bill" ? "BILL" : "CARD EST";
         return (
           <span
             key={`${event.sourceId}-${row.date}-${index}`}
             className="inline-flex flex-wrap items-center gap-1.5"
           >
             <StatusPill variant={adjusted ? "amber" : "off"}>
-              {adjusted ? "PLANNED" : "BILL"}
+              {adjusted ? "PLANNED" : baseLabel}
             </StatusPill>
             <button
               type="button"
               onClick={() =>
-                onAdjustBill({
-                  billId: event.sourceId!,
-                  billName: event.label,
+                onAdjustPayment({
+                  targetType,
+                  targetId: event.sourceId!,
+                  targetName: event.label,
                   dueDate: row.date,
                   amountCents: event.amountCents,
                   originalAmountCents: event.originalAmountCents!,
@@ -448,21 +463,23 @@ function ProjectionEventList({
   );
 }
 
-function BillPaymentAdjustmentDialog({
+function PaymentAdjustmentDialog({
   adjustment,
   saving,
   onClose,
   onSave,
   onReset,
 }: {
-  adjustment: BillAdjustment;
+  adjustment: PaymentAdjustment;
   saving: boolean;
   onClose: () => void;
-  onSave: (adjustment: BillAdjustment, amountCents: number) => Promise<void>;
-  onReset: (adjustment: BillAdjustment) => Promise<void>;
+  onSave: (adjustment: PaymentAdjustment, amountCents: number) => Promise<void>;
+  onReset: (adjustment: PaymentAdjustment) => Promise<void>;
 }) {
   const [amountCents, setAmountCents] = React.useState(adjustment.amountCents);
   const adjusted = adjustment.amountCents !== adjustment.originalAmountCents;
+  const baselineLabel =
+    adjustment.targetType === "bill" ? "Normal bill" : "Current estimate";
 
   React.useEffect(() => {
     setAmountCents(adjustment.amountCents);
@@ -472,8 +489,8 @@ function BillPaymentAdjustmentDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>BILL_PAYMENT_PLAN</CardSubTag>
-          <DialogTitle>{adjustment.billName.toUpperCase()}</DialogTitle>
+          <CardSubTag>PAYMENT_PLAN</CardSubTag>
+          <DialogTitle>{adjustment.targetName.toUpperCase()}</DialogTitle>
         </DialogHeader>
         <form
           className="space-y-4 pt-2"
@@ -490,7 +507,7 @@ function BillPaymentAdjustmentDialog({
               </span>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span>Normal bill</span>
+              <span>{baselineLabel}</span>
               <span className="text-[var(--text-0)]">
                 <Money cents={adjustment.originalAmountCents} />
               </span>
