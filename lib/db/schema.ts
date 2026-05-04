@@ -117,7 +117,8 @@ export const oneTimeExpenses = sqliteTable(
 
 /**
  * Credit cards have a billing cycle with TWO dates that matter:
- *   - statementDay: day of month the statement closes (everything before is on this bill)
+ *   - statementDay: day of month the statement closes for calendar-day cards
+ *   - statementCycleMode/AnchorDate/IntervalDays: rolling statement cycle cards
  *   - dueDay: day of month payment is due to avoid interest
  * Per-cycle data lives in credit_card_statements; the card row is persistent config.
  */
@@ -130,6 +131,11 @@ export const creditCards = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     statementDay: integer("statement_day").notNull(),
+    statementCycleMode: text("statement_cycle_mode", {
+      enum: ["calendar_day", "interval_days"],
+    }).notNull().default("calendar_day"),
+    statementCycleAnchorDate: text("statement_cycle_anchor_date"),
+    statementCycleIntervalDays: integer("statement_cycle_interval_days").notNull().default(31),
     dueDay: integer("due_day").notNull(),
     autoPay: integer("auto_pay", { mode: "boolean" }).notNull().default(false),
     notes: text("notes"),

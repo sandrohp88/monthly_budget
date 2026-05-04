@@ -233,7 +233,7 @@ export async function syncCreditCardLiabilitiesForItem(
       const stmtDay = stmtDate ? Number(stmtDate.split("-")[2]) : null;
       const dueDay = dueDate ? Number(dueDate.split("-")[2]) : null;
       if (stmtDay && dueDay && stmtDay >= 1 && stmtDay <= 31 && dueDay >= 1 && dueDay <= 31) {
-        await updateCardCycleDays(card.id, stmtDay, dueDay);
+        await updateCardCycleDays(card.id, stmtDay, dueDay, stmtDate ?? undefined);
         cardsUpdated++;
       }
 

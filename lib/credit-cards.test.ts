@@ -8,7 +8,9 @@ import {
   estimateCurrentCycle,
   isStatementOpen,
   nextDayOfMonthOnOrAfter,
+  nextStatementDateOnOrAfter,
   paidWithoutInterest,
+  previousStatementDateOnOrBefore,
   projectPromoSchedule,
   promoMonthlyChunkAt,
   promoWhatIf,
@@ -289,6 +291,23 @@ describe("currentCycleWindow", () => {
     expect(win.start).toBe("2025-06-16");
     expect(win.end).toBe("2025-07-15");
   });
+
+  it("supports a 31-day statement cycle anchored to a known statement date", () => {
+    const card = {
+      statementDay: 15,
+      statementCycleMode: "interval_days",
+      statementCycleAnchorDate: "2025-01-15",
+      statementCycleIntervalDays: 31,
+    } as const;
+
+    expect(nextStatementDateOnOrAfter("2025-02-10", card)).toBe("2025-02-15");
+    expect(nextStatementDateOnOrAfter("2025-02-16", card)).toBe("2025-03-18");
+    expect(previousStatementDateOnOrBefore("2025-02-16", card)).toBe("2025-02-15");
+    expect(currentCycleWindow(card, "2025-03-10")).toEqual({
+      start: "2025-02-16",
+      end: "2025-03-18",
+    });
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -361,6 +380,24 @@ describe("estimateCurrentCycle", () => {
     expect(out.window).toEqual({ start: "2024-12-16", end: "2025-01-15" });
     expect(out.charges).toHaveLength(1);
     expect(out.charges[0]?.date).toBe("2025-01-05");
+  });
+
+  it("estimates linked bills inside an interval-day statement cycle", () => {
+    const out = estimateCurrentCycle(
+      {
+        statementDay: 15,
+        statementCycleMode: "interval_days",
+        statementCycleAnchorDate: "2025-01-15",
+        statementCycleIntervalDays: 31,
+        dueDay: 10,
+      },
+      [bill({ name: "Internet", dueDay: 5, amountCents: 50_00 })],
+      "2025-03-10",
+    );
+
+    expect(out.window).toEqual({ start: "2025-02-16", end: "2025-03-18" });
+    expect(out.charges).toHaveLength(1);
+    expect(out.charges[0]?.date).toBe("2025-03-05");
   });
 
   it("preserves bill id even when names collide (first-match attribution)", () => {

@@ -95,17 +95,32 @@ export const categoryCreateSchema = z.object({
   kind: z.enum(["expense", "income"]).default("expense"),
 });
 
-export const creditCardCreateSchema = z.object({
+const creditCardBaseSchema = z.object({
   name: z.string().min(1).max(80),
   statementDay: z.number().int().min(1).max(31),
+  statementCycleMode: z.enum(["calendar_day", "interval_days"]).default("calendar_day"),
+  statementCycleAnchorDate: isoDate.nullable().optional(),
+  statementCycleIntervalDays: z.number().int().min(1).max(366).default(31),
   dueDay: z.number().int().min(1).max(31),
   autoPay: z.boolean().default(false),
   notes: z.string().max(500).nullable().optional(),
 });
 
-export const creditCardUpdateSchema = creditCardCreateSchema.partial().extend({
-  isActive: z.boolean().optional(),
+export const creditCardCreateSchema = creditCardBaseSchema.superRefine((v, ctx) => {
+  if (v.statementCycleMode === "interval_days" && !v.statementCycleAnchorDate) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["statementCycleAnchorDate"],
+      message: "Anchor date is required for interval cycles",
+    });
+  }
 });
+
+export const creditCardUpdateSchema = creditCardBaseSchema
+  .partial()
+  .extend({
+    isActive: z.boolean().optional(),
+  });
 
 export const promoCreateSchema = z
   .object({

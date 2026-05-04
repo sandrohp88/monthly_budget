@@ -529,7 +529,10 @@ function AccountRow({
                     {link.card.name}
                   </div>
                   <div className="mt-0.5 text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">
-                    STMT DAY {link.card.statementDay} · DUE DAY {link.card.dueDay}
+                    {link.card.statementCycleMode === "interval_days"
+                      ? `${link.card.statementCycleIntervalDays}D CYCLE`
+                      : `STMT DAY ${link.card.statementDay}`}{" "}
+                    · DUE DAY {link.card.dueDay}
                     {latestStatement && (
                       <>
                         {" · NEXT DUE "}
