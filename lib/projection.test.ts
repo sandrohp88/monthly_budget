@@ -4,6 +4,7 @@ import {
   describeEvents,
   findWorstDay,
   generatePaychecksFromSettings,
+  resolveProjectionStartDate,
   __test__,
   type Bill,
   type ProjectionInput,
@@ -19,6 +20,44 @@ const baseInput = (): ProjectionInput => ({
 });
 
 describe("projection engine", () => {
+  describe("resolveProjectionStartDate", () => {
+    it("starts at today when a linked account supplies the live starting balance", () => {
+      expect(
+        resolveProjectionStartDate({
+          firstPaydayDate: "2026-04-30",
+          today: "2026-05-05",
+          usesLinkedStartingBalance: true,
+        }),
+      ).toBe("2026-05-05");
+
+      expect(
+        resolveProjectionStartDate({
+          firstPaydayDate: "2026-05-08",
+          today: "2026-05-05",
+          usesLinkedStartingBalance: true,
+        }),
+      ).toBe("2026-05-05");
+    });
+
+    it("preserves the historical manual-balance projection window", () => {
+      expect(
+        resolveProjectionStartDate({
+          firstPaydayDate: "2026-04-30",
+          today: "2026-05-05",
+          usesLinkedStartingBalance: false,
+        }),
+      ).toBe("2026-04-30");
+
+      expect(
+        resolveProjectionStartDate({
+          firstPaydayDate: "2026-05-08",
+          today: "2026-05-05",
+          usesLinkedStartingBalance: false,
+        }),
+      ).toBe("2026-05-01");
+    });
+  });
+
   it("empty inputs carry the starting balance forward unchanged", () => {
     const input: ProjectionInput = {
       ...baseInput(),

@@ -102,6 +102,15 @@ function formatIsoDate(ts: number): string {
   return `${y}-${mo}-${da}`;
 }
 
+export function resolveProjectionStartDate(opts: {
+  firstPaydayDate: string;
+  today: string;
+  usesLinkedStartingBalance: boolean;
+}): string {
+  if (opts.usesLinkedStartingBalance) return opts.today;
+  return opts.firstPaydayDate < opts.today ? opts.firstPaydayDate : `${opts.today.slice(0, 7)}-01`;
+}
+
 /** Days in the given 1-indexed month of `year` (handles leap years). */
 function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
