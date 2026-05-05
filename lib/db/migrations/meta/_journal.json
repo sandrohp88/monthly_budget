@@ -106,6 +106,13 @@
       "when": 1778710000000,
       "tag": "0014_add_promo_payment_schedule",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1778790000000,
+      "tag": "0015_classify_draft_kind",
+      "breakpoints": true
     }
   ]
 }
