@@ -726,6 +726,36 @@ describe("repos / plaid drafts", () => {
     expect((await listPlaidDrafts(userId, "all")).map((d) => d.id).sort()).toEqual(["a", "p"]);
   });
 
+  it("listPlaidDrafts excludes drafts from inactive Plaid items", async () => {
+    const { userId, accountId } = await setup();
+    const inactiveItem = await createPlaidItem(userId, {
+      institutionId: "ins_old", institutionName: "Old",
+      accessTokenEnc: "00", accessTokenIv: "00", accessTokenTag: "00",
+      cursor: null, lastSyncedAt: null, isActive: false,
+    });
+    await upsertPlaidAccount({
+      id: "acct_old", itemId: inactiveItem.id, userId, name: "Old Checking",
+      mask: "9999", type: "depository", subtype: "checking",
+      balanceCents: 0, updatedAt: Date.now(),
+    });
+
+    await upsertPlaidDraft({
+      id: "active", userId, accountId, date: "2025-04-02",
+      description: "Active", amountCents: 200,
+      plaidCategory: null, merchantName: null, pending: false,
+      status: "approved", linkedExpenseId: null,
+    });
+    await upsertPlaidDraft({
+      id: "inactive", userId, accountId: "acct_old", date: "2025-04-03",
+      description: "Inactive", amountCents: 300,
+      plaidCategory: null, merchantName: null, pending: false,
+      status: "approved", linkedExpenseId: null,
+    });
+
+    expect((await listPlaidDrafts(userId, "approved")).map((d) => d.id)).toEqual(["active"]);
+    expect((await listPlaidDrafts(userId, "all")).map((d) => d.id)).toEqual(["active"]);
+  });
+
   it("can link an approved Plaid draft to a promo", async () => {
     const { userId, accountId } = await setup();
     await upsertPlaidDraft({
