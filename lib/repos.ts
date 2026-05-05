@@ -1307,11 +1307,26 @@ export async function listPlaidDrafts(
   status: "pending_review" | "approved" | "dismissed" | "all" = "pending_review",
 ): Promise<PlaidTransactionDraftRow[]> {
   const db = getDb();
+  const activeAccountIds = (
+    await db
+      .select({ id: plaidAccounts.id })
+      .from(plaidAccounts)
+      .innerJoin(plaidItems, eq(plaidAccounts.itemId, plaidItems.id))
+      .where(and(eq(plaidAccounts.userId, userId), eq(plaidItems.isActive, true)))
+      .all()
+  ).map((account) => account.id);
+  if (activeAccountIds.length === 0) return [];
+
   if (status === "all") {
     return db
       .select()
       .from(plaidTransactionDrafts)
-      .where(eq(plaidTransactionDrafts.userId, userId))
+      .where(
+        and(
+          eq(plaidTransactionDrafts.userId, userId),
+          inArray(plaidTransactionDrafts.accountId, activeAccountIds),
+        ),
+      )
       .orderBy(desc(plaidTransactionDrafts.date))
       .all();
   }
@@ -1322,6 +1337,7 @@ export async function listPlaidDrafts(
       and(
         eq(plaidTransactionDrafts.userId, userId),
         eq(plaidTransactionDrafts.status, status),
+        inArray(plaidTransactionDrafts.accountId, activeAccountIds),
       ),
     )
     .orderBy(desc(plaidTransactionDrafts.date))
