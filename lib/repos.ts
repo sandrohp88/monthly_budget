@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
   bills,
@@ -50,6 +50,7 @@ import {
 import { newId } from "./ids";
 import { hashPassword } from "./auth";
 import { promoMonthlyChunkAt } from "./credit-cards";
+import { log } from "./log";
 
 const DEFAULT_CATEGORIES: ReadonlyArray<{ name: string; color: string; kind: "expense" | "income" }> = [
   { name: "Housing", color: "#2563eb", kind: "expense" },
@@ -839,6 +840,30 @@ export async function archivePromo(userId: string, id: string): Promise<void> {
   await updatePromo(userId, id, { isActive: false });
 }
 
+/**
+ * Archive every still-active promo whose endDate has passed. The auto-decrement
+ * edge that normally clears promos only fires on unpaid→paid statement
+ * transitions, which never fire for issuers Plaid doesn't return payment data
+ * for (PayPal Credit being the canonical example). Without this sweep, expired
+ * promos sit at full `remainingAmountCents` forever and the projection treats
+ * them as a still-owed lump that never existed in reality.
+ */
+export async function archiveExpiredPromos(userId: string, todayIso: string): Promise<number> {
+  const db = getDb();
+  const result = await db
+    .update(creditCardPromos)
+    .set({ isActive: false, updatedAt: Date.now() })
+    .where(
+      and(
+        eq(creditCardPromos.userId, userId),
+        eq(creditCardPromos.isActive, true),
+        lt(creditCardPromos.endDate, todayIso),
+      ),
+    )
+    .run();
+  return result.changes;
+}
+
 // ── credit card promo payment schedule ──────────────────────────────────────
 
 export async function listPromoPayments(
@@ -1188,8 +1213,9 @@ export async function upsertCreditCardStatementByDate(
     statementBalanceCents: number;
     paidAmountCents?: number | null;
     paidDate?: string | null;
+    liveBalanceCents?: number | null;
   },
-): Promise<void> {
+): Promise<boolean> {
   const db = getDb();
   const existing = await db
     .select()
@@ -1201,6 +1227,29 @@ export async function upsertCreditCardStatementByDate(
       ),
     )
     .get();
+
+  if (data.statementBalanceCents === 0 && (data.liveBalanceCents ?? 0) > 0) {
+    const prior = await db
+      .select()
+      .from(creditCardStatements)
+      .where(
+        and(
+          eq(creditCardStatements.cardId, cardId),
+          lt(creditCardStatements.statementDate, data.statementDate),
+        ),
+      )
+      .orderBy(desc(creditCardStatements.statementDate))
+      .get();
+    const priorUnpaidCents = prior
+      ? Math.max(0, prior.statementBalanceCents - (prior.paidAmountCents ?? 0))
+      : 0;
+    if (priorUnpaidCents > 0) {
+      log.warn(
+        `plaid-liabilities: ignored $0 statement for card ${cardId} on ${data.statementDate}; prior unpaid carryover ${priorUnpaidCents} cents with live balance ${data.liveBalanceCents} cents`,
+      );
+      return false;
+    }
+  }
 
   if (!existing) {
     await db
@@ -1215,7 +1264,7 @@ export async function upsertCreditCardStatementByDate(
         paidDate: data.paidDate ?? null,
       })
       .run();
-    return;
+    return true;
   }
 
   // Don't clobber a manual paid record with Plaid-only data.
@@ -1231,6 +1280,7 @@ export async function upsertCreditCardStatementByDate(
     })
     .where(eq(creditCardStatements.id, existing.id))
     .run();
+  return true;
 }
 
 

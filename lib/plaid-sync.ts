@@ -3,6 +3,8 @@ import { CountryCode, Products } from "plaid";
 import { getPlaidClient } from "./plaid-client";
 import { decryptToken } from "./plaid-crypto";
 import {
+  archiveExpiredPromos,
+  getSettings,
   listCreditCards,
   listPlaidItems,
   listPlaidAccountsByItem,
@@ -19,6 +21,7 @@ import {
   updateCardCycleDays,
   upsertCreditCardStatementByDate,
 } from "./repos";
+import { todayIso } from "./dates";
 import { dueDateFromStatement } from "./credit-cards";
 import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
 import { classifyDraftKind } from "./plaid-transaction-kind";
@@ -65,9 +68,14 @@ async function autoCreatePromoFromTransaction(input: {
   originalDescription: string | null;
   merchantName: string | null;
   amountCents: number;
+  kind?: "expense" | "card_payment";
   promoTexts?: string[];
 }): Promise<void> {
   if (input.amountCents <= 0) return;
+  // Card-payment drafts are intra-account transfers, never a financed purchase.
+  // Generic offer text on a payment description (e.g. "0 APR if paid in full")
+  // would otherwise create a phantom promo for the payment amount.
+  if (input.kind === "card_payment") return;
   const payoffDate = detectPromoPayoffDate([
     ...(input.promoTexts ?? []),
     input.originalDescription,
@@ -115,6 +123,7 @@ async function autoCreatePromosFromExistingDrafts(userId: string, itemId: string
       originalDescription: draft.originalDescription,
       merchantName: draft.merchantName,
       amountCents: draft.amountCents,
+      kind: draft.kind,
     });
   }
 }
@@ -323,6 +332,7 @@ export async function syncPlaidTransactions(
             originalDescription,
             merchantName: txn.merchant_name ?? null,
             amountCents,
+            kind,
             promoTexts: plaidTransactionPromoTexts(txn),
           });
           added++;
@@ -367,6 +377,7 @@ export async function syncPlaidTransactions(
             originalDescription,
             merchantName: txn.merchant_name ?? null,
             amountCents,
+            kind,
             promoTexts: plaidTransactionPromoTexts(txn),
           });
           modified++;
@@ -391,6 +402,15 @@ export async function syncPlaidTransactions(
     } catch (err) {
       log.error(`plaid-sync: failed for item ${item.id}: ${(err as Error).message}`);
     }
+  }
+
+  // Sweep expired promos once per sync. Reads the user's timezone from
+  // settings so the cutoff matches what the projection page treats as "today".
+  const settings = await getSettings(userId);
+  const today = todayIso(settings?.timezone);
+  const archived = await archiveExpiredPromos(userId, today);
+  if (archived > 0) {
+    log.info(`plaid-sync: archived ${archived} expired promo(s) for user ${userId}`);
   }
 
   return {
@@ -455,6 +475,8 @@ export async function syncCreditCardLiabilitiesForItem(
   let statementsCreated = 0;
 
   try {
+    const accounts = await listPlaidAccountsByItem(itemId);
+    const liveBalanceByAccountId = new Map(accounts.map((account) => [account.id, account.balanceCents] as const));
     const res = await plaid.liabilitiesGet({ access_token: accessToken });
     const credit = res.data.liabilities.credit ?? [];
 
@@ -494,14 +516,15 @@ export async function syncCreditCardLiabilitiesForItem(
           statementBalanceCents: stmtBalCents,
         });
 
-        await upsertCreditCardStatementByDate(card.id, {
+        const statementChanged = await upsertCreditCardStatementByDate(card.id, {
           statementDate: stmtDate,
           dueDate: resolvedDue,
           statementBalanceCents: stmtBalCents,
           paidAmountCents: looksPaid ? payAmtCents : null,
           paidDate: looksPaid ? lastPayDate : null,
+          liveBalanceCents: liveBalanceByAccountId.get(plaidAccountId) ?? card.currentBalanceCents,
         });
-        statementsCreated++;
+        if (statementChanged) statementsCreated++;
       }
     }
   } catch (err) {

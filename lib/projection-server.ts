@@ -134,9 +134,13 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   // their own monthly chunks via promoExtras below.
   const balanceByPlaidAccount = new Map(plaidAccts.map((a) => [a.id, a.balanceCents] as const));
   const unpaidByCard = new Map<string, number>();
+  // Treat any portion of a statement that's still owed as unpaid. A non-null
+  // `paidAmountCents` only means a payment was applied — if it's smaller than
+  // the statement balance, the carryover still needs to be projected as cash.
   for (const s of statements) {
-    if (s.paidAmountCents == null) {
-      unpaidByCard.set(s.cardId, (unpaidByCard.get(s.cardId) ?? 0) + s.statementBalanceCents);
+    const unpaidPortion = Math.max(0, s.statementBalanceCents - (s.paidAmountCents ?? 0));
+    if (unpaidPortion > 0) {
+      unpaidByCard.set(s.cardId, (unpaidByCard.get(s.cardId) ?? 0) + unpaidPortion);
     }
   }
   const promoRemainingByCard = new Map<string, number>();
@@ -169,23 +173,25 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   // also carry card-balance metadata so a user can plan paying above the
   // statement due amount when a 0% promo balance is present.
   const ccExtras: ProjectionInput["extras"] = statements
-    .filter((s) => s.paidAmountCents == null)
     .map((s) => {
+      const remainingCents = Math.max(0, s.statementBalanceCents - (s.paidAmountCents ?? 0));
+      if (remainingCents <= 0) return null;
       const override = cardOverridesByCard.get(s.cardId)?.get(s.dueDate);
       appliedCardOverrideKeys.add(overrideKey(s.cardId, s.dueDate));
-      const amountCents = override?.amountCents ?? s.statementBalanceCents;
+      const amountCents = override?.amountCents ?? remainingCents;
       return {
         date: s.dueDate,
         description: `${s.cardName} payment`,
         amountCents,
         sourceId: s.cardId,
-        sourceType: "creditCardPayment",
-        originalAmountCents: s.statementBalanceCents,
+        sourceType: "creditCardPayment" as const,
+        originalAmountCents: remainingCents,
         relatedDate: movedFromDate(override?.notes),
-        paymentDueCents: s.statementBalanceCents,
-        paymentBalanceCents: displayBalanceForCard(s.cardId, s.statementBalanceCents),
+        paymentDueCents: remainingCents,
+        paymentBalanceCents: displayBalanceForCard(s.cardId, remainingCents),
       };
-    });
+    })
+    .filter((extra): extra is NonNullable<typeof extra> => extra !== null);
 
   const openCycleExtras: ProjectionInput["extras"] = [];
   for (const card of activeCards) {
@@ -194,7 +200,13 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       : card.currentBalanceCents;
     if (liveBalance == null || liveBalance <= 0) continue;
     const unpaid = unpaidByCard.get(card.id) ?? 0;
-    const promoRemaining = promoRemainingByCard.get(card.id) ?? 0;
+    // Promo records can drift higher than the issuer's actual unbilled promo
+    // principal (especially on PayPal, where Plaid doesn't return per-payment
+    // data so our auto-decrement edge rarely fires). Cap the subtraction at
+    // what's actually owed minus unpaid statements, otherwise a $5k drifted
+    // promo total would wipe out a $3k open-cycle estimate to $0.
+    const promoRemainingRaw = promoRemainingByCard.get(card.id) ?? 0;
+    const promoRemaining = Math.min(promoRemainingRaw, Math.max(0, liveBalance - unpaid));
     const openCycleCents = Math.max(0, liveBalance - unpaid - promoRemaining);
     if (openCycleCents <= 0) continue;
     const nextStatement = nextStatementDateOnOrAfter(today, card);
@@ -224,8 +236,9 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   // still wants a planned monthly paydown in the current cycle.
   const recordedDueDatesByCard = new Map<string, Set<string>>();
   for (const s of statements) {
-    const coveredCashCents = s.paidAmountCents ?? s.statementBalanceCents;
-    if (coveredCashCents <= 0) continue;
+    const unpaidPortion = Math.max(0, s.statementBalanceCents - (s.paidAmountCents ?? 0));
+    const paidPortion = s.paidAmountCents ?? 0;
+    if (unpaidPortion <= 0 && paidPortion <= 0) continue;
     let set = recordedDueDatesByCard.get(s.cardId);
     if (!set) {
       set = new Set();

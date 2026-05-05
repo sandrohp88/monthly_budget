@@ -27,8 +27,11 @@ import {
   deleteCreditCardPaymentOverride,
   // credit cards
   createCreditCard,
+  createPromo,
   getCreditCard,
   listCreditCards,
+  listPromos,
+  archiveExpiredPromos,
   // plaid items / accounts
   createPlaidItem,
   upsertPlaidAccount,
@@ -423,6 +426,77 @@ describe("repos / upsertCreditCardStatementByDate", () => {
     });
     const stmts = await listStatements(card.id);
     expect(stmts[0]?.paidDate).toBe("2025-04-03");
+  });
+
+  it("ignores a Plaid $0 statement when a prior unpaid carryover and live balance exist", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "PayPal",
+      statementDay: 15,
+      dueDay: 5,
+      autoPay: false,
+      isActive: true,
+    });
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-04-15",
+      dueDate: "2026-05-05",
+      statementBalanceCents: 275_00,
+      paidAmountCents: 100_00,
+      paidDate: "2026-05-01",
+    });
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-05-15",
+      dueDate: "2026-06-05",
+      statementBalanceCents: 0,
+      liveBalanceCents: 300_00,
+    });
+
+    const stmts = await listStatements(card.id);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toMatchObject({
+      statementDate: "2026-04-15",
+      statementBalanceCents: 275_00,
+      paidAmountCents: 100_00,
+    });
+  });
+});
+
+describe("repos / archiveExpiredPromos", () => {
+  it("archives active promos whose end date has passed", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Promo Card",
+      statementDay: 15,
+      dueDay: 5,
+      autoPay: false,
+      isActive: true,
+    });
+    const expired = await createPromo(user.id, card.id, {
+      description: "Expired",
+      originalAmountCents: 200_00,
+      remainingAmountCents: 200_00,
+      startDate: "2025-01-01",
+      endDate: "2026-05-03",
+      monthlyPaymentCents: null,
+      notes: null,
+      isActive: true,
+    });
+    const current = await createPromo(user.id, card.id, {
+      description: "Current",
+      originalAmountCents: 300_00,
+      remainingAmountCents: 300_00,
+      startDate: "2026-01-01",
+      endDate: "2026-05-04",
+      monthlyPaymentCents: null,
+      notes: null,
+      isActive: true,
+    });
+
+    expect(await archiveExpiredPromos(user.id, "2026-05-04")).toBe(1);
+
+    const promos = await listPromos(user.id, true);
+    expect(promos.find((promo) => promo.id === expired.id)?.isActive).toBe(false);
+    expect(promos.find((promo) => promo.id === current.id)?.isActive).toBe(true);
   });
 });
 

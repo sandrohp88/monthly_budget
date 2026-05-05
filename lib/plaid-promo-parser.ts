@@ -26,7 +26,7 @@ const MONTHS: Record<string, number> = {
 };
 
 const PROMO_SIGNAL =
-  /promo|promotion|promotional|deferred|interest|no interest|avoid interest|paid in full|pay in full/;
+  /promo|promotion|promotional|deferred|interest|no interest|avoid interest/;
 
 type StringRecord = Record<string, unknown>;
 
