@@ -29,6 +29,14 @@ export type Bill = {
   anchorDate: string;
   /** Optional planned payment amounts for specific generated due dates. */
   paymentOverrides?: Array<{ date: string; amountCents: number }>;
+  /**
+   * When the starting balance comes from a live bank account, cash movements
+   * before today are already reflected in that balance. Past bill occurrences
+   * before this date should not change the running projection again.
+   */
+  settledBeforeDate?: string;
+  /** Show settled past occurrences as paid rows instead of hiding them. */
+  showSettledBeforeDate?: boolean;
 };
 
 export type OneTimeExpense = {
@@ -41,6 +49,7 @@ export type OneTimeExpense = {
   relatedDate?: string;
   paymentDueCents?: number;
   paymentBalanceCents?: number;
+  isPaid?: boolean;
 };
 
 export type ProjectionEventKind = "paycheck" | "bill" | "extra";
@@ -56,6 +65,7 @@ export type ProjectionEvent = {
   relatedDate?: string;
   paymentDueCents?: number;
   paymentBalanceCents?: number;
+  isPaid?: boolean;
 };
 
 export type ProjectionRow = {
@@ -107,7 +117,7 @@ export function resolveProjectionStartDate(opts: {
   today: string;
   usesLinkedStartingBalance: boolean;
 }): string {
-  if (opts.usesLinkedStartingBalance) return opts.today;
+  if (opts.usesLinkedStartingBalance) return `${opts.today.slice(0, 7)}-01`;
   return opts.firstPaydayDate < opts.today ? opts.firstPaydayDate : `${opts.today.slice(0, 7)}-01`;
 }
 
@@ -173,6 +183,7 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
       relatedDate: e.relatedDate,
       paymentDueCents: e.paymentDueCents,
       paymentBalanceCents: e.paymentBalanceCents,
+      isPaid: e.isPaid,
     });
   }
 
@@ -206,6 +217,19 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
     for (let k = kStart; k <= kEnd; k++) {
       const occ = addMonthsClamped(anchorY, anchorM, anchorD, k * b.intervalMonths);
       const date = `${String(occ.year).padStart(4, "0")}-${String(occ.month).padStart(2, "0")}-${String(occ.day).padStart(2, "0")}`;
+      if (b.settledBeforeDate && date < b.settledBeforeDate) {
+        if (!b.showSettledBeforeDate) continue;
+        addEvent(date, {
+          kind: "bill",
+          label: b.name,
+          amountCents: 0,
+          sourceId: b.id,
+          sourceType: "bill",
+          originalAmountCents: b.amountCents,
+          isPaid: true,
+        });
+        continue;
+      }
       const override = overrides.get(date);
       addEvent(date, {
         kind: "bill",

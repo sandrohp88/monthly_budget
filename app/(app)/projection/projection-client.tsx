@@ -445,7 +445,11 @@ export function ProjectionClient({
                                 )}
                               </td>
                               <td className="px-4 py-2.5 text-right">
-                                {isExpenseEvent ? (
+                                {event.isPaid ? (
+                                  <span className="text-[var(--mint)] font-semibold">
+                                    PAID <Money cents={event.originalAmountCents ?? 0} />
+                                  </span>
+                                ) : isExpenseEvent ? (
                                   <span className="text-[var(--red)] font-semibold">
                                     −<Money cents={event.amountCents} />
                                   </span>
@@ -524,6 +528,20 @@ function ProjectionEventItem({
         : null;
   if (!targetType || !event.sourceId || event.originalAmountCents == null) {
     return <span key={`${event.kind}-${event.label}-${eventIndex}`}>{event.label}</span>;
+  }
+
+  if (event.isPaid) {
+    return (
+      <span
+        key={`${event.sourceId}-${row.date}-${eventIndex}`}
+        className="inline-flex flex-wrap items-center gap-1.5"
+      >
+        <StatusPill>PAID</StatusPill>
+        <span className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-[var(--text-1)]">
+          {event.label}
+        </span>
+      </span>
+    );
   }
 
   const adjusted = event.amountCents !== event.originalAmountCents;

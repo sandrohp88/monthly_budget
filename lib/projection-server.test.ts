@@ -22,10 +22,14 @@ import { settings, users } from "./db/schema";
 import { newId } from "./ids";
 import { buildProjection } from "./projection-server";
 import {
+  createBill,
   createCreditCard,
+  createPlaidItem,
   createPromo,
   createStatement,
   upsertCreditCardPaymentOverride,
+  upsertPlaidAccount,
+  updatePlaidAccount,
 } from "./repos";
 
 let dbDir: string;
@@ -266,5 +270,64 @@ describe("buildProjection promo statement reconciliation", () => {
       paymentDueCents: 125_00,
       paymentBalanceCents: 1_000_00,
     });
+  });
+});
+
+describe("buildProjection linked starting balance", () => {
+  async function seedLinkedStartingBalance(userId: string, balanceCents: number) {
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins",
+      institutionName: "Bank",
+      accessTokenEnc: "00",
+      accessTokenIv: "00",
+      accessTokenTag: "00",
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "checking",
+      itemId: item.id,
+      userId,
+      name: "Checking",
+      mask: "0001",
+      type: "depository",
+      subtype: "checking",
+      balanceCents,
+      updatedAt: Date.now(),
+    });
+    await updatePlaidAccount(userId, "checking", { useAsStartingBalance: true });
+  }
+
+  it("shows past autopay bills as paid without replaying them against the live balance", async () => {
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 500_00);
+    await createBill(user.id, {
+      name: "Blue Falls",
+      category: "Housing",
+      amountCents: 4400_00,
+      intervalMonths: 1,
+      anchorDate: "2026-05-03",
+      autoPay: true,
+      paidViaCardId: null,
+      notes: null,
+      isActive: true,
+    });
+
+    const projection = await buildProjection(user.id);
+    const paidDay = projection?.rows.find((r) => r.date === "2026-05-03");
+
+    expect(projection?.startDate).toBe("2026-05-01");
+    expect(projection?.startingBalanceCents).toBe(500_00);
+    expect(paidDay?.expenseCents).toBe(0);
+    expect(paidDay?.balanceCents).toBe(500_00);
+    expect(paidDay?.events).toEqual([
+      expect.objectContaining({
+        label: "Blue Falls",
+        amountCents: 0,
+        originalAmountCents: 4400_00,
+        isPaid: true,
+      }),
+    ]);
   });
 });

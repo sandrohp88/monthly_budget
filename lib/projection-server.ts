@@ -336,11 +336,13 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     startingBalanceCents: effectiveStartingBalance,
     startDate,
     endDate,
-    paychecks: paychecks.map((p) => ({
-      payDate: p.payDate,
-      amountCents: p.actualReceived && p.actualAmountCents != null ? p.actualAmountCents : p.amountCents,
-      note: p.note,
-    })),
+    paychecks: paychecks
+      .filter((p) => linkedBalance == null || p.payDate >= today)
+      .map((p) => ({
+        payDate: p.payDate,
+        amountCents: p.actualReceived && p.actualAmountCents != null ? p.actualAmountCents : p.amountCents,
+        note: p.note,
+      })),
     bills: cashBills.map((b) => ({
       id: b.id,
       name: b.name,
@@ -348,19 +350,22 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       intervalMonths: b.intervalMonths,
       anchorDate: b.anchorDate,
       paymentOverrides: billOverridesByBill.get(b.id) ?? [],
+      settledBeforeDate: linkedBalance != null ? today : undefined,
+      showSettledBeforeDate: linkedBalance != null && b.autoPay,
     })),
     extras: [
       ...extras
+        .filter((e) => linkedBalance == null || e.date >= today)
         .filter((e) => e.paidViaCardId == null || !activeCardIds.has(e.paidViaCardId))
         .map((e) => ({
-        date: e.date,
-        description: e.description,
-        amountCents: e.amountCents,
-      })),
-      ...ccExtras,
-      ...openCycleExtras,
-      ...promoExtras,
-      ...plannedCardExtras,
+          date: e.date,
+          description: e.description,
+          amountCents: e.amountCents,
+        })),
+      ...ccExtras.filter((e) => linkedBalance == null || e.date >= today),
+      ...openCycleExtras.filter((e) => linkedBalance == null || e.date >= today),
+      ...promoExtras.filter((e) => linkedBalance == null || e.date >= today),
+      ...plannedCardExtras.filter((e) => linkedBalance == null || e.date >= today),
     ],
   };
   const promoSummariesByCard: Record<string, PromoPaymentSummary[]> = {};
