@@ -77,7 +77,7 @@ async function makeUser(): Promise<{ id: string }> {
   return { id };
 }
 
-async function seedPromoProjection(statementBalanceCents: number) {
+async function seedPromoProjection(statementBalanceCents: number | null) {
   const user = await makeUser();
   const card = await createCreditCard(user.id, {
     name: "PayPal",
@@ -87,14 +87,16 @@ async function seedPromoProjection(statementBalanceCents: number) {
     autoPay: false,
     isActive: true,
   });
-  await createStatement(card.id, {
-    statementDate: "2026-05-15",
-    dueDate: "2026-06-10",
-    statementBalanceCents,
-    paidAmountCents: null,
-    paidDate: null,
-    notes: null,
-  });
+  if (statementBalanceCents !== null) {
+    await createStatement(card.id, {
+      statementDate: "2026-05-15",
+      dueDate: "2026-06-10",
+      statementBalanceCents,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+  }
   await createPromo(user.id, card.id, {
     description: "0% APR purchase",
     originalAmountCents: 1_000_00,
@@ -111,17 +113,9 @@ async function seedPromoProjection(statementBalanceCents: number) {
 }
 
 describe("buildProjection promo statement reconciliation", () => {
-  it("keeps a desired promo payment in the current cycle when the statement due amount is zero", async () => {
+  it("does not project a promo payment when the statement due amount is zero", async () => {
     const row = await seedPromoProjection(0);
-    expect(row?.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "extra",
-          label: "PayPal promo (0% APR purchase)",
-          amountCents: 125_00,
-        }),
-      ]),
-    );
+    expect(row?.events.some((event) => event.label === "PayPal promo (0% APR purchase)")).toBe(false);
   });
 
   it("does not double-count a promo payment when a positive statement already covers the cycle", async () => {
@@ -213,7 +207,7 @@ describe("buildProjection promo statement reconciliation", () => {
   });
 
   it("carries card balance and amount-due metadata on promo projection rows", async () => {
-    const row = await seedPromoProjection(0);
+    const row = await seedPromoProjection(null);
     expect(row?.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
