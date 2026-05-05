@@ -1,5 +1,5 @@
 import "server-only";
-import { addDaysIso, startOfMonthIso, todayIso } from "./dates";
+import { addDaysIso, todayIso } from "./dates";
 import {
   getSettings,
   listBillPaymentOverridesForUser,
@@ -19,7 +19,12 @@ import {
   nextStatementDateOnOrAfter,
   projectPromoScheduleWithBalances,
 } from "./credit-cards";
-import { computeProjection, type ProjectionInput, type ProjectionRow } from "./projection";
+import {
+  computeProjection,
+  resolveProjectionStartDate,
+  type ProjectionInput,
+  type ProjectionRow,
+} from "./projection";
 
 export type PromoPaymentSummary = {
   id: string;
@@ -48,8 +53,6 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   if (!settings) return null;
 
   const today = todayIso(settings.timezone);
-  const startDate =
-    settings.firstPaydayDate < today ? settings.firstPaydayDate : startOfMonthIso(today);
 
   // End date = today + projectionMonths (approx, using 31 days per month for a safe upper bound).
   const endDate = addDaysIso(today, settings.projectionMonths * 31);
@@ -323,6 +326,11 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   // Opt-in: if the user has marked a linked account as their starting balance source,
   // substitute its live balance for the manual startingBalanceCents.
   const effectiveStartingBalance = linkedBalance ?? settings.startingBalanceCents;
+  const startDate = resolveProjectionStartDate({
+    firstPaydayDate: settings.firstPaydayDate,
+    today,
+    usesLinkedStartingBalance: linkedBalance != null,
+  });
 
   const input: ProjectionInput = {
     startingBalanceCents: effectiveStartingBalance,
