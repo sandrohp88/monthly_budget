@@ -42,6 +42,7 @@ export { toCents, looksLikePaid } from "./plaid-helpers";
 import { toCents, looksLikePaid } from "./plaid-helpers";
 
 const PLAID_TRANSACTION_HISTORY_DAYS = 730;
+const PAYPAL_AUTHORITATIVE_PROMO_NOTE = "PayPal authoritative promo data";
 
 export interface SyncResult {
   added: number;
@@ -184,6 +185,14 @@ async function reconcilePayPalSpecialFinancing(userId: string, itemId: string): 
     if (purchase.linkedPromoId) {
       const promo = promoById.get(purchase.linkedPromoId);
       if (!promo) continue;
+      // PayPal's live promo list is more authoritative than transaction FIFO:
+      // it includes issuer-specific payoff dates and targeted payment
+      // allocation that Plaid transactions do not expose. When a promo row has
+      // been reconciled from that list, never rewrite it from the heuristic.
+      if (promo.notes?.includes(PAYPAL_AUTHORITATIVE_PROMO_NOTE)) continue;
+      // A paid-off PayPal promo should stay paid off. Transaction history alone
+      // is not enough to resurrect it on the next sync.
+      if (!promo.isActive && promo.remainingAmountCents <= 0) continue;
       await updatePromo(userId, promo.id, {
         originalAmountCents: purchase.amountCents,
         remainingAmountCents,
@@ -209,37 +218,6 @@ async function reconcilePayPalSpecialFinancing(userId: string, itemId: string): 
     await updatePlaidDraftStatus(userId, purchase.id, {
       status: "approved",
       linkedPromoId: promo.id,
-    });
-  }
-
-  // PayPal can report wallet purchase/payment history that is not granular
-  // enough to perfectly allocate every payment back to financed purchases.
-  // The linked PayPal Credit account balance is authoritative: active promo
-  // principal cannot exceed what PayPal says is currently owed on the account.
-  const liveBalanceCents = paypalCreditAccount.balanceCents;
-  if (liveBalanceCents == null || liveBalanceCents < 0) return;
-
-  const activePromos = (await listPromosForCard(userId, card.id, false))
-    .filter((promo) => promo.remainingAmountCents > 0)
-    .sort(
-      (a, b) =>
-        a.startDate.localeCompare(b.startDate) ||
-        a.endDate.localeCompare(b.endDate) ||
-        a.id.localeCompare(b.id),
-    );
-  let excessCents =
-    activePromos.reduce((sum, promo) => sum + promo.remainingAmountCents, 0) -
-    liveBalanceCents;
-  if (excessCents <= 0) return;
-
-  for (const promo of activePromos) {
-    if (excessCents <= 0) break;
-    const appliedCents = Math.min(promo.remainingAmountCents, excessCents);
-    const remainingAmountCents = promo.remainingAmountCents - appliedCents;
-    excessCents -= appliedCents;
-    await updatePromo(userId, promo.id, {
-      remainingAmountCents,
-      isActive: remainingAmountCents > 0,
     });
   }
 }

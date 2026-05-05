@@ -38,6 +38,7 @@ import {
   getCreditCard,
   listPromosForCard,
   listStatements,
+  updatePromo,
 } from "./repos";
 import { encryptToken } from "./plaid-crypto";
 import { syncCreditCardLiabilitiesForItem, syncPlaidTransactions } from "./plaid-sync";
@@ -187,7 +188,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     expect(promos.map((promo) => promo.endDate)).toEqual(["2026-08-14", "2026-08-25"]);
   });
 
-  it("caps active PayPal promo principal at the live PayPal Credit balance", async () => {
+  it("preserves PayPal promo rows reconciled from the issuer promo list", async () => {
     const user = await makeUser();
     const token = encryptToken("access-token");
     const item = await createPlaidItem(user.id, {
@@ -208,7 +209,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
       mask: "9288",
       type: "credit",
       subtype: "paypal",
-      balanceCents: 100_00,
+      balanceCents: 400_00,
       updatedAt: Date.now(),
     });
     await upsertPlaidAccount({
@@ -278,10 +279,30 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
 
     await syncPlaidTransactions(user.id, item.id);
+    let promos = await listPromosForCard(user.id, card.id, true);
+    expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([150_00, 200_00]);
 
-    const promos = await listPromosForCard(user.id, card.id, true);
-    expect(promos.map((promo) => promo.description)).toEqual(["Store One", "Store Two"]);
-    expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([0, 100_00]);
+    const storeOne = promos.find((promo) => promo.description === "Store One")!;
+    const storeTwo = promos.find((promo) => promo.description === "Store Two")!;
+    await updatePromo(user.id, storeOne.id, {
+      remainingAmountCents: 200_00,
+      endDate: "2026-07-26",
+      notes: "PayPal authoritative promo data copied from issuer promo list",
+      isActive: true,
+    });
+    await updatePromo(user.id, storeTwo.id, {
+      remainingAmountCents: 0,
+      endDate: "2026-06-26",
+      notes: "Paid off based on PayPal authoritative promo data",
+      isActive: false,
+    });
+
+    await syncPlaidTransactions(user.id, item.id);
+
+    promos = await listPromosForCard(user.id, card.id, true);
+    expect(promos.map((promo) => promo.description)).toEqual(["Store Two", "Store One"]);
+    expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([0, 200_00]);
+    expect(promos.map((promo) => promo.endDate)).toEqual(["2026-06-26", "2026-07-26"]);
     expect(promos.map((promo) => promo.isActive)).toEqual([false, true]);
   });
 });
