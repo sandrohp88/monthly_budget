@@ -21,14 +21,14 @@ const baseInput = (): ProjectionInput => ({
 
 describe("projection engine", () => {
   describe("resolveProjectionStartDate", () => {
-    it("starts at today when a linked account supplies the live starting balance", () => {
+    it("keeps the current month visible when a linked account supplies the live starting balance", () => {
       expect(
         resolveProjectionStartDate({
           firstPaydayDate: "2026-04-30",
           today: "2026-05-05",
           usesLinkedStartingBalance: true,
         }),
-      ).toBe("2026-05-05");
+      ).toBe("2026-05-01");
 
       expect(
         resolveProjectionStartDate({
@@ -36,7 +36,7 @@ describe("projection engine", () => {
           today: "2026-05-05",
           usesLinkedStartingBalance: true,
         }),
-      ).toBe("2026-05-05");
+      ).toBe("2026-05-01");
     });
 
     it("preserves the historical manual-balance projection window", () => {
@@ -73,6 +73,61 @@ describe("projection engine", () => {
       expect(r.balanceCents).toBe(12345);
       expect(r.events).toHaveLength(0);
     }
+  });
+
+  it("shows settled autopay bills as paid without changing the balance", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2026-05-01",
+      endDate: "2026-05-06",
+      startingBalanceCents: 500_00,
+      bills: [
+        {
+          id: "blue-falls",
+          name: "Blue Falls",
+          amountCents: 4400_00,
+          intervalMonths: 1,
+          anchorDate: "2026-05-03",
+          settledBeforeDate: "2026-05-05",
+          showSettledBeforeDate: true,
+        },
+      ],
+    });
+
+    const paidDay = rows.find((r) => r.date === "2026-05-03")!;
+    expect(paidDay.expenseCents).toBe(0);
+    expect(paidDay.balanceCents).toBe(500_00);
+    expect(paidDay.events).toEqual([
+      expect.objectContaining({
+        label: "Blue Falls",
+        amountCents: 0,
+        originalAmountCents: 4400_00,
+        isPaid: true,
+      }),
+    ]);
+  });
+
+  it("omits settled past bills when they should not be shown as paid", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2026-05-01",
+      endDate: "2026-05-06",
+      startingBalanceCents: 500_00,
+      bills: [
+        {
+          id: "manual",
+          name: "Manual bill",
+          amountCents: 100_00,
+          intervalMonths: 1,
+          anchorDate: "2026-05-03",
+          settledBeforeDate: "2026-05-05",
+          showSettledBeforeDate: false,
+        },
+      ],
+    });
+
+    expect(rows.find((r) => r.date === "2026-05-03")?.events).toHaveLength(0);
+    expect(rows.find((r) => r.date === "2026-05-03")?.balanceCents).toBe(500_00);
   });
 
   it("monthly bill on day 15 fires every month within the window, never twice", () => {
