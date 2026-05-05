@@ -139,6 +139,79 @@ describe("buildProjection promo statement reconciliation", () => {
     );
   });
 
+  it("projects only the unpaid portion of a partially-paid statement", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Partial Card",
+      statementDay: 15,
+      dueDay: 10,
+      currentBalanceCents: 300_00,
+      autoPay: false,
+      isActive: true,
+    });
+    await createStatement(card.id, {
+      statementDate: "2026-05-15",
+      dueDate: "2026-06-10",
+      statementBalanceCents: 200_00,
+      paidAmountCents: 50_00,
+      paidDate: "2026-06-01",
+      notes: null,
+    });
+
+    const projection = await buildProjection(user.id);
+    const event = projection?.rows
+      .find((r) => r.date === "2026-06-10")
+      ?.events.find((e) => e.label === "Partial Card payment");
+
+    expect(event).toMatchObject({
+      amountCents: 150_00,
+      originalAmountCents: 150_00,
+      paymentDueCents: 150_00,
+    });
+  });
+
+  it("does not double-count a promo when paidAmountCents is zero on an unpaid statement", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "PayPal",
+      statementDay: 15,
+      dueDay: 10,
+      currentBalanceCents: 1_000_00,
+      autoPay: false,
+      isActive: true,
+    });
+    await createStatement(card.id, {
+      statementDate: "2026-05-15",
+      dueDate: "2026-06-10",
+      statementBalanceCents: 125_00,
+      paidAmountCents: 0,
+      paidDate: null,
+      notes: null,
+    });
+    await createPromo(user.id, card.id, {
+      description: "0% APR purchase",
+      originalAmountCents: 1_000_00,
+      remainingAmountCents: 1_000_00,
+      startDate: "2026-05-01",
+      endDate: "2026-12-31",
+      monthlyPaymentCents: 125_00,
+      notes: null,
+      isActive: true,
+    });
+
+    const row = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-06-10");
+
+    expect(row?.events.some((event) => event.label === "PayPal promo (0% APR purchase)")).toBe(false);
+    expect(row?.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "PayPal payment",
+          amountCents: 125_00,
+        }),
+      ]),
+    );
+  });
+
   it("carries card balance and amount-due metadata on promo projection rows", async () => {
     const row = await seedPromoProjection(0);
     expect(row?.events).toEqual(

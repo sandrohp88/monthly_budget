@@ -26,6 +26,10 @@ describe("detectPromoPayoffDate", () => {
     expect(detectPromoPayoffDate(["PAYPAL PURCHASE 05/04/2026"])).toBeNull();
   });
 
+  it("ignores generic statement grace text without a promo signal", () => {
+    expect(detectPromoPayoffDate(["0 APR if balance paid in full by 11/04/2026"])).toBeNull();
+  });
+
   it("inspects nested Plaid transaction text for promo payoff dates", () => {
     const texts = plaidTransactionPromoTexts({
       name: "PayPal Credit Card",
