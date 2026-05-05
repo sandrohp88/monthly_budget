@@ -44,19 +44,34 @@ describe("detectPromoPayoffDate", () => {
     expect(detectPromoPayoffDate(texts)).toBe("2026-10-30");
   });
 
-  it("flags PayPal Credit purchases at the current financing threshold", () => {
+  it("flags PayPal Credit purchases over the current financing threshold", () => {
     expect(
       isSpecialFinancingCandidate({
-        amountCents: 149_00,
+        amountCents: 150_01,
         linkedCreditCardId: "card_1",
         linkedPromoId: null,
         promoPayoffDate: null,
-        accountName: "PayPal Credit Card",
+        accountName: "PayPal",
         accountSubtype: "paypal",
         linkedCreditCardName: "PayPal Credit",
         plaidCategory: "GENERAL_MERCHANDISE",
       }),
     ).toBe(true);
+  });
+
+  it("does not flag exact-$150 PayPal purchases", () => {
+    expect(
+      isSpecialFinancingCandidate({
+        amountCents: 150_00,
+        linkedCreditCardId: "card_1",
+        linkedPromoId: null,
+        promoPayoffDate: null,
+        accountName: "PayPal",
+        accountSubtype: "paypal",
+        linkedCreditCardName: "PayPal Credit",
+        plaidCategory: "GENERAL_MERCHANDISE",
+      }),
+    ).toBe(false);
   });
 
   it("does not treat generic PayPal loan payments as promo purchases", () => {

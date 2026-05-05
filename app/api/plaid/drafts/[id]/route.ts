@@ -9,8 +9,10 @@ import {
   createExtra,
   createPromo,
   getCreditCardByPlaidAccountId,
+  listPlaidAccounts,
   listCategories,
 } from "@/lib/repos";
+import { isPayPalCreditAccount, isPayPalWalletAccount } from "@/lib/paypal-special-financing";
 
 export async function PATCH(
   req: Request,
@@ -60,7 +62,21 @@ export async function PATCH(
       return jsonError("Only debit purchases can be converted into promos", 400);
     }
 
-    const card = await getCreditCardByPlaidAccountId(auth.userId, draft.accountId);
+    let card = await getCreditCardByPlaidAccountId(auth.userId, draft.accountId);
+    if (!card) {
+      const accounts = await listPlaidAccounts(auth.userId);
+      const draftAccount = accounts.find((account) => account.id === draft.accountId);
+      const pairedCreditAccount =
+        draftAccount && isPayPalWalletAccount(draftAccount)
+          ? accounts.find(
+              (account) =>
+                account.itemId === draftAccount.itemId && isPayPalCreditAccount(account),
+            )
+          : undefined;
+      if (pairedCreditAccount) {
+        card = await getCreditCardByPlaidAccountId(auth.userId, pairedCreditAccount.id);
+      }
+    }
     if (!card) {
       return jsonError("Link this Plaid account to a credit card before creating a promo", 400);
     }

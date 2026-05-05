@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ensureUser, jsonError } from "@/lib/api";
 import { listCreditCards, listPlaidDrafts, listPlaidAccounts } from "@/lib/repos";
 import { detectPromoPayoffDate } from "@/lib/plaid-promo-parser";
+import { isPayPalCreditAccount, isPayPalWalletAccount } from "@/lib/paypal-special-financing";
 import type { PlaidTransactionDraftRow, PlaidAccountRow } from "@/lib/db/schema";
 
 export type DraftWithAccount = PlaidTransactionDraftRow & {
@@ -39,21 +40,39 @@ export async function GET(req: Request) {
         .filter((c) => c.plaidAccountId)
         .map((c) => [c.plaidAccountId!, { id: c.id, name: c.name }]),
     );
+    const paypalCreditCardByItem = new Map(
+      accounts
+        .filter(isPayPalCreditAccount)
+        .map((account) => {
+          const linked = cardMap.get(account.id);
+          return linked ? [account.itemId, linked] as const : null;
+        })
+        .filter((entry): entry is [string, { id: string; name: string }] => entry !== null),
+    );
 
-    const enriched: DraftWithAccount[] = drafts.map((d) => ({
-      ...d,
-      accountName: accountMap.get(d.accountId)?.name ?? "Unknown Account",
-      accountMask: accountMap.get(d.accountId)?.mask ?? null,
-      accountType: accountMap.get(d.accountId)?.type ?? null,
-      accountSubtype: accountMap.get(d.accountId)?.subtype ?? null,
-      linkedCreditCardId: cardMap.get(d.accountId)?.id ?? null,
-      linkedCreditCardName: cardMap.get(d.accountId)?.name ?? null,
-      promoPayoffDate: detectPromoPayoffDate([
-        d.originalDescription,
-        d.description,
-        d.merchantName,
-      ]),
-    }));
+    const enriched: DraftWithAccount[] = drafts.map((d) => {
+      const account = accountMap.get(d.accountId);
+      const directCard = cardMap.get(d.accountId);
+      const pairedPayPalCard =
+        account && isPayPalWalletAccount(account)
+          ? paypalCreditCardByItem.get(account.itemId)
+          : undefined;
+      const linkedCard = directCard ?? pairedPayPalCard;
+      return {
+        ...d,
+        accountName: account?.name ?? "Unknown Account",
+        accountMask: account?.mask ?? null,
+        accountType: account?.type ?? null,
+        accountSubtype: account?.subtype ?? null,
+        linkedCreditCardId: linkedCard?.id ?? null,
+        linkedCreditCardName: linkedCard?.name ?? null,
+        promoPayoffDate: detectPromoPayoffDate([
+          d.originalDescription,
+          d.description,
+          d.merchantName,
+        ]),
+      };
+    });
 
     return NextResponse.json({ drafts: enriched });
   } catch (err) {
