@@ -186,6 +186,104 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([112_45, 275_46]);
     expect(promos.map((promo) => promo.endDate)).toEqual(["2026-08-14", "2026-08-25"]);
   });
+
+  it("caps active PayPal promo principal at the live PayPal Credit balance", async () => {
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_paypal",
+      institutionName: "PayPal",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_paypal_credit",
+      itemId: item.id,
+      userId: user.id,
+      name: "PayPal Credit Card",
+      mask: "9288",
+      type: "credit",
+      subtype: "paypal",
+      balanceCents: 100_00,
+      updatedAt: Date.now(),
+    });
+    await upsertPlaidAccount({
+      id: "acct_paypal_wallet",
+      itemId: item.id,
+      userId: user.id,
+      name: "PayPal",
+      mask: null,
+      type: "depository",
+      subtype: "paypal",
+      balanceCents: 0,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "PayPal Credit Card ****9288",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: false,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_paypal_credit");
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "cursor_1",
+        has_more: false,
+        accounts: [],
+        added: [
+          {
+            transaction_id: "purchase_1",
+            account_id: "acct_paypal_wallet",
+            pending: false,
+            date: "2026-01-01",
+            name: "Payment to Store One",
+            original_description: "Payment to Store One",
+            amount: 200.00,
+            personal_finance_category: { primary: "GENERAL_MERCHANDISE" },
+            merchant_name: "Store One",
+          },
+          {
+            transaction_id: "purchase_2",
+            account_id: "acct_paypal_wallet",
+            pending: false,
+            date: "2026-01-02",
+            name: "Payment to Store Two",
+            original_description: "Payment to Store Two",
+            amount: 200.00,
+            personal_finance_category: { primary: "GENERAL_MERCHANDISE" },
+            merchant_name: "Store Two",
+          },
+          {
+            transaction_id: "payment_1",
+            account_id: "acct_paypal_credit",
+            pending: false,
+            date: "2026-01-03",
+            name: "PayPal Credit Card",
+            original_description: "PayPal Credit Card",
+            amount: 50.00,
+            personal_finance_category: { primary: "LOAN_PAYMENTS" },
+            merchant_name: null,
+          },
+        ],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    await syncPlaidTransactions(user.id, item.id);
+
+    const promos = await listPromosForCard(user.id, card.id, true);
+    expect(promos.map((promo) => promo.description)).toEqual(["Store One", "Store Two"]);
+    expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([0, 100_00]);
+    expect(promos.map((promo) => promo.isActive)).toEqual([false, true]);
+  });
 });
 
 async function makeUser() {

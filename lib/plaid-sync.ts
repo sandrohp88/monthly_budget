@@ -211,6 +211,37 @@ async function reconcilePayPalSpecialFinancing(userId: string, itemId: string): 
       linkedPromoId: promo.id,
     });
   }
+
+  // PayPal can report wallet purchase/payment history that is not granular
+  // enough to perfectly allocate every payment back to financed purchases.
+  // The linked PayPal Credit account balance is authoritative: active promo
+  // principal cannot exceed what PayPal says is currently owed on the account.
+  const liveBalanceCents = paypalCreditAccount.balanceCents;
+  if (liveBalanceCents == null || liveBalanceCents < 0) return;
+
+  const activePromos = (await listPromosForCard(userId, card.id, false))
+    .filter((promo) => promo.remainingAmountCents > 0)
+    .sort(
+      (a, b) =>
+        a.startDate.localeCompare(b.startDate) ||
+        a.endDate.localeCompare(b.endDate) ||
+        a.id.localeCompare(b.id),
+    );
+  let excessCents =
+    activePromos.reduce((sum, promo) => sum + promo.remainingAmountCents, 0) -
+    liveBalanceCents;
+  if (excessCents <= 0) return;
+
+  for (const promo of activePromos) {
+    if (excessCents <= 0) break;
+    const appliedCents = Math.min(promo.remainingAmountCents, excessCents);
+    const remainingAmountCents = promo.remainingAmountCents - appliedCents;
+    excessCents -= appliedCents;
+    await updatePromo(userId, promo.id, {
+      remainingAmountCents,
+      isActive: remainingAmountCents > 0,
+    });
+  }
 }
 
 /**
