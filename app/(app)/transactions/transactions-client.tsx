@@ -25,7 +25,7 @@ import { cn } from "@/lib/cn";
 import { isSpecialFinancingCandidate } from "@/lib/plaid-promo-parser";
 import type { DraftWithAccount } from "@/app/api/plaid/drafts/route";
 
-type FilterKey = "all" | "debits" | "credits" | "promos";
+type FilterKey = "all" | "debits" | "credits" | "card_payments" | "promos";
 
 function addMonthsIso(iso: string, months: number): string {
   const parts = iso.split("-").map(Number);
@@ -105,8 +105,9 @@ export function TransactionsClient({
   const visible = React.useMemo(() => {
     const q = query.trim().toLowerCase();
     return transactions.filter((txn) => {
-      if (filter === "debits" && txn.amountCents <= 0) return false;
+      if (filter === "debits" && (txn.amountCents <= 0 || txn.kind === "card_payment")) return false;
       if (filter === "credits" && txn.amountCents >= 0) return false;
+      if (filter === "card_payments" && txn.kind !== "card_payment") return false;
       if (filter === "promos" && !isPromoCandidate(txn) && !txn.linkedPromoId) return false;
       if (!q) return true;
       return [
@@ -123,8 +124,12 @@ export function TransactionsClient({
     });
   }, [filter, query, transactions]);
 
-  const debits = transactions.filter((txn) => txn.amountCents > 0);
+  // Card payments are intra-account transfers (cash leaving the source account
+  // → balance reduction on the linked card). They'd double-count if added to
+  // the DEBITS aggregate, so we surface them separately.
+  const debits = transactions.filter((txn) => txn.amountCents > 0 && txn.kind !== "card_payment");
   const credits = transactions.filter((txn) => txn.amountCents < 0);
+  const cardPayments = transactions.filter((txn) => txn.kind === "card_payment");
   const promoCandidates = transactions.filter(isPromoCandidate);
 
   return (
@@ -145,12 +150,13 @@ export function TransactionsClient({
         <Tile label="IMPORTED" value={transactions.length} delta="approved automatically" />
         <Tile label="DEBITS" value={debits.length} delta={<Money cents={debits.reduce((s, t) => s + t.amountCents, 0)} />} />
         <Tile label="CREDITS" value={credits.length} delta={<Money cents={Math.abs(credits.reduce((s, t) => s + t.amountCents, 0))} />} />
+        <Tile label="CARD PAYMENTS" value={cardPayments.length} delta={<Money cents={cardPayments.reduce((s, t) => s + t.amountCents, 0)} />} />
         <Tile label="PROMO CANDIDATES" value={promoCandidates.length} variant={promoCandidates.length ? "amber" : "default"} delta="API evidence or PayPal > $150" />
       </TileGrid>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
-          {(["all", "debits", "credits", "promos"] as const).map((key) => (
+          {(["all", "debits", "credits", "card_payments", "promos"] as const).map((key) => (
             <button
               key={key}
               onClick={() => setFilter(key)}
@@ -161,7 +167,7 @@ export function TransactionsClient({
                   : "border-[var(--border-raw)] bg-[var(--bg-2)] text-[var(--text-2)] hover:text-[var(--text-0)]",
               )}
             >
-              {key}
+              {key.replace("_", " ")}
             </button>
           ))}
         </div>
@@ -207,6 +213,7 @@ export function TransactionsClient({
                       <span>{txn.accountName}{txn.accountMask ? ` ****${txn.accountMask}` : ""}</span>
                       {txn.linkedCreditCardName ? <span className="text-[var(--mint)]">· {txn.linkedCreditCardName}</span> : null}
                       {txn.plaidCategory ? <span>· {txn.plaidCategory}</span> : null}
+                      {txn.kind === "card_payment" ? <StatusPill>CARD PAYMENT</StatusPill> : null}
                       {txn.promoPayoffDate ? (
                         <StatusPill variant="amber">PAYOFF <DateLabel iso={txn.promoPayoffDate} format="short" /></StatusPill>
                       ) : null}

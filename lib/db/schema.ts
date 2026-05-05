@@ -444,6 +444,15 @@ export const plaidTransactionDrafts = sqliteTable(
     status: text("status", { enum: ["pending_review", "approved", "dismissed"] })
       .notNull()
       .default("pending_review"),
+    /**
+     * Classification computed at sync time. `card_payment` is a payment toward a
+     * linked credit-card balance and should not be counted as an expense — the
+     * cash leaving the source account already covers it. Default `expense` keeps
+     * legacy rows behaving exactly as they did before this column existed.
+     */
+    kind: text("kind", { enum: ["expense", "card_payment"] })
+      .notNull()
+      .default("expense"),
     linkedExpenseId: text("linked_expense_id"),
     linkedPromoId: text("linked_promo_id"),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),

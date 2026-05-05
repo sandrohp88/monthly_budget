@@ -3,6 +3,7 @@ import { CountryCode, Products } from "plaid";
 import { getPlaidClient } from "./plaid-client";
 import { decryptToken } from "./plaid-crypto";
 import {
+  listCreditCards,
   listPlaidItems,
   listPlaidAccountsByItem,
   listPlaidDrafts,
@@ -20,6 +21,7 @@ import {
 } from "./repos";
 import { dueDateFromStatement } from "./credit-cards";
 import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
+import { classifyDraftKind } from "./plaid-transaction-kind";
 import {
   allocatePayPalPaymentsFifo,
   isPayPalCreditAccount,
@@ -254,6 +256,13 @@ export async function syncPlaidTransactions(
         // Fetch account list for this item to map account IDs.
         const accounts = await listPlaidAccountsByItem(item.id);
         const accountIds = new Set(accounts.map((a) => a.id));
+        const accountById = new Map(accounts.map((a) => [a.id, a] as const));
+        const linkedCards = await listCreditCards(userId, true);
+        const linkedCardAccountIds = new Set(
+          linkedCards
+            .map((c) => c.plaidAccountId)
+            .filter((id): id is string => id !== null && id !== undefined),
+        );
 
         // Upsert balance updates for each account.
         for (const acct of data.accounts ?? []) {
@@ -279,6 +288,15 @@ export async function syncPlaidTransactions(
           if (txn.pending) continue;
           const originalDescription = originalDescriptionOf(txn);
           const amountCents = toCents(txn.amount);
+          const account = accountById.get(txn.account_id);
+          const kind = classifyDraftKind({
+            amountCents,
+            accountType: account?.type ?? null,
+            accountIsLinkedToCard: linkedCardAccountIds.has(txn.account_id),
+            primaryCategory: txn.personal_finance_category?.primary ?? null,
+            detailedCategory: txn.personal_finance_category?.detailed ?? null,
+            description: txn.name,
+          });
 
           await upsertPlaidDraft({
             id: txn.transaction_id,
@@ -292,6 +310,7 @@ export async function syncPlaidTransactions(
             merchantName: txn.merchant_name ?? null,
             pending: false,
             status: "approved",
+            kind,
             linkedExpenseId: null,
             linkedPromoId: null,
           });
@@ -314,6 +333,15 @@ export async function syncPlaidTransactions(
           if (!accountIds.has(txn.account_id)) continue;
           const originalDescription = originalDescriptionOf(txn);
           const amountCents = toCents(txn.amount);
+          const account = accountById.get(txn.account_id);
+          const kind = classifyDraftKind({
+            amountCents,
+            accountType: account?.type ?? null,
+            accountIsLinkedToCard: linkedCardAccountIds.has(txn.account_id),
+            primaryCategory: txn.personal_finance_category?.primary ?? null,
+            detailedCategory: txn.personal_finance_category?.detailed ?? null,
+            description: txn.name,
+          });
           await upsertPlaidDraft({
             id: txn.transaction_id,
             userId,
@@ -326,6 +354,7 @@ export async function syncPlaidTransactions(
             merchantName: txn.merchant_name ?? null,
             pending: txn.pending,
             status: "approved",
+            kind,
             linkedExpenseId: null,
             linkedPromoId: null,
           });

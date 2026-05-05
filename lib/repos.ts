@@ -1297,6 +1297,7 @@ export async function upsertPlaidDraft(data: NewPlaidTransactionDraft): Promise<
         plaidCategory: data.plaidCategory,
         merchantName: data.merchantName,
         pending: data.pending,
+        kind: data.kind,
       },
     })
     .run();
