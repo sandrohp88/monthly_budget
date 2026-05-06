@@ -19,7 +19,10 @@ export function toCents(plaidAmount: number): number {
  * Returns true when:
  *   - Plaid reports a last payment date and amount,
  *   - the payment date is on or after the statement issue date, AND
- *   - the payment amount covers (or exceeds) the statement balance.
+ *   - the payment amount covers (or exceeds) the statement cash due.
+ *
+ * When Plaid reports a $0 statement balance with a non-zero minimum payment
+ * (PayPal special financing), the minimum payment is the amount to test.
  *
  * String comparison on ISO YYYY-MM-DD is chronologically correct.
  */
@@ -28,12 +31,20 @@ export function looksLikePaid(args: {
   lastPaymentCents: number | null | undefined;
   statementDate: string;
   statementBalanceCents: number;
+  minimumPaymentCents?: number | null;
 }): boolean {
-  const { lastPaymentDate, lastPaymentCents, statementDate, statementBalanceCents } = args;
+  const {
+    lastPaymentDate,
+    lastPaymentCents,
+    statementDate,
+    statementBalanceCents,
+    minimumPaymentCents,
+  } = args;
+  const dueCents = statementBalanceCents > 0 ? statementBalanceCents : (minimumPaymentCents ?? 0);
   return (
     lastPaymentDate != null &&
     lastPaymentCents != null &&
     lastPaymentDate >= statementDate &&
-    lastPaymentCents >= statementBalanceCents
+    lastPaymentCents >= dueCents
   );
 }

@@ -337,6 +337,7 @@ describe("repos / upsertCreditCardStatementByDate", () => {
       statementDate: "2025-03-15",
       dueDate: "2025-04-05",
       statementBalanceCents: 200_00,
+      minimumPaymentCents: null,
       paidAmountCents: null,
     });
   });
@@ -365,6 +366,36 @@ describe("repos / upsertCreditCardStatementByDate", () => {
     expect(stmts[0]).toMatchObject({
       dueDate: "2025-04-10",
       statementBalanceCents: 250_00,
+    });
+  });
+
+  it("persists and updates the Plaid minimum payment on statement upsert", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "PayPal",
+      statementDay: 15,
+      dueDay: 5,
+      autoPay: false,
+      isActive: true,
+    });
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2025-03-15",
+      dueDate: "2025-04-05",
+      statementBalanceCents: 0,
+      minimumPaymentCents: 35_00,
+    });
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2025-03-15",
+      dueDate: "2025-04-05",
+      statementBalanceCents: 0,
+      minimumPaymentCents: 40_00,
+    });
+
+    const stmts = await listStatements(card.id);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toMatchObject({
+      statementBalanceCents: 0,
+      minimumPaymentCents: 40_00,
     });
   });
 
@@ -457,6 +488,39 @@ describe("repos / upsertCreditCardStatementByDate", () => {
       statementDate: "2026-04-15",
       statementBalanceCents: 275_00,
       paidAmountCents: 100_00,
+    });
+  });
+
+  it("keeps a Plaid $0 statement when it has a minimum payment due", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "PayPal",
+      statementDay: 15,
+      dueDay: 5,
+      autoPay: false,
+      isActive: true,
+    });
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-04-15",
+      dueDate: "2026-05-05",
+      statementBalanceCents: 275_00,
+      paidAmountCents: 100_00,
+      paidDate: "2026-05-01",
+    });
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-05-15",
+      dueDate: "2026-06-05",
+      statementBalanceCents: 0,
+      minimumPaymentCents: 35_00,
+      liveBalanceCents: 300_00,
+    });
+
+    const stmts = await listStatements(card.id);
+    expect(stmts).toHaveLength(2);
+    expect(stmts[0]).toMatchObject({
+      statementDate: "2026-05-15",
+      statementBalanceCents: 0,
+      minimumPaymentCents: 35_00,
     });
   });
 });

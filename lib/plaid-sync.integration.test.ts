@@ -355,6 +355,7 @@ describe("syncCreditCardLiabilitiesForItem (mocked Plaid + real SQLite)", () => 
               last_statement_issue_date: "2025-03-15",
               next_payment_due_date: "2025-04-05",
               last_statement_balance: 1234.56,
+              minimum_payment_amount: 45.67,
               last_payment_date: null,
               last_payment_amount: null,
             },
@@ -376,6 +377,7 @@ describe("syncCreditCardLiabilitiesForItem (mocked Plaid + real SQLite)", () => 
       statementDate: "2025-03-15",
       dueDate: "2025-04-05",
       statementBalanceCents: 123456,
+      minimumPaymentCents: 4567,
       paidAmountCents: null,
       paidDate: null,
     });
@@ -547,6 +549,7 @@ describe("syncCreditCardLiabilitiesForItem (mocked Plaid + real SQLite)", () => 
               last_statement_issue_date: "2025-03-15",
               next_payment_due_date: "2025-04-05",
               last_statement_balance: 0.1 + 0.2, // notorious FP value
+              minimum_payment_amount: 0.1 + 0.2,
             },
           ],
         },
@@ -555,6 +558,7 @@ describe("syncCreditCardLiabilitiesForItem (mocked Plaid + real SQLite)", () => 
     await syncCreditCardLiabilitiesForItem(user.id, item.id, "tok");
     const stmts = await listStatements(card.id);
     expect(stmts[0]?.statementBalanceCents).toBe(30);
+    expect(stmts[0]?.minimumPaymentCents).toBe(30);
   });
 
   it("ignores liabilities with bogus day numbers (e.g. day=0 or day=99)", async () => {

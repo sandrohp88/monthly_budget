@@ -31,6 +31,7 @@ function statement(over: Partial<CreditCardStatementRow> = {}): CreditCardStatem
     statementDate: "2025-01-15",
     dueDate: "2025-02-10",
     statementBalanceCents: 100_000, // $1,000
+    minimumPaymentCents: null,
     paidAmountCents: null,
     paidDate: null,
     notes: null,
@@ -178,6 +179,19 @@ describe("statement payment state", () => {
     ).toBe(true);
   });
 
+  it("paidWithoutInterest: zero statement balance can use the Plaid minimum payment", () => {
+    expect(
+      paidWithoutInterest(
+        statement({
+          statementBalanceCents: 0,
+          minimumPaymentCents: 35_00,
+          paidAmountCents: 35_00,
+          paidDate: "2025-02-10",
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("totalDue sums only unpaid statements", () => {
     const a = statement({ id: "a", statementBalanceCents: 100_000 });
     const b = statement({
@@ -189,6 +203,22 @@ describe("statement payment state", () => {
     const c = statement({ id: "c", statementBalanceCents: 25_000 });
     expect(totalDue([a, b, c])).toBe(125_000);
     expect(totalDue([])).toBe(0);
+  });
+
+  it("totalDue uses a minimum payment when Plaid reports a zero statement balance", () => {
+    const a = statement({
+      id: "a",
+      statementBalanceCents: 0,
+      minimumPaymentCents: 35_00,
+    });
+    const b = statement({
+      id: "b",
+      statementBalanceCents: 0,
+      minimumPaymentCents: 35_00,
+      paidAmountCents: 35_00,
+      paidDate: "2025-02-10",
+    });
+    expect(totalDue([a, b])).toBe(35_00);
   });
 });
 

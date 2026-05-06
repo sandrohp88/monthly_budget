@@ -168,6 +168,71 @@ describe("buildProjection promo statement reconciliation", () => {
     });
   });
 
+  it("projects a Plaid minimum payment when PayPal reports a zero statement balance", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "PayPal",
+      statementDay: 15,
+      dueDay: 10,
+      currentBalanceCents: 900_00,
+      autoPay: false,
+      isActive: true,
+    });
+    await createStatement(card.id, {
+      statementDate: "2026-05-15",
+      dueDate: "2026-06-10",
+      statementBalanceCents: 0,
+      minimumPaymentCents: 35_00,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+
+    const projection = await buildProjection(user.id);
+    const event = projection?.rows
+      .find((r) => r.date === "2026-06-10")
+      ?.events.find((e) => e.label === "PayPal payment");
+
+    expect(event).toMatchObject({
+      amountCents: 35_00,
+      originalAmountCents: 35_00,
+      paymentDueCents: 35_00,
+      paymentBalanceCents: 900_00,
+    });
+  });
+
+  it("uses the full statement balance when Plaid also returns a lower minimum payment", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Rewards Card",
+      statementDay: 15,
+      dueDay: 10,
+      currentBalanceCents: 500_00,
+      autoPay: false,
+      isActive: true,
+    });
+    await createStatement(card.id, {
+      statementDate: "2026-05-15",
+      dueDate: "2026-06-10",
+      statementBalanceCents: 200_00,
+      minimumPaymentCents: 35_00,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+
+    const projection = await buildProjection(user.id);
+    const event = projection?.rows
+      .find((r) => r.date === "2026-06-10")
+      ?.events.find((e) => e.label === "Rewards Card payment");
+
+    expect(event).toMatchObject({
+      amountCents: 200_00,
+      originalAmountCents: 200_00,
+      paymentDueCents: 200_00,
+    });
+  });
+
   it("does not double-count a promo when paidAmountCents is zero on an unpaid statement", async () => {
     const user = await makeUser();
     const card = await createCreditCard(user.id, {

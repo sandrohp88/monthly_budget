@@ -141,17 +141,29 @@ export function isStatementOpen(s: CreditCardStatementRow): boolean {
   return s.paidAmountCents == null;
 }
 
+/**
+ * Cash the statement should project on its due date.
+ *
+ * Normal credit-card statements use the full statement balance because the app
+ * models "pay enough to avoid interest." PayPal special-financing liabilities
+ * can report a $0 statement balance while still returning a required minimum
+ * payment, so that minimum becomes the cash due for that cycle.
+ */
+export function statementCashDueCents(s: CreditCardStatementRow): number {
+  return s.statementBalanceCents > 0 ? s.statementBalanceCents : (s.minimumPaymentCents ?? 0);
+}
+
 /** Did the user pay the full statement on or before the due date? */
 export function paidWithoutInterest(s: CreditCardStatementRow): boolean {
   if (s.paidAmountCents == null || s.paidDate == null) return false;
-  return s.paidAmountCents >= s.statementBalanceCents && s.paidDate <= s.dueDate;
+  return s.paidAmountCents >= statementCashDueCents(s) && s.paidDate <= s.dueDate;
 }
 
 /** Sum of unpaid balances across a list of statements. */
 export function totalDue(statements: ReadonlyArray<CreditCardStatementRow>): number {
   return statements
     .filter(isStatementOpen)
-    .reduce((sum, s) => sum + s.statementBalanceCents, 0);
+    .reduce((sum, s) => sum + statementCashDueCents(s), 0);
 }
 
 /**

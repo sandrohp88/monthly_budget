@@ -1211,6 +1211,7 @@ export async function upsertCreditCardStatementByDate(
     statementDate: string;
     dueDate: string;
     statementBalanceCents: number;
+    minimumPaymentCents?: number | null;
     paidAmountCents?: number | null;
     paidDate?: string | null;
     liveBalanceCents?: number | null;
@@ -1228,7 +1229,11 @@ export async function upsertCreditCardStatementByDate(
     )
     .get();
 
-  if (data.statementBalanceCents === 0 && (data.liveBalanceCents ?? 0) > 0) {
+  if (
+    data.statementBalanceCents === 0 &&
+    (data.minimumPaymentCents ?? 0) <= 0 &&
+    (data.liveBalanceCents ?? 0) > 0
+  ) {
     const prior = await db
       .select()
       .from(creditCardStatements)
@@ -1260,6 +1265,7 @@ export async function upsertCreditCardStatementByDate(
         statementDate: data.statementDate,
         dueDate: data.dueDate,
         statementBalanceCents: data.statementBalanceCents,
+        minimumPaymentCents: data.minimumPaymentCents ?? null,
         paidAmountCents: data.paidAmountCents ?? null,
         paidDate: data.paidDate ?? null,
       })
@@ -1274,6 +1280,7 @@ export async function upsertCreditCardStatementByDate(
     .set({
       dueDate: data.dueDate,
       statementBalanceCents: data.statementBalanceCents,
+      minimumPaymentCents: data.minimumPaymentCents ?? null,
       ...(keepPaid
         ? {}
         : { paidAmountCents: data.paidAmountCents ?? null, paidDate: data.paidDate ?? null }),

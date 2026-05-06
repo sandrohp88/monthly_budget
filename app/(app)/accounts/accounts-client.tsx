@@ -21,6 +21,7 @@ import { DateLabel } from "@/components/date-label";
 import { PlaidLinkButton } from "@/components/plaid-link-button";
 import { PlaidLinkCardDialog } from "@/components/plaid-link-card-dialog";
 import { cn } from "@/lib/cn";
+import { statementCashDueCents } from "@/lib/credit-cards";
 import type {
   PlaidItemRow,
   PlaidAccountRow,
@@ -373,7 +374,7 @@ function AccountRow({
                         {" · NEXT DUE "}
                         <DateLabel iso={latestStatement.dueDate} format="short" />
                         {" · "}
-                        <Money cents={latestStatement.statementBalanceCents} />
+                        <Money cents={statementCashDueCents(latestStatement)} />
                       </>
                     )}
                   </div>

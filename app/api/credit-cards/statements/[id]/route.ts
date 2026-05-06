@@ -27,6 +27,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
     ...(data.statementBalanceCents !== undefined
       ? { statementBalanceCents: data.statementBalanceCents }
       : {}),
+    ...(data.minimumPaymentCents !== undefined
+      ? { minimumPaymentCents: data.minimumPaymentCents }
+      : {}),
     ...(data.paidAmountCents !== undefined ? { paidAmountCents: data.paidAmountCents } : {}),
     ...(data.paidDate !== undefined ? { paidDate: data.paidDate } : {}),
     ...(data.notes !== undefined ? { notes: data.notes ?? null } : {}),
