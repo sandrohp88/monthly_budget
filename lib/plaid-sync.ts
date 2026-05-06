@@ -515,20 +515,24 @@ export async function syncCreditCardLiabilitiesForItem(
         // If the most recent payment paid off the most recent statement, mark it.
         const lastPayDate = liab.last_payment_date ?? null;
         const lastPayAmt = liab.last_payment_amount ?? null;
-        const stmtBalCents = Math.round(liab.last_statement_balance * 100);
-        const payAmtCents = lastPayAmt != null ? Math.round(lastPayAmt * 100) : null;
+        const stmtBalCents = toCents(liab.last_statement_balance);
+        const minimumPaymentCents =
+          liab.minimum_payment_amount != null ? toCents(liab.minimum_payment_amount) : null;
+        const payAmtCents = lastPayAmt != null ? toCents(lastPayAmt) : null;
 
         const looksPaid = looksLikePaid({
           lastPaymentDate: lastPayDate,
           lastPaymentCents: payAmtCents,
           statementDate: stmtDate,
           statementBalanceCents: stmtBalCents,
+          minimumPaymentCents,
         });
 
         const statementChanged = await upsertCreditCardStatementByDate(card.id, {
           statementDate: stmtDate,
           dueDate: resolvedDue,
           statementBalanceCents: stmtBalCents,
+          minimumPaymentCents,
           paidAmountCents: looksPaid ? payAmtCents : null,
           paidDate: looksPaid ? lastPayDate : null,
           liveBalanceCents: liveBalanceByAccountId.get(plaidAccountId) ?? card.currentBalanceCents,

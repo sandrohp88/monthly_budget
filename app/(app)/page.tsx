@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { buildProjection } from "@/lib/projection-server";
 import { listBills, listExtras, listPaychecks, listStatementsForUser } from "@/lib/repos";
-import { isStatementOpen } from "@/lib/credit-cards";
+import { isStatementOpen, statementCashDueCents } from "@/lib/credit-cards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CardSubTag, PageHead } from "@/components/ui/page-head";
 import { Tile, TileGrid } from "@/components/ui/tile";
@@ -49,7 +49,7 @@ export default async function DashboardPage() {
 
   // Credit card "due to avoid interest" totals
   const openStatements = ccStatements.filter(isStatementOpen);
-  const ccTotalDue = openStatements.reduce((s, x) => s + x.statementBalanceCents, 0);
+  const ccTotalDue = openStatements.reduce((s, x) => s + statementCashDueCents(x), 0);
   const ccNextDue =
     openStatements.length > 0
       ? [...openStatements].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0]

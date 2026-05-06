@@ -173,6 +173,7 @@ export const statementCreateSchema = z.object({
   statementDate: isoDate,
   dueDate: isoDate,
   statementBalanceCents: cents.refine((n) => n >= 0, "Balance must be non-negative"),
+  minimumPaymentCents: cents.refine((n) => n >= 0).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
 });
 
@@ -180,6 +181,7 @@ export const statementUpdateSchema = z.object({
   statementDate: isoDate.optional(),
   dueDate: isoDate.optional(),
   statementBalanceCents: cents.optional(),
+  minimumPaymentCents: cents.refine((n) => n >= 0).nullable().optional(),
   paidAmountCents: cents.nullable().optional(),
   paidDate: isoDate.nullable().optional(),
   notes: z.string().max(500).nullable().optional(),

@@ -23,6 +23,7 @@ export async function POST(req: Request, ctx: Ctx) {
     statementDate: data.statementDate,
     dueDate: data.dueDate,
     statementBalanceCents: data.statementBalanceCents,
+    minimumPaymentCents: data.minimumPaymentCents ?? null,
     notes: data.notes ?? null,
     paidAmountCents: null,
     paidDate: null,

@@ -198,6 +198,7 @@ export const creditCardStatements = sqliteTable(
     statementDate: text("statement_date").notNull(),
     dueDate: text("due_date").notNull(),
     statementBalanceCents: integer("statement_balance_cents").notNull(),
+    minimumPaymentCents: integer("minimum_payment_cents"),
     paidAmountCents: integer("paid_amount_cents"),
     paidDate: text("paid_date"),
     notes: text("notes"),

@@ -44,6 +44,25 @@ describe("plaid-sync helpers", () => {
       expect(looksLikePaid({ ...base, lastPaymentCents: 50_000 })).toBe(false);
     });
 
+    it("false: zero statement balance still requires the Plaid minimum payment", () => {
+      expect(
+        looksLikePaid({
+          ...base,
+          statementBalanceCents: 0,
+          minimumPaymentCents: 35_00,
+          lastPaymentCents: 0,
+        }),
+      ).toBe(false);
+      expect(
+        looksLikePaid({
+          ...base,
+          statementBalanceCents: 0,
+          minimumPaymentCents: 35_00,
+          lastPaymentCents: 35_00,
+        }),
+      ).toBe(true);
+    });
+
     it("false: missing payment date", () => {
       expect(looksLikePaid({ ...base, lastPaymentDate: null })).toBe(false);
       expect(looksLikePaid({ ...base, lastPaymentDate: undefined })).toBe(false);

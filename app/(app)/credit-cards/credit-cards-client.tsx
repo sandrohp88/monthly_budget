@@ -59,6 +59,7 @@ import {
   previousStatementDateOnOrBefore,
   promoMonthlyChunkAt,
   promoWhatIf,
+  statementCashDueCents,
   totalDue,
 } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
@@ -215,7 +216,7 @@ export function CreditCardsClient({
           label="NEXT PAYMENT"
           value={
             nextDue ? (
-              <Money cents={nextDue.statementBalanceCents} />
+              <Money cents={statementCashDueCents(nextDue)} />
             ) : (
               <span className="text-[var(--text-2)] text-base">—</span>
             )
@@ -591,7 +592,7 @@ function CreditCardTile({
                     : "text-[var(--amber)]",
               )}
             >
-              <Money cents={current.statementBalanceCents} />
+              <Money cents={statementCashDueCents(current)} />
             </div>
             <div className="text-[10px] uppercase tracking-wide text-[var(--text-2)]">
               CLOSED <DateLabel iso={current.statementDate} format="short" /> · DUE{" "}
@@ -685,7 +686,7 @@ function CreditCardTile({
           )}
           {current && isOpen ? (
             <ActualVsEstimate
-              actualCents={current.statementBalanceCents}
+              actualCents={statementCashDueCents(current)}
               estimatedCents={estimate.totalCents}
             />
           ) : null}
@@ -1098,7 +1099,7 @@ function StatementEditDialog({
   onSaved: () => void;
 }) {
   const [paidAmountCents, setPaidAmount] = React.useState<number>(
-    statement.paidAmountCents ?? statement.statementBalanceCents,
+    statement.paidAmountCents ?? statementCashDueCents(statement),
   );
   const [paidDate, setPaidDate] = React.useState<string>(statement.paidDate ?? todayIso());
   const [statementBalanceCents, setBalance] = React.useState(statement.statementBalanceCents);
@@ -1146,8 +1147,11 @@ function StatementEditDialog({
     onSaved();
   };
 
+  const cashDueCents = statementBalanceCents > 0
+    ? statementBalanceCents
+    : (statement.minimumPaymentCents ?? 0);
   const willAvoidInterest =
-    paidToggle && paidAmountCents >= statementBalanceCents && paidDate <= dueDate;
+    paidToggle && paidAmountCents >= cashDueCents && paidDate <= dueDate;
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -1214,7 +1218,7 @@ function StatementEditDialog({
                 ) : (
                   <>
                     <AlertTriangle className="h-3 w-3" />
-                    {paidAmountCents < statementBalanceCents
+                    {paidAmountCents < cashDueCents
                       ? "PARTIAL PAYMENT — INTEREST WILL ACCRUE ON REMAINDER"
                       : "PAID AFTER DUE DATE — INTEREST MAY APPLY"}
                   </>

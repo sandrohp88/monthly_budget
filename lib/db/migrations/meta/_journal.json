@@ -120,6 +120,13 @@
       "when": 1778870000000,
       "tag": "0016_archive_expired_promos",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1778950000000,
+      "tag": "0017_statement_minimum_payment",
+      "breakpoints": true
     }
   ]
 }

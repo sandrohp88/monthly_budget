@@ -18,6 +18,7 @@ import {
   dueDateFromStatement,
   nextStatementDateOnOrAfter,
   projectPromoScheduleWithBalances,
+  statementCashDueCents,
 } from "./credit-cards";
 import {
   computeProjection,
@@ -177,7 +178,8 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   // statement due amount when a 0% promo balance is present.
   const ccExtras: ProjectionInput["extras"] = statements
     .map((s) => {
-      const remainingCents = Math.max(0, s.statementBalanceCents - (s.paidAmountCents ?? 0));
+      const dueCents = statementCashDueCents(s);
+      const remainingCents = Math.max(0, dueCents - (s.paidAmountCents ?? 0));
       if (remainingCents <= 0) return null;
       const override = cardOverridesByCard.get(s.cardId)?.get(s.dueDate);
       appliedCardOverrideKeys.add(overrideKey(s.cardId, s.dueDate));
