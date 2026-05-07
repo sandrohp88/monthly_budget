@@ -29,6 +29,27 @@ export const billPaymentOverrideSchema = z.object({
   notes: z.string().max(500).nullable().optional(),
 });
 
+export const variableBillCreateSchema = z.object({
+  name: z.string().min(1).max(80),
+  category: z.string().min(1).max(50),
+  amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
+  intervalMonths: z.number().int().min(1).max(120),
+  anchorDate: isoDate,
+  cardIds: z.array(z.string().min(1)).min(1, "Pick at least one card").max(12),
+  notes: z.string().max(500).nullable().optional(),
+});
+
+export const variableBillUpdateSchema = variableBillCreateSchema.and(
+  z.object({ isActive: z.boolean().optional() }),
+);
+
+export const variableBillAverageSchema = z.object({
+  name: z.string().max(80).optional(),
+  category: z.string().max(50).optional(),
+  cardIds: z.array(z.string().min(1)).max(12).default([]),
+  lookbackMonths: z.number().int().min(1).max(24).default(6),
+});
+
 export const creditCardPaymentOverrideSchema = z.object({
   dueDate: isoDate,
   amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
@@ -201,6 +222,9 @@ export const statementUpdateSchema = z.object({
 
 export type BillCreateInput = z.infer<typeof billCreateSchema>;
 export type BillUpdateInput = z.infer<typeof billUpdateSchema>;
+export type VariableBillCreateInput = z.infer<typeof variableBillCreateSchema>;
+export type VariableBillUpdateInput = z.infer<typeof variableBillUpdateSchema>;
+export type VariableBillAverageInput = z.infer<typeof variableBillAverageSchema>;
 export type PaycheckCreateInput = z.infer<typeof paycheckCreateSchema>;
 export type PaycheckUpdateInput = z.infer<typeof paycheckUpdateSchema>;
 export type ExtraCreateInput = z.infer<typeof extraCreateSchema>;

@@ -733,7 +733,7 @@ function CreditCardTile({
                           <Money cents={s.statementBalanceCents} />
                         </td>
                         <td className="py-1.5 text-right">
-                          {s.paidAmountCents == null ? (
+                          {isStatementOpen(s) ? (
                             <span className="text-[var(--amber)]">UNPAID</span>
                           ) : ok ? (
                             <span className="text-[var(--mint)]">OK</span>

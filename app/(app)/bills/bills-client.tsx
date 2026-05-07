@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Plus, Download } from "lucide-react";
+import { Calculator, Plus, Download } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,17 +24,51 @@ import {
 } from "@/components/ui/table";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Money } from "@/components/money";
+import { MoneyInput } from "@/components/money-input";
 import { DateLabel } from "@/components/date-label";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { BillForm, type BillFormValues } from "./bill-form";
 import { cn } from "@/lib/cn";
 import { nextBillOccurrence } from "@/lib/bills";
 import { todayIso } from "@/lib/dates";
 import type { BillRow } from "@/lib/db/schema";
 
-function monthlyEquivalent(b: BillRow): number {
+type VariableBill = {
+  id: string;
+  userId: string;
+  name: string;
+  category: string;
+  amountCents: number;
+  intervalMonths: number;
+  anchorDate: string;
+  notes: string | null;
+  isActive: boolean;
+  createdAt: number;
+  updatedAt: number;
+  cardIds: string[];
+};
+
+type VariableBillFormValues = {
+  name: string;
+  category: string;
+  amountCents: number;
+  intervalMonths: number;
+  anchorDate: string;
+  cardIds: string[];
+  notes: string | null;
+};
+
+function monthlyEquivalent(b: Pick<BillRow, "amountCents" | "intervalMonths">): number {
   return b.intervalMonths > 0 ? Math.round(b.amountCents / b.intervalMonths) : b.amountCents;
 }
 
@@ -53,14 +87,17 @@ export type BillCardOption = { id: string; name: string; isActive: boolean };
 
 export function BillsClient({
   initialBills,
+  initialVariableBills,
   categories,
   cards,
 }: {
   initialBills: BillRow[];
+  initialVariableBills: VariableBill[];
   categories: ReadonlyArray<string>;
   cards: ReadonlyArray<BillCardOption>;
 }) {
   const [bills, setBills] = React.useState<BillRow[]>(initialBills);
+  const [variableBills, setVariableBills] = React.useState<VariableBill[]>(initialVariableBills);
   const [categoriesState, setCategoriesState] = React.useState<string[]>(() => [...categories]);
   const [showArchived, setShowArchived] = React.useState(false);
   const [filter, setFilter] = React.useState("");
@@ -68,7 +105,9 @@ export function BillsClient({
   const [sortKey, setSortKey] = React.useState<"name" | "amount" | "next" | "monthly">("name");
   const today = todayIso();
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [createVariableOpen, setCreateVariableOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<BillRow | null>(null);
+  const [editingVariable, setEditingVariable] = React.useState<VariableBill | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
 
   const visible = bills
@@ -92,6 +131,11 @@ export function BillsClient({
   const totalMonthly = visible.reduce((s, b) => s + monthlyEquivalent(b), 0);
   const activeCount = bills.filter((b) => b.isActive).length;
   const archivedCount = bills.length - activeCount;
+  const activeVariableBills = variableBills.filter((b) => b.isActive);
+  const variableMonthly = activeVariableBills.reduce(
+    (sum, b) => sum + monthlyEquivalent(b),
+    0,
+  );
 
   const allCategories = Array.from(new Set(bills.map((b) => b.category.toUpperCase()))).sort();
 
@@ -134,6 +178,26 @@ export function BillsClient({
     }
   };
 
+  const createVariable = async (values: VariableBillFormValues) => {
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/variable-bills", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(values),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "create failed");
+      setVariableBills((prev) => [...prev, json.variableBill as VariableBill]);
+      setCreateVariableOpen(false);
+      toast.success("Variable bill added");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const update = async (values: BillFormValues) => {
     if (!editing) return;
     setSubmitting(true);
@@ -155,6 +219,29 @@ export function BillsClient({
     }
   };
 
+  const updateVariable = async (values: VariableBillFormValues) => {
+    if (!editingVariable) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/variable-bills/${editingVariable.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...values, isActive: editingVariable.isActive }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "update failed");
+      setVariableBills((prev) =>
+        prev.map((b) => (b.id === editingVariable.id ? (json.variableBill as VariableBill) : b)),
+      );
+      setEditingVariable(null);
+      toast.success("Variable bill updated");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const archive = async (id: string) => {
     const prev = bills;
     setBills((curr) => curr.map((b) => (b.id === id ? { ...b, isActive: false } : b)));
@@ -165,6 +252,20 @@ export function BillsClient({
       toast.success("Bill archived");
     } catch (e) {
       setBills(prev);
+      toast.error((e as Error).message);
+    }
+  };
+
+  const archiveVariable = async (id: string) => {
+    const prev = variableBills;
+    setVariableBills((curr) => curr.map((b) => (b.id === id ? { ...b, isActive: false } : b)));
+    setEditingVariable(null);
+    try {
+      const res = await fetch(`/api/variable-bills/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("archive failed");
+      toast.success("Variable bill archived");
+    } catch (e) {
+      setVariableBills(prev);
       toast.error((e as Error).message);
     }
   };
@@ -188,6 +289,9 @@ export function BillsClient({
             </Button>
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
               <Plus className="h-3 w-3" /> ADD BILL
+            </Button>
+            <Button variant="outline" onClick={() => setCreateVariableOpen(true)}>
+              <Calculator className="h-3 w-3" /> ADD VARIABLE
             </Button>
           </>
         }
@@ -331,6 +435,79 @@ export function BillsClient({
         </Card>
       )}
 
+      <Card>
+        <CardHeader>
+          <div>
+            <CardSubTag>TABLE_VARIABLE</CardSubTag>
+            <CardTitle className="mt-0.5">
+              {activeVariableBills.length} VARIABLE · <Money cents={variableMonthly} /> / MO
+            </CardTitle>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => setCreateVariableOpen(true)}>
+            <Plus className="h-3 w-3" /> ADD VARIABLE
+          </Button>
+        </CardHeader>
+        {variableBills.length === 0 ? (
+          <div className="px-4 py-8 text-center text-[11px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+            NO VARIABLE CARD FORECASTS
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>NAME</TableHead>
+                <TableHead>CATEGORY</TableHead>
+                <TableHead className="text-right">EXPECTED</TableHead>
+                <TableHead>EVERY</TableHead>
+                <TableHead>CARDS</TableHead>
+                <TableHead className="text-right">NEXT</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {variableBills
+                .filter((b) => (showArchived ? true : b.isActive))
+                .map((b) => {
+                  const names = b.cardIds
+                    .map((id) => cardById.get(id)?.name)
+                    .filter(Boolean)
+                    .join(", ");
+                  return (
+                    <TableRow
+                      key={b.id}
+                      className={cn("cursor-pointer", !b.isActive && "opacity-60")}
+                      onClick={() => setEditingVariable(b)}
+                    >
+                      <TableCell className="font-semibold text-[var(--text-0)]">
+                        {b.name}
+                        {!b.isActive ? (
+                          <Badge variant="muted" className="ml-2">
+                            ARCHIVED
+                          </Badge>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-[var(--text-2)]">{b.category}</TableCell>
+                      <TableCell className="text-right">
+                        <Money cents={b.amountCents} />
+                      </TableCell>
+                      <TableCell>
+                        <StatusPill variant={b.intervalMonths === 1 ? "default" : "warn"}>
+                          {intervalLabel(b.intervalMonths)}
+                        </StatusPill>
+                      </TableCell>
+                      <TableCell className="max-w-[220px] truncate text-[10px] uppercase tracking-[0.1em] text-[var(--text-2)]">
+                        {names || "NO ACTIVE CARDS"}
+                      </TableCell>
+                      <TableCell className="text-right tabular">
+                        <DateLabel iso={nextBillOccurrence(b, today)} format="short" />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
@@ -343,6 +520,22 @@ export function BillsClient({
             onCategoryAdded={(c) => setCategoriesState((prev) => [...prev, c])}
             onSubmit={create}
             onCancel={() => setCreateOpen(false)}
+            submitting={submitting}
+          />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={createVariableOpen} onOpenChange={setCreateVariableOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <CardSubTag>NEW_VARIABLE</CardSubTag>
+            <DialogTitle>ADD VARIABLE BILL</DialogTitle>
+          </DialogHeader>
+          <VariableBillForm
+            categories={categoriesState}
+            cards={cards}
+            onSubmit={createVariable}
+            onCancel={() => setCreateVariableOpen(false)}
             submitting={submitting}
           />
         </DialogContent>
@@ -394,6 +587,52 @@ export function BillsClient({
           ) : null}
         </SheetContent>
       </Sheet>
+
+      <Sheet open={editingVariable !== null} onOpenChange={(o) => !o && setEditingVariable(null)}>
+        <SheetContent>
+          {editingVariable ? (
+            <>
+              <SheetHeader>
+                <CardSubTag>EDIT_VARIABLE</CardSubTag>
+                <SheetTitle>{editingVariable.name.toUpperCase()}</SheetTitle>
+              </SheetHeader>
+              <SheetBody>
+                <VariableBillForm
+                  initial={editingVariable}
+                  categories={categoriesState}
+                  cards={cards}
+                  onSubmit={updateVariable}
+                  onCancel={() => setEditingVariable(null)}
+                  submitting={submitting}
+                  hideActions
+                />
+              </SheetBody>
+              <SheetFooter>
+                {editingVariable.isActive ? (
+                  <Button variant="destructive" onClick={() => archiveVariable(editingVariable.id)}>
+                    SOFT DELETE
+                  </Button>
+                ) : (
+                  <span />
+                )}
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => setEditingVariable(null)}>
+                    CANCEL
+                  </Button>
+                  <Button
+                    variant="primary"
+                    form="variable-bill-form"
+                    type="submit"
+                    disabled={submitting}
+                  >
+                    {submitting ? "SAVING…" : "SAVE"}
+                  </Button>
+                </div>
+              </SheetFooter>
+            </>
+          ) : null}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
@@ -419,5 +658,235 @@ function Tab({
     >
       {children}
     </button>
+  );
+}
+
+function VariableBillForm({
+  initial,
+  categories,
+  cards,
+  onSubmit,
+  onCancel,
+  submitting,
+  hideActions,
+}: {
+  initial?: VariableBill;
+  categories: ReadonlyArray<string>;
+  cards: ReadonlyArray<BillCardOption>;
+  onSubmit: (values: VariableBillFormValues) => void | Promise<void>;
+  onCancel: () => void;
+  submitting?: boolean;
+  hideActions?: boolean;
+}) {
+  const activeCards = cards.filter((card) => card.isActive);
+  const today = todayIso();
+  const [name, setName] = React.useState(initial?.name ?? "");
+  const [category, setCategory] = React.useState(initial?.category ?? categories[0] ?? "Other");
+  const [amountCents, setAmountCents] = React.useState(initial?.amountCents ?? 0);
+  const [intervalMonths, setIntervalMonths] = React.useState(initial?.intervalMonths ?? 1);
+  const [anchorDate, setAnchorDate] = React.useState(
+    initial ? nextBillOccurrence(initial, today) : today,
+  );
+  const [cardIds, setCardIds] = React.useState<string[]>(
+    initial?.cardIds.length ? initial.cardIds : activeCards.slice(0, 1).map((card) => card.id),
+  );
+  const [notes, setNotes] = React.useState(initial?.notes ?? "");
+  const [avgLoading, setAvgLoading] = React.useState(false);
+  const [average, setAverage] = React.useState<{
+    averageCents: number;
+    sampleCount: number;
+    monthlyTotals: Array<{ month: string; amountCents: number }>;
+  } | null>(null);
+
+  const toggleCard = (cardId: string) => {
+    setCardIds((current) =>
+      current.includes(cardId)
+        ? current.filter((id) => id !== cardId)
+        : [...current, cardId],
+    );
+  };
+
+  const loadAverage = async () => {
+    setAvgLoading(true);
+    try {
+      const res = await fetch("/api/variable-bills/average", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          category,
+          cardIds,
+          lookbackMonths: 6,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "average failed");
+      setAverage(json.average);
+      setAmountCents(json.average.averageCents ?? 0);
+      toast.success("Average loaded");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setAvgLoading(false);
+    }
+  };
+
+  const monthlyEq = intervalMonths > 0 ? Math.round(amountCents / intervalMonths) : amountCents;
+
+  return (
+    <form
+      id="variable-bill-form"
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit({
+          name: name.trim(),
+          category,
+          amountCents,
+          intervalMonths,
+          anchorDate,
+          cardIds,
+          notes: notes.trim() ? notes.trim() : null,
+        });
+      }}
+    >
+      <div className="grid grid-cols-2 gap-4">
+        <div className="col-span-2 space-y-1.5">
+          <Label htmlFor="variable-name">NAME</Label>
+          <Input
+            id="variable-name"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Groceries"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>EXPECTED AMOUNT</Label>
+          <MoneyInput valueCents={amountCents} onChangeCents={setAmountCents} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>CATEGORY</Label>
+          <Select value={category} onValueChange={setCategory}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {categories.map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="variable-anchor">NEXT EXPECTED DATE</Label>
+          <Input
+            id="variable-anchor"
+            type="date"
+            required
+            value={anchorDate}
+            onChange={(e) => setAnchorDate(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="variable-interval">EVERY N MONTHS</Label>
+          <Input
+            id="variable-interval"
+            type="number"
+            min={1}
+            max={120}
+            required
+            value={intervalMonths}
+            onChange={(e) => setIntervalMonths(Math.max(1, Number(e.target.value) || 1))}
+          />
+        </div>
+        <div className="col-span-2 space-y-2">
+          <Label>CREDIT CARDS</Label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {activeCards.map((card) => (
+              <label
+                key={card.id}
+                className={cn(
+                  "flex cursor-pointer items-center justify-between rounded-sm border px-3 py-2 text-[10px] uppercase tracking-[0.12em]",
+                  cardIds.includes(card.id)
+                    ? "border-[var(--mint-dim)] bg-[var(--mint-glow)] text-[var(--mint)]"
+                    : "border-[var(--border-raw)] bg-[var(--bg-2)] text-[var(--text-2)]",
+                )}
+              >
+                <span>{card.name}</span>
+                <input
+                  type="checkbox"
+                  checked={cardIds.includes(card.id)}
+                  onChange={() => toggleCard(card.id)}
+                  className="h-3 w-3 accent-[var(--mint)]"
+                />
+              </label>
+            ))}
+          </div>
+          {activeCards.length === 0 ? (
+            <p className="text-[9px] uppercase tracking-[0.12em] text-[var(--amber)]">
+              Add an active credit card first.
+            </p>
+          ) : null}
+        </div>
+        <div className="col-span-2 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
+                HISTORY AVG
+              </div>
+              <div className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                Last 6 months · approved linked transactions
+              </div>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={loadAverage}
+              disabled={avgLoading || cardIds.length === 0}
+            >
+              <Calculator className="h-3 w-3" /> {avgLoading ? "LOADING…" : "USE AVG"}
+            </Button>
+          </div>
+          {average ? (
+            <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+              <span>{average.sampleCount} MATCHING TRANSACTIONS</span>
+              <span className="text-[13px] font-bold text-[var(--mint)] tabular">
+                <Money cents={average.averageCents} />
+              </span>
+            </div>
+          ) : null}
+        </div>
+        <div className="col-span-2 space-y-1.5">
+          <Label htmlFor="variable-notes">NOTES</Label>
+          <Input id="variable-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </div>
+        <div className="col-span-2 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2.5">
+          <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
+            <span>MONTHLY EQUIVALENT</span>
+            <span className="text-[13px] font-bold text-[var(--mint)] tabular">
+              <Money cents={monthlyEq} />
+            </span>
+          </div>
+        </div>
+      </div>
+      {hideActions ? null : (
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
+            CANCEL
+          </Button>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={submitting || !name.trim() || cardIds.length === 0}
+          >
+            {submitting ? "SAVING…" : "SAVE"}
+          </Button>
+        </div>
+      )}
+    </form>
   );
 }

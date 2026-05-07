@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
   bills,
@@ -16,6 +16,8 @@ import {
   plaidTransactionDrafts,
   settings,
   users,
+  variableBillCards,
+  variableBills,
   type BillRow,
   type BillPaymentOverrideRow,
   type CategoryRow,
@@ -38,6 +40,8 @@ import {
   type NewPlaidItem,
   type NewPlaidTransactionDraft,
   type NewSettings,
+  type NewVariableBill,
+  type NewVariableBillCard,
   type OneTimeExpenseRow,
   type PaycheckRow,
   type PlaidAccountRow,
@@ -46,10 +50,13 @@ import {
   type SettingsRow,
   type UserRow,
   type UserSafe,
+  type VariableBillCardRow,
+  type VariableBillRow,
 } from "./db/schema";
 import { newId } from "./ids";
 import { hashPassword } from "./auth";
 import { promoMonthlyChunkAt } from "./credit-cards";
+import { calculateMonthlyHistoryAverage } from "./variable-bills";
 import { log } from "./log";
 
 const DEFAULT_CATEGORIES: ReadonlyArray<{ name: string; color: string; kind: "expense" | "income" }> = [
@@ -289,6 +296,217 @@ export async function updateBill(
 
 export async function archiveBill(userId: string, id: string): Promise<void> {
   await updateBill(userId, id, { isActive: false });
+}
+
+export type VariableBillWithCards = VariableBillRow & { cardIds: string[] };
+
+async function cardIdsForVariableBills(
+  userId: string,
+  billIds: ReadonlyArray<string>,
+): Promise<Map<string, string[]>> {
+  const db = getDb();
+  if (billIds.length === 0) return new Map();
+  const rows = await db
+    .select()
+    .from(variableBillCards)
+    .where(
+      and(
+        eq(variableBillCards.userId, userId),
+        inArray(variableBillCards.variableBillId, [...billIds]),
+      ),
+    )
+    .all();
+  const out = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = out.get(row.variableBillId) ?? [];
+    list.push(row.cardId);
+    out.set(row.variableBillId, list);
+  }
+  return out;
+}
+
+export async function listVariableBills(
+  userId: string,
+  includeArchived = false,
+): Promise<VariableBillWithCards[]> {
+  const db = getDb();
+  const rows = includeArchived
+    ? await db
+        .select()
+        .from(variableBills)
+        .where(eq(variableBills.userId, userId))
+        .orderBy(asc(variableBills.name))
+        .all()
+    : await db
+        .select()
+        .from(variableBills)
+        .where(and(eq(variableBills.userId, userId), eq(variableBills.isActive, true)))
+        .orderBy(asc(variableBills.name))
+        .all();
+  const cardsByBill = await cardIdsForVariableBills(userId, rows.map((row) => row.id));
+  return rows.map((row) => ({ ...row, cardIds: cardsByBill.get(row.id) ?? [] }));
+}
+
+export async function getVariableBill(
+  userId: string,
+  id: string,
+): Promise<VariableBillWithCards | undefined> {
+  const rows = await listVariableBills(userId, true);
+  return rows.find((row) => row.id === id);
+}
+
+async function replaceVariableBillCards(
+  userId: string,
+  variableBillId: string,
+  cardIds: ReadonlyArray<string>,
+): Promise<void> {
+  const db = getDb();
+  const cards = await listCreditCards(userId, true);
+  const ownedIds = new Set(cards.map((card) => card.id));
+  const uniqueIds = Array.from(new Set(cardIds));
+  if (uniqueIds.length === 0) throw new Error("At least one card is required");
+  for (const cardId of uniqueIds) {
+    if (!ownedIds.has(cardId)) throw new Error("Card not found");
+  }
+
+  await db
+    .delete(variableBillCards)
+    .where(
+      and(
+        eq(variableBillCards.userId, userId),
+        eq(variableBillCards.variableBillId, variableBillId),
+      ),
+    )
+    .run();
+
+  for (const cardId of uniqueIds) {
+    const row: NewVariableBillCard = {
+      id: newId(),
+      userId,
+      variableBillId,
+      cardId,
+    };
+    await db.insert(variableBillCards).values(row).run();
+  }
+}
+
+export async function createVariableBill(
+  userId: string,
+  data: Omit<NewVariableBill, "id" | "userId" | "createdAt" | "updatedAt"> & {
+    cardIds: string[];
+  },
+): Promise<VariableBillWithCards> {
+  const db = getDb();
+  const id = newId();
+  const { cardIds, ...bill } = data;
+  await db.insert(variableBills).values({ id, userId, ...bill }).run();
+  await replaceVariableBillCards(userId, id, cardIds);
+  return (await getVariableBill(userId, id))!;
+}
+
+export async function updateVariableBill(
+  userId: string,
+  id: string,
+  patch: Partial<Omit<VariableBillRow, "id" | "userId" | "createdAt">> & {
+    cardIds?: string[];
+  },
+): Promise<VariableBillWithCards | undefined> {
+  const db = getDb();
+  const existing = await getVariableBill(userId, id);
+  if (!existing) return undefined;
+  const { cardIds, ...billPatch } = patch;
+  if (Object.keys(billPatch).length > 0) {
+    await db
+      .update(variableBills)
+      .set({ ...billPatch, updatedAt: Date.now() })
+      .where(and(eq(variableBills.userId, userId), eq(variableBills.id, id)))
+      .run();
+  }
+  if (cardIds) await replaceVariableBillCards(userId, id, cardIds);
+  return getVariableBill(userId, id);
+}
+
+export async function archiveVariableBill(userId: string, id: string): Promise<void> {
+  await updateVariableBill(userId, id, { isActive: false });
+}
+
+export async function estimateVariableBillAverage(
+  userId: string,
+  opts: {
+    name?: string;
+    category?: string;
+    cardIds?: string[];
+    lookbackMonths: number;
+    asOfIso: string;
+  },
+): Promise<{
+  averageCents: number;
+  totalCents: number;
+  sampleCount: number;
+  monthlyTotals: Array<{ month: string; amountCents: number }>;
+}> {
+  const db = getDb();
+  const cardIds = opts.cardIds ?? [];
+  const selectedCards = cardIds.length > 0
+    ? (await listCreditCards(userId, true)).filter((card) => cardIds.includes(card.id))
+    : await listCreditCards(userId, true);
+  const accountIds = selectedCards
+    .map((card) => card.plaidAccountId)
+    .filter((id): id is string => !!id);
+  if (cardIds.length > 0 && accountIds.length === 0) {
+    return calculateMonthlyHistoryAverage([], opts.asOfIso, opts.lookbackMonths);
+  }
+
+  const [year, month] = opts.asOfIso.split("-").map(Number);
+  const cutoffMonth = new Date(Date.UTC(year!, month! - opts.lookbackMonths, 1));
+  const cutoff = cutoffMonth.toISOString().slice(0, 10);
+  const conditions = [
+    eq(plaidTransactionDrafts.userId, userId),
+    eq(plaidTransactionDrafts.status, "approved" as const),
+    eq(plaidTransactionDrafts.kind, "expense" as const),
+    gte(plaidTransactionDrafts.date, cutoff),
+  ];
+  if (accountIds.length > 0) {
+    conditions.push(inArray(plaidTransactionDrafts.accountId, accountIds));
+  }
+
+  const rows = await db
+    .select({
+      date: plaidTransactionDrafts.date,
+      amountCents: plaidTransactionDrafts.amountCents,
+      description: plaidTransactionDrafts.description,
+      originalDescription: plaidTransactionDrafts.originalDescription,
+      merchantName: plaidTransactionDrafts.merchantName,
+      plaidCategory: plaidTransactionDrafts.plaidCategory,
+    })
+    .from(plaidTransactionDrafts)
+    .where(and(...conditions))
+    .all();
+
+  const terms = Array.from(
+    new Set(
+      [opts.name, opts.category]
+        .flatMap((value) => value?.toLowerCase().split(/[^a-z0-9]+/) ?? [])
+        .map((term) => term.trim())
+        .filter((term) => term.length >= 3),
+    ),
+  );
+  const matchingRows = rows.filter((row) => {
+    if (row.amountCents <= 0) return false;
+    if (terms.length === 0) return true;
+    const haystack = [
+      row.description,
+      row.originalDescription,
+      row.merchantName,
+      row.plaidCategory,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return terms.some((term) => haystack.includes(term));
+  });
+
+  return calculateMonthlyHistoryAverage(matchingRows, opts.asOfIso, opts.lookbackMonths);
 }
 
 export async function listBillPaymentOverridesForUser(
@@ -1479,6 +1697,7 @@ export async function getPrimaryLinkedBalance(userId: string): Promise<number | 
  *   v3: settings, bills, billPaymentOverrides, creditCardPaymentOverrides,
  *       paychecks, extras, categories, creditCards, creditCardStatements
  *   v4: + creditCardPromos, creditCardPromoPayments
+ *   v5: + variableBills, variableBillCards
  *
  * Plaid items / accounts / drafts are intentionally NOT exported — the
  * access tokens are encrypted with a per-deployment PLAID_ENCRYPTION_KEY,
@@ -1487,10 +1706,12 @@ export async function getPrimaryLinkedBalance(userId: string): Promise<number | 
  */
 export async function exportAll(userId: string) {
   const db = getDb();
-  const [s, b, bo, cpo, p, e, c, cc, ccs, ccp, ccpp] = await Promise.all([
+  const [s, b, bo, vb, vbc, cpo, p, e, c, cc, ccs, ccp, ccpp] = await Promise.all([
     getSettings(userId),
     db.select().from(bills).where(eq(bills.userId, userId)).all(),
     db.select().from(billPaymentOverrides).where(eq(billPaymentOverrides.userId, userId)).all(),
+    db.select().from(variableBills).where(eq(variableBills.userId, userId)).all(),
+    db.select().from(variableBillCards).where(eq(variableBillCards.userId, userId)).all(),
     db
       .select()
       .from(creditCardPaymentOverrides)
@@ -1506,10 +1727,12 @@ export async function exportAll(userId: string) {
   ]);
   return {
     exportedAt: new Date().toISOString(),
-    schemaVersion: 4,
+    schemaVersion: 5,
     settings: s,
     bills: b,
     billPaymentOverrides: bo,
+    variableBills: vb,
+    variableBillCards: vbc,
     creditCardPaymentOverrides: cpo,
     paychecks: p,
     extras: e,
@@ -1524,6 +1747,8 @@ export async function exportAll(userId: string) {
 type ImportPayload = {
   bills?: unknown[];
   billPaymentOverrides?: unknown[];
+  variableBills?: unknown[];
+  variableBillCards?: unknown[];
   creditCardPaymentOverrides?: unknown[];
   paychecks?: unknown[];
   extras?: unknown[];
@@ -1547,6 +1772,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
     .delete(creditCardPromos)
     .where(eq(creditCardPromos.userId, userId))
     .run();
+  await db.delete(variableBillCards).where(eq(variableBillCards.userId, userId)).run();
+  await db.delete(variableBills).where(eq(variableBills.userId, userId)).run();
   await db
     .delete(creditCardPaymentOverrides)
     .where(eq(creditCardPaymentOverrides.userId, userId))
@@ -1644,6 +1871,33 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
       notes: p.notes ?? null,
       isActive: p.isActive ?? true,
       authoritativeSource: p.authoritativeSource ?? null,
+    }).run();
+  }
+
+  type VariableBillImport = Partial<VariableBillRow>;
+  for (const b of (payload.variableBills ?? []) as VariableBillImport[]) {
+    if (!b.id || !b.name || typeof b.amountCents !== "number") continue;
+    if (typeof b.intervalMonths !== "number" || !b.anchorDate) continue;
+    await db.insert(variableBills).values({
+      id: b.id,
+      userId,
+      name: b.name,
+      category: b.category ?? "Other",
+      amountCents: b.amountCents,
+      intervalMonths: b.intervalMonths,
+      anchorDate: b.anchorDate,
+      notes: b.notes ?? null,
+      isActive: b.isActive ?? true,
+    }).run();
+  }
+  type VariableBillCardImport = Partial<VariableBillCardRow>;
+  for (const link of (payload.variableBillCards ?? []) as VariableBillCardImport[]) {
+    if (!link.variableBillId || !link.cardId) continue;
+    await db.insert(variableBillCards).values({
+      id: link.id ?? newId(),
+      userId,
+      variableBillId: link.variableBillId,
+      cardId: link.cardId,
     }).run();
   }
 

@@ -7,9 +7,11 @@ import {
   listExtras,
   listPromosForCard,
   listStatements,
+  listVariableBills,
 } from "@/lib/repos";
 import { estimateCurrentCycle } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
+import { projectVariableBillCardCharges } from "@/lib/variable-bills";
 import { CreditCardsClient } from "./credit-cards-client";
 
 export const dynamic = "force-dynamic";
@@ -19,11 +21,12 @@ export default async function CreditCardsPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [cards, allBills, allExtras, allPromoPayments] = await Promise.all([
+  const [cards, allBills, allExtras, allPromoPayments, variableBills] = await Promise.all([
     listCreditCards(userId, true),
     listBills(userId, false), // active only — archived bills don't predict charges
     listExtras(userId),
     listAllPromoPayments(userId),
+    listVariableBills(userId, false),
   ]);
 
   const paymentsByPromoId: Record<
@@ -47,6 +50,25 @@ export default async function CreditCardsPage() {
       const estimate = card.isActive
         ? estimateCurrentCycle(card, linkedBills, today, linkedExtras)
         : null;
+      if (estimate) {
+        const variableCharges = projectVariableBillCardCharges({
+          variableBills: variableBills.filter((bill) => bill.cardIds.includes(card.id)),
+          cards: [card],
+          startDate: estimate.window.start,
+          endDate: estimate.window.end,
+        })
+          .filter((charge) => charge.cardId === card.id)
+          .map((charge) => ({
+            billId: charge.variableBillId,
+            sourceId: charge.variableBillId,
+            sourceType: "variable_bill" as const,
+            name: charge.name,
+            date: charge.date,
+            amountCents: charge.amountCents,
+          }));
+        estimate.charges.push(...variableCharges);
+        estimate.totalCents += variableCharges.reduce((sum, charge) => sum + charge.amountCents, 0);
+      }
       const [statements, promos] = await Promise.all([
         listStatements(card.id),
         listPromosForCard(userId, card.id, true),
@@ -55,7 +77,7 @@ export default async function CreditCardsPage() {
         card,
         statements,
         estimate,
-        linkedBillCount: linkedBills.length + linkedExtras.length,
+        linkedBillCount: linkedBills.length + linkedExtras.length + variableBills.filter((bill) => bill.cardIds.includes(card.id)).length,
         promos,
       };
     }),
