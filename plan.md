@@ -379,7 +379,20 @@ Update Drizzle schema, journal, and repo create-paths to set `source`.
 
 ---
 
-### [ ] T-3. Audit and de-hardcode UI primitives
+### [~] T-3. Audit and de-hardcode UI primitives
+**High-visibility primitives done:**
+- `components/ui/badge.tsx` (destructive, warning, muted variants now use `color-mix(in oklch, var(--token) X%, transparent)`)
+- `components/ui/status-pill.tsx` (warn/amber/off/danger variants)
+- `components/ui/alert-bar.tsx` (amber/mint/red wraps)
+- `app/(app)/page.tsx` worst-day red gradient banner
+
+**Still hardcoded** (lower visibility, mostly login/setup error banners):
+- `app/login/login-form.tsx`: `rgba(239,68,68,0.3)` and `var(--red-glow)` (tag is partial)
+- `app/setup/setup-form.tsx`: same red error banner pattern
+- `components/category-dialog.tsx`: PALETTE swatches (intentional — those ARE the colors)
+- Any inline `style={{ borderColor: "rgba(...)", ... }}` in client components — search with `rg "rgba\("` and convert to color-mix using whichever theme token is the closest semantic match
+
+`color-mix(in oklch, var(--token) X%, transparent)` is the pattern. Tailwind v4 accepts it inside `bg-[...]` / `border-[...]` brackets but spaces must be `_` (e.g. `bg-[color-mix(in_oklch,var(--amber)_10%,transparent)]`).
 
 `grep -rn "rgba(\|#[0-9a-fA-F]\{6\}" components/ app/` and replace literal colors with tokens. Known offenders:
 - `components/ui/badge.tsx` — `rgba(239,68,68,0.3)`, `rgba(251,191,36,...)`

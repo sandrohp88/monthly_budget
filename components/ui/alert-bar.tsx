@@ -4,7 +4,8 @@ import * as React from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-/* Inline alert ribbon used above tables/charts. */
+/* Inline alert ribbon used above tables/charts. Variant fills derive from
+   theme tokens via color-mix() so every theme reads coherently. */
 export function AlertBar({
   tag = "ALERT",
   variant = "amber",
@@ -20,16 +21,16 @@ export function AlertBar({
 }) {
   const tone = {
     amber: {
-      wrap: "bg-[rgba(251,191,36,0.08)] border-[rgba(251,191,36,0.25)]",
+      wrap: "bg-[color-mix(in_oklch,var(--amber)_8%,transparent)] border-[color-mix(in_oklch,var(--amber)_25%,transparent)]",
       tag: "bg-[var(--amber)] text-[var(--bg-0)]",
     },
     mint: {
-      wrap: "bg-[rgba(74,222,128,0.06)] border-[rgba(74,222,128,0.25)]",
+      wrap: "bg-[color-mix(in_oklch,var(--mint)_6%,transparent)] border-[color-mix(in_oklch,var(--mint)_25%,transparent)]",
       tag: "bg-[var(--mint)] text-[var(--bg-0)]",
     },
     red: {
-      wrap: "bg-[var(--red-glow)] border-[rgba(239,68,68,0.3)]",
-      tag: "bg-[var(--red)] text-white",
+      wrap: "bg-[var(--red-glow)] border-[color-mix(in_oklch,var(--red)_30%,transparent)]",
+      tag: "bg-[var(--red)] text-[var(--text-0)]",
     },
   }[variant];
 

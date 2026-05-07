@@ -238,8 +238,9 @@ export default async function DashboardPage() {
         <div
           className="grid items-center gap-4 rounded-sm border p-4"
           style={{
-            background: "linear-gradient(135deg, rgba(239,68,68,0.08), transparent 60%)",
-            borderColor: "rgba(239,68,68,0.25)",
+            background:
+              "linear-gradient(135deg, color-mix(in oklch, var(--red) 8%, transparent), transparent 60%)",
+            borderColor: "color-mix(in oklch, var(--red) 25%, transparent)",
             gridTemplateColumns: "auto 1fr auto",
           }}
         >
