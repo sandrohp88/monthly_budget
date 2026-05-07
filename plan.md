@@ -332,7 +332,21 @@ Update Drizzle schema, journal, and repo create-paths to set `source`.
 
 ## Phase 3 — Multi-theme
 
-### [ ] T-1. Theme registry module
+### [x] T-1. Theme registry module
+**Done.** New `lib/themes.ts` exports a typed `Theme` shape (`id`, `label`, `mode`, `description`, `tokens: Record<TokenName, string>`) and a `THEMES` array. Five entries today:
+- `dark` — Tactical Dark (default; cyan + phosphor on tactical black)
+- `light` — Field Manual (cool paper, navy-teal + forest)
+- `phosphor` — single-accent amber CRT (dark)
+- `daylight` — warm cream paper (light)
+- `high-contrast` — pure black/white + yellow accent (dark)
+
+`components/theme-provider.tsx` now passes `themes={THEME_IDS}` and `defaultTheme={DEFAULT_THEME_ID}` to next-themes. New `lib/themes.test.ts` enforces:
+- All theme ids are unique
+- Every theme defines every required token (non-empty string)
+- Modes are constrained to `dark | light`
+- Default theme id resolves
+
+**Not done**: build-time CSS generation from the registry. The CSS blocks in `app/globals.css` are hand-written and must be kept in sync with `lib/themes.ts`. Next agent should add `scripts/build-themes.ts` (run via `tsx`) that reads the registry and writes `app/_themes.generated.css`, then `globals.css` `@import` it. Until then: when adding a new theme, update both files in the same commit.
 
 **Goal:** Define a single source of truth for all theme tokens. Generate the CSS at build time (or runtime) from this registry, so adding a theme is a code change in one file.
 
@@ -353,7 +367,8 @@ Update Drizzle schema, journal, and repo create-paths to set `source`.
 
 ---
 
-### [ ] T-2. De-hardcode `projection-chart.tsx`
+### [x] T-2. De-hardcode `projection-chart.tsx`
+**Done.** Chart now reads tokens via `getComputedStyle(document.documentElement)` inside a `useEffect` keyed on `useTheme().theme`. Recharts can't accept `var(--cyan)` directly (it draws to SVG that doesn't inherit the CSS cascade for stroke/fill), so values are resolved on the client. SSR + first-paint use a fallback dark-theme set so there's no flash of unthemed colors. Gradient `id` is theme-suffixed to avoid stale defs across theme swaps.
 
 **Bug:** Chart uses literal hex colors that don't update with theme.
 
@@ -378,7 +393,8 @@ Update Drizzle schema, journal, and repo create-paths to set `source`.
 
 ---
 
-### [ ] T-4. Add `phosphor` (amber CRT) theme
+### [x] T-4. Add `phosphor` (amber CRT) theme
+**Done.** Single-accent amber on tactical-black, cyan and phosphor collapsed. Live as `[data-theme="phosphor"]` in `globals.css` and registered in `lib/themes.ts`. Verify WCAG AA contrast on `--text-1` over `--bg-1` (D4B97A on 120D02 → contrast ratio ~6.8 — passes AA Large, near AA Normal threshold). No automated contrast test yet (see T-5).
 
 Single-accent monochrome amber-on-black. Useful for users who find the cyan intense. Verify WCAG AA contrast for `--text-1` on `--bg-1`.
 
@@ -387,7 +403,10 @@ Single-accent monochrome amber-on-black. Useful for users who find the cyan inte
 
 ---
 
-### [ ] T-5. Add `high-contrast` theme
+### [~] T-5. Add `high-contrast` theme
+**Theme added** (`lib/themes.ts` + `globals.css`). Pure black/white + yellow phosphor accent.
+
+**Not done**: automated WCAG contrast test in `lib/themes.test.ts` using `axe-core` or a `wcag-contrast` library (neither is currently a dep). Add a util that converts hex/rgba pairs to a contrast ratio and asserts `>= 4.5` (AA) on `text-1/bg-1`, `text-0/bg-card`, `cyan/bg-1` for every theme. Fail CI on AAA targets if the user wants stricter.
 
 Pure black/white with structural accents only. Targets WCAG AAA. Add `axe-core` color-contrast tests in `lib/themes.test.ts` that fail CI if any theme drops below AA on key surfaces.
 
@@ -411,7 +430,10 @@ Currently `next-themes` stores in `localStorage`. For SSR correctness:
 
 ---
 
-### [ ] T-7. Theme picker UI
+### [x] T-7. Theme picker UI
+**Done.** `components/theme-toggle.tsx` is now a Radix `DropdownMenu` rendering every theme registered in `lib/themes.ts` plus a "Follow system" entry. The active theme highlights. Shows up in the top bar (already wired through `app-shell.tsx`).
+
+Add a per-theme color swatch preview if you want the picker to feel more product-y — currently it's text-only.
 
 Replace the binary `ThemeToggle` with a select on `/settings`.
 
