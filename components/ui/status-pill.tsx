@@ -2,7 +2,9 @@ import * as React from "react";
 import { cn } from "@/lib/cn";
 
 /* A pill smaller than Badge with a 1px border and uppercase text. Used inline
-   in tables and cards to mark row state. */
+   in tables and cards to mark row state. Variant colors derive from theme
+   tokens via color-mix() so every theme (phosphor, daylight, high-contrast)
+   gets a coherent fill/border. */
 export function StatusPill({
   children,
   variant = "default",
@@ -14,10 +16,10 @@ export function StatusPill({
 }) {
   const map: Record<string, string> = {
     default: "bg-[var(--mint-glow)] text-[var(--mint)] border-[var(--mint-dim)]",
-    warn: "bg-[rgba(251,191,36,0.1)] text-[var(--amber)] border-[rgba(251,191,36,0.3)]",
-    amber: "bg-[rgba(251,191,36,0.1)] text-[var(--amber)] border-[rgba(251,191,36,0.3)]",
-    off: "bg-[rgba(107,122,112,0.1)] text-[var(--text-2)] border-[var(--border-2)]",
-    danger: "bg-[var(--red-glow)] text-[var(--red)] border-[rgba(239,68,68,0.3)]",
+    warn: "bg-[color-mix(in_oklch,var(--amber)_10%,transparent)] text-[var(--amber)] border-[color-mix(in_oklch,var(--amber)_30%,transparent)]",
+    amber: "bg-[color-mix(in_oklch,var(--amber)_10%,transparent)] text-[var(--amber)] border-[color-mix(in_oklch,var(--amber)_30%,transparent)]",
+    off: "bg-[color-mix(in_oklch,var(--text-2)_10%,transparent)] text-[var(--text-2)] border-[var(--border-2)]",
+    danger: "bg-[var(--red-glow)] text-[var(--red)] border-[color-mix(in_oklch,var(--red)_30%,transparent)]",
   };
 
   return (

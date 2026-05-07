@@ -136,6 +136,11 @@ export const creditCardUpdateSchema = creditCardBaseSchema
     isActive: z.boolean().optional(),
   });
 
+const authoritativeSource = z
+  .enum(["paypal_promo_list", "manual_reconciliation"])
+  .nullable()
+  .optional();
+
 export const promoCreateSchema = z
   .object({
     description: z.string().min(1).max(120),
@@ -144,9 +149,15 @@ export const promoCreateSchema = z
     remainingAmountCents: cents.refine((n) => n >= 0, "Remaining cannot be negative").optional(),
     startDate: isoDate,
     endDate: isoDate,
-    /** When set, used as-is each cycle. When null, projection computes remaining/months_left. */
-    monthlyPaymentCents: cents.refine((n) => n >= 0, "Monthly payment cannot be negative").nullable().optional(),
+    /**
+     * When set, used as-is each cycle. When null, projection computes
+     * remaining/months_left. Must be > 0 — a 0 override would loop forever
+     * making no progress, and a negative override has no meaning.
+     */
+    monthlyPaymentCents: cents.refine((n) => n > 0, "Monthly payment must be positive").nullable().optional(),
     notes: z.string().max(500).nullable().optional(),
+    /** When non-null, Plaid sync will not rewrite this row's amounts/dates. */
+    authoritativeSource,
   })
   .refine((v) => v.endDate >= v.startDate, {
     message: "endDate must be on or after startDate",
@@ -160,9 +171,10 @@ export const promoUpdateSchema = z
     remainingAmountCents: cents.refine((n) => n >= 0).optional(),
     startDate: isoDate.optional(),
     endDate: isoDate.optional(),
-    monthlyPaymentCents: cents.refine((n) => n >= 0).nullable().optional(),
+    monthlyPaymentCents: cents.refine((n) => n > 0, "Monthly payment must be positive").nullable().optional(),
     notes: z.string().max(500).nullable().optional(),
     isActive: z.boolean().optional(),
+    authoritativeSource,
   })
   .refine(
     (v) => v.startDate == null || v.endDate == null || v.endDate >= v.startDate,
@@ -246,7 +258,7 @@ export const plaidDraftActionSchema = z
     remainingAmountCents: cents.refine((n) => n >= 0, "Remaining cannot be negative").optional(),
     startDate: isoDate.optional(),
     endDate: isoDate.optional(),
-    monthlyPaymentCents: cents.refine((n) => n >= 0, "Monthly payment cannot be negative").nullable().optional(),
+    monthlyPaymentCents: cents.refine((n) => n > 0, "Monthly payment must be positive").nullable().optional(),
   })
   .superRefine((v, ctx) => {
     if (v.action === "update_transaction") {

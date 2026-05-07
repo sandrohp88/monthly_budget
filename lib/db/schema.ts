@@ -279,6 +279,22 @@ export const creditCardPromos = sqliteTable(
     monthlyPaymentCents: integer("monthly_payment_cents"),
     notes: text("notes"),
     isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    /**
+     * When set, this promo's `originalAmountCents`, `remainingAmountCents`,
+     * and `endDate` are reconciled from a more-trustworthy source than the
+     * Plaid transaction-history heuristic. Sync code MUST NOT overwrite
+     * those fields when `authoritativeSource` is non-null.
+     *
+     * Values:
+     *   - "paypal_promo_list": user copied data from PayPal's promo UI
+     *   - "manual_reconciliation": user manually edited and locked the row
+     *   - null: defaults; FIFO heuristic owns the row
+     *
+     * Replaces the legacy magic-string note "PayPal authoritative promo data".
+     */
+    authoritativeSource: text("authoritative_source", {
+      enum: ["paypal_promo_list", "manual_reconciliation"],
+    }),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
     updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
   },

@@ -263,6 +263,269 @@
     --amber-tint-soft:     rgba(184, 92, 0, 0.07);
   }
 
+  /* ── PHOSPHOR THEME ─────────────────────────────────────────────────────
+     Single-accent amber CRT. Tactical-black bones; cyan/phosphor collapsed
+     into one warm amber for users who find the dual-accent dark theme
+     too intense. Mirrors `lib/themes.ts:PHOSPHOR_TOKENS`. */
+  .phosphor, [data-theme="phosphor"] {
+    color-scheme: dark;
+
+    --bg-0: #0A0700;
+    --bg-1: #120D02;
+    --bg-2: #1A1306;
+    --bg-3: #221A0A;
+    --bg-card: #120D02;
+    --bg-inset: #070500;
+
+    --cyan: #FFB000;
+    --cyan-bright: #FFC940;
+    --cyan-dim: #A06D00;
+    --cyan-glow: rgba(255, 176, 0, 0.30);
+
+    --phosphor: #FFB000;
+    --phosphor-dim: #A06D00;
+    --phosphor-glow: rgba(255, 176, 0, 0.22);
+
+    --olive: #6B5A2A;
+    --olive-dark: #3D331A;
+
+    --amber: #FF8C00;
+    --red: #FF4400;
+    --red-glow: rgba(255, 68, 0, 0.20);
+    --success: #FFB000;
+    --info: #FFB000;
+
+    --text-0: #FFE3A6;
+    --text-1: #D4B97A;
+    --text-2: #9C8754;
+    --text-3: #5C5030;
+
+    --border-raw: #3D331A;
+    --border-2: #5C4D26;
+    --border-dim: #221A0A;
+
+    --background: 35 100% 2%;
+    --foreground: 39 100% 82%;
+    --card: 38 88% 4%;
+    --card-foreground: 39 100% 82%;
+    --popover: 39 60% 9%;
+    --popover-foreground: 39 100% 82%;
+    --primary: 41 100% 50%;
+    --primary-foreground: 35 100% 2%;
+    --secondary: 38 80% 6%;
+    --secondary-foreground: 38 50% 65%;
+    --muted: 38 80% 6%;
+    --muted-foreground: 38 30% 47%;
+    --accent: 41 100% 50%;
+    --accent-foreground: 35 100% 2%;
+    --destructive: 16 100% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 41 100% 50%;
+    --warning: 33 100% 50%;
+    --border: 38 50% 17%;
+    --input: 38 50% 17%;
+    --ring: 41 100% 32%;
+
+    --bg-glow-1: rgba(255, 176, 0, 0.06);
+    --bg-glow-2: rgba(255, 176, 0, 0.025);
+    --bg-grid:   rgba(61, 51, 26, 0.45);
+    --header-glass: rgba(10, 7, 0, 0.85);
+
+    --surface-veil:        rgba(18, 13, 2, 0.92);
+    --surface-veil-strong: rgba(18, 13, 2, 0.96);
+    --cyan-tint-soft:      rgba(255, 176, 0, 0.06);
+    --cyan-tint:           rgba(255, 176, 0, 0.10);
+    --cyan-tint-row:       rgba(255, 176, 0, 0.14);
+    --cyan-tint-edge:      rgba(255, 176, 0, 0.24);
+    --cyan-tint-edge-hi:   rgba(255, 176, 0, 0.28);
+    --cyan-tint-hover:     rgba(255, 176, 0, 0.08);
+    --cyan-tint-zebra:     rgba(255, 176, 0, 0.018);
+    --phosphor-tint-soft:  rgba(255, 176, 0, 0.05);
+    --phosphor-tint:       rgba(255, 176, 0, 0.06);
+    --phosphor-tint-row:   rgba(255, 176, 0, 0.085);
+    --amber-tint-soft:     rgba(255, 140, 0, 0.05);
+
+    --mint: var(--cyan);
+    --mint-bright: var(--cyan-bright);
+    --mint-dim: var(--cyan-dim);
+    --mint-glow: var(--cyan-glow);
+  }
+
+  /* ── DAYLIGHT THEME ─────────────────────────────────────────────────────
+     Warm cream paper with deeper-saturated accents so content stays
+     legible in actual sunlight on a glossy display.
+     Mirrors `lib/themes.ts:DAYLIGHT_TOKENS`. */
+  .daylight, [data-theme="daylight"] {
+    color-scheme: light;
+
+    --bg-0: #F8F2E5;
+    --bg-1: #F1E8D2;
+    --bg-2: #FCF7EA;
+    --bg-3: #FFFCF2;
+    --bg-card: #F1E8D2;
+    --bg-inset: #E8DCBE;
+
+    --cyan: #0F6E8A;
+    --cyan-bright: #1290B4;
+    --cyan-dim: #0A526A;
+    --cyan-glow: rgba(15, 110, 138, 0.22);
+
+    --phosphor: #3D7A12;
+    --phosphor-dim: #2A5408;
+    --phosphor-glow: rgba(61, 122, 18, 0.20);
+
+    --olive: #665830;
+    --olive-dark: #403619;
+
+    --amber: #A0480A;
+    --red: #A8002A;
+    --red-glow: rgba(168, 0, 42, 0.20);
+    --success: #1F6A2C;
+    --info: #1A5FCC;
+
+    --text-0: #1F1A10;
+    --text-1: #48402E;
+    --text-2: #6E6448;
+    --text-3: #9C8E70;
+
+    --border-raw: #C2B393;
+    --border-2: #9C8E70;
+    --border-dim: #D9CCA9;
+
+    --background: 41 53% 93%;
+    --foreground: 36 33% 9%;
+    --card: 41 60% 88%;
+    --card-foreground: 36 33% 9%;
+    --popover: 47 80% 97%;
+    --popover-foreground: 36 33% 9%;
+    --primary: 196 80% 30%;
+    --primary-foreground: 41 53% 93%;
+    --secondary: 41 56% 90%;
+    --secondary-foreground: 36 24% 23%;
+    --muted: 41 56% 90%;
+    --muted-foreground: 38 21% 36%;
+    --accent: 95 64% 28%;
+    --accent-foreground: 41 53% 93%;
+    --destructive: 345 100% 33%;
+    --destructive-foreground: 41 53% 93%;
+    --success: 132 54% 27%;
+    --warning: 27 88% 33%;
+    --border: 35 35% 67%;
+    --input: 35 35% 67%;
+    --ring: 196 80% 30%;
+
+    --bg-glow-1: rgba(15, 110, 138, 0.06);
+    --bg-glow-2: rgba(61, 122, 18, 0.04);
+    --bg-grid:   rgba(72, 64, 46, 0.10);
+    --header-glass: rgba(252, 247, 234, 0.85);
+
+    --surface-veil:        rgba(241, 232, 210, 0.92);
+    --surface-veil-strong: rgba(241, 232, 210, 0.96);
+    --cyan-tint-soft:      rgba(15, 110, 138, 0.08);
+    --cyan-tint:           rgba(15, 110, 138, 0.12);
+    --cyan-tint-row:       rgba(15, 110, 138, 0.14);
+    --cyan-tint-edge:      rgba(15, 110, 138, 0.30);
+    --cyan-tint-edge-hi:   rgba(15, 110, 138, 0.40);
+    --cyan-tint-hover:     rgba(15, 110, 138, 0.08);
+    --cyan-tint-zebra:     rgba(15, 110, 138, 0.025);
+    --phosphor-tint-soft:  rgba(61, 122, 18, 0.07);
+    --phosphor-tint:       rgba(61, 122, 18, 0.08);
+    --phosphor-tint-row:   rgba(61, 122, 18, 0.10);
+    --amber-tint-soft:     rgba(160, 72, 10, 0.07);
+
+    --mint: var(--cyan);
+    --mint-bright: var(--cyan-bright);
+    --mint-dim: var(--cyan-dim);
+    --mint-glow: var(--cyan-glow);
+  }
+
+  /* ── HIGH-CONTRAST THEME ─────────────────────────────────────────────────
+     Pure black/white plus a single yellow accent. Targets WCAG AAA on
+     text. Mirrors `lib/themes.ts:HIGH_CONTRAST_TOKENS`. */
+  .high-contrast, [data-theme="high-contrast"] {
+    color-scheme: dark;
+
+    --bg-0: #000000;
+    --bg-1: #0A0A0A;
+    --bg-2: #141414;
+    --bg-3: #1F1F1F;
+    --bg-card: #0A0A0A;
+    --bg-inset: #000000;
+
+    --cyan: #FFFFFF;
+    --cyan-bright: #FFFFFF;
+    --cyan-dim: #CCCCCC;
+    --cyan-glow: rgba(255, 255, 255, 0.40);
+
+    --phosphor: #FFFF00;
+    --phosphor-dim: #CCCC00;
+    --phosphor-glow: rgba(255, 255, 0, 0.30);
+
+    --olive: #888888;
+    --olive-dark: #555555;
+
+    --amber: #FFAA00;
+    --red: #FF4040;
+    --red-glow: rgba(255, 64, 64, 0.30);
+    --success: #00FF80;
+    --info: #80B0FF;
+
+    --text-0: #FFFFFF;
+    --text-1: #E8E8E8;
+    --text-2: #B8B8B8;
+    --text-3: #888888;
+
+    --border-raw: #444444;
+    --border-2: #888888;
+    --border-dim: #222222;
+
+    --background: 0 0% 0%;
+    --foreground: 0 0% 100%;
+    --card: 0 0% 4%;
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 12%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 0 0% 100%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 8%;
+    --secondary-foreground: 0 0% 91%;
+    --muted: 0 0% 8%;
+    --muted-foreground: 0 0% 72%;
+    --accent: 60 100% 50%;
+    --accent-foreground: 0 0% 0%;
+    --destructive: 0 100% 63%;
+    --destructive-foreground: 0 0% 0%;
+    --success: 150 100% 50%;
+    --warning: 40 100% 50%;
+    --border: 0 0% 27%;
+    --input: 0 0% 27%;
+    --ring: 0 0% 100%;
+
+    --bg-glow-1: rgba(255, 255, 255, 0.05);
+    --bg-glow-2: rgba(255, 255, 0, 0.04);
+    --bg-grid:   rgba(68, 68, 68, 0.50);
+    --header-glass: rgba(0, 0, 0, 0.92);
+
+    --surface-veil:        rgba(10, 10, 10, 0.95);
+    --surface-veil-strong: rgba(10, 10, 10, 0.98);
+    --cyan-tint-soft:      rgba(255, 255, 255, 0.06);
+    --cyan-tint:           rgba(255, 255, 255, 0.10);
+    --cyan-tint-row:       rgba(255, 255, 255, 0.14);
+    --cyan-tint-edge:      rgba(255, 255, 255, 0.40);
+    --cyan-tint-edge-hi:   rgba(255, 255, 255, 0.55);
+    --cyan-tint-hover:     rgba(255, 255, 255, 0.08);
+    --cyan-tint-zebra:     rgba(255, 255, 255, 0.02);
+    --phosphor-tint-soft:  rgba(255, 255, 0, 0.06);
+    --phosphor-tint:       rgba(255, 255, 0, 0.08);
+    --phosphor-tint-row:   rgba(255, 255, 0, 0.12);
+    --amber-tint-soft:     rgba(255, 170, 0, 0.07);
+
+    --mint: var(--cyan);
+    --mint-bright: var(--cyan-bright);
+    --mint-dim: var(--cyan-dim);
+    --mint-glow: var(--cyan-glow);
+  }
+
   * {
     border-color: hsl(var(--border));
   }

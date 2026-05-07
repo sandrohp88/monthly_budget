@@ -444,12 +444,15 @@ export function projectPromoScheduleWithBalances(
     // Stop scheduling once we'd be paying after the deadline. The final chunk
     // (forced "lump") is captured below by the asOfIso > endDate branch.
     if (dueDate > promo.endDate) {
-      // Force any remaining to land on the final due date that's still on/before endDate.
-      // If we've already issued the final cycle, just emit the lump on this dueDate
-      // so the user sees the cliff.
+      // Past the deadline. Force any remaining principal to land on the
+      // promo's endDate itself — never on a later due date — so the cliff
+      // visualizes ON the deadline. The user sees the lump as the
+      // last-chance payment, which matches how issuers actually charge
+      // deferred interest if the promo isn't paid off in time.
       const chunk = virtualRemaining;
-      if (!skipDueDates.has(dueDate)) {
-        out.push({ dueDate, amountCents: chunk, balanceBeforeCents: virtualRemaining });
+      const cliffDate = promo.endDate;
+      if (!skipDueDates.has(cliffDate)) {
+        out.push({ dueDate: cliffDate, amountCents: chunk, balanceBeforeCents: virtualRemaining });
       }
       virtualRemaining = 0;
       break;

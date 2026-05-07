@@ -1,22 +1,94 @@
 "use client";
 
 import * as React from "react";
-import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
+import { Palette } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@radix-ui/react-dropdown-menu";
 import { Button } from "@/components/ui/button";
+import { THEMES, DEFAULT_THEME_ID } from "@/lib/themes";
+import { cn } from "@/lib/cn";
 
+/**
+ * Theme picker. Replaces the previous binary dark/light toggle with a
+ * dropdown listing every theme registered in `lib/themes.ts`. The active
+ * theme is highlighted.
+ *
+ * Mounted in the top bar (see `components/app-shell.tsx`). The picker is
+ * a no-op until next-themes hydrates — guarded by a `mounted` boolean
+ * so SSR + first-paint don't race the localStorage read.
+ */
 export function ThemeToggle() {
   const { theme, setTheme, resolvedTheme } = useTheme();
-  const current = theme === "system" ? resolvedTheme : theme;
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+
+  const active = mounted
+    ? theme === "system"
+      ? (resolvedTheme ?? DEFAULT_THEME_ID)
+      : (theme ?? DEFAULT_THEME_ID)
+    : DEFAULT_THEME_ID;
+
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      aria-label="Toggle theme"
-      onClick={() => setTheme(current === "dark" ? "light" : "dark")}
-    >
-      <Sun className="h-4 w-4 dark:hidden" />
-      <Moon className="hidden h-4 w-4 dark:block" />
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Choose theme"
+          title="Choose theme"
+        >
+          <Palette className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        sideOffset={6}
+        className="z-50 min-w-[14rem] rounded-sm border border-[var(--border-2)] bg-[var(--bg-1)] p-1 shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
+      >
+        <DropdownMenuLabel className="px-3 py-1.5 text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--text-3)]">
+          {"// THEME"}
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator className="my-1 h-px bg-[var(--border-raw)]" />
+        {THEMES.map((t) => (
+          <DropdownMenuItem
+            key={t.id}
+            onSelect={() => setTheme(t.id)}
+            className={cn(
+              "flex cursor-pointer flex-col gap-0.5 rounded-sm px-3 py-2 text-[11px] outline-none",
+              "focus:bg-[var(--bg-2)]",
+              active === t.id && "bg-[var(--mint-glow)] text-[var(--mint)]",
+            )}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold uppercase tracking-[0.1em] text-[var(--text-0)]">
+                {t.label}
+              </span>
+              <span className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+                {t.mode}
+              </span>
+            </div>
+            <span className="text-[10px] text-[var(--text-2)]">{t.description}</span>
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator className="my-1 h-px bg-[var(--border-raw)]" />
+        <DropdownMenuItem
+          onSelect={() => setTheme("system")}
+          className={cn(
+            "flex cursor-pointer items-center gap-2 rounded-sm px-3 py-2 text-[11px] uppercase tracking-[0.1em] outline-none",
+            "focus:bg-[var(--bg-2)]",
+            theme === "system" && "bg-[var(--mint-glow)] text-[var(--mint)]",
+          )}
+        >
+          <span className="text-[var(--text-1)]">FOLLOW SYSTEM</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

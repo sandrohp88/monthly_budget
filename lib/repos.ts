@@ -1446,13 +1446,18 @@ export async function deletePlaidDraft(
 }
 
 /**
- * Returns the balance of the first account with useAsStartingBalance=true,
- * or null if no such account exists. Used by projection-server to optionally
- * substitute a live bank balance for the manual startingBalanceCents.
+ * Sums the balances of every account flagged useAsStartingBalance=true, or
+ * returns null if no account is opted in. Used by projection-server to
+ * substitute the user's live bank balance for the manual startingBalanceCents.
+ *
+ * Multiple opted-in accounts (e.g. a household with checking + savings both
+ * marked) sum into a single starting balance; nulls are skipped (an account
+ * Plaid hasn't returned a balance for yet contributes 0, not the override
+ * being abandoned).
  */
 export async function getPrimaryLinkedBalance(userId: string): Promise<number | null> {
   const db = getDb();
-  const row = await db
+  const rows = await db
     .select({ balanceCents: plaidAccounts.balanceCents })
     .from(plaidAccounts)
     .where(
@@ -1461,15 +1466,28 @@ export async function getPrimaryLinkedBalance(userId: string): Promise<number | 
         eq(plaidAccounts.useAsStartingBalance, true),
       ),
     )
-    .get();
-  return row?.balanceCents ?? null;
+    .all();
+  if (rows.length === 0) return null;
+  return rows.reduce((sum, r) => sum + (r.balanceCents ?? 0), 0);
 }
 
 // ── export/import ─────────────────────────────────────────────────────────────
 
+/**
+ * Backup payload. Schema version bumps when the shape changes.
+ *
+ *   v3: settings, bills, billPaymentOverrides, creditCardPaymentOverrides,
+ *       paychecks, extras, categories, creditCards, creditCardStatements
+ *   v4: + creditCardPromos, creditCardPromoPayments
+ *
+ * Plaid items / accounts / drafts are intentionally NOT exported — the
+ * access tokens are encrypted with a per-deployment PLAID_ENCRYPTION_KEY,
+ * and the institution session is single-use. After restore the user
+ * relinks each institution.
+ */
 export async function exportAll(userId: string) {
   const db = getDb();
-  const [s, b, bo, cpo, p, e, c, cc, ccs] = await Promise.all([
+  const [s, b, bo, cpo, p, e, c, cc, ccs, ccp, ccpp] = await Promise.all([
     getSettings(userId),
     db.select().from(bills).where(eq(bills.userId, userId)).all(),
     db.select().from(billPaymentOverrides).where(eq(billPaymentOverrides.userId, userId)).all(),
@@ -1483,10 +1501,12 @@ export async function exportAll(userId: string) {
     db.select().from(categories).where(eq(categories.userId, userId)).all(),
     db.select().from(creditCards).where(eq(creditCards.userId, userId)).all(),
     listStatementsForUser(userId),
+    db.select().from(creditCardPromos).where(eq(creditCardPromos.userId, userId)).all(),
+    db.select().from(creditCardPromoPayments).where(eq(creditCardPromoPayments.userId, userId)).all(),
   ]);
   return {
     exportedAt: new Date().toISOString(),
-    schemaVersion: 3,
+    schemaVersion: 4,
     settings: s,
     bills: b,
     billPaymentOverrides: bo,
@@ -1496,29 +1516,53 @@ export async function exportAll(userId: string) {
     categories: c,
     creditCards: cc,
     creditCardStatements: ccs,
+    creditCardPromos: ccp,
+    creditCardPromoPayments: ccpp,
   };
 }
 
-export async function importAll(
-  userId: string,
-  payload: {
-    bills?: unknown[];
-    billPaymentOverrides?: unknown[];
-    creditCardPaymentOverrides?: unknown[];
-    paychecks?: unknown[];
-    extras?: unknown[];
-    categories?: unknown[];
-  },
-): Promise<void> {
+type ImportPayload = {
+  bills?: unknown[];
+  billPaymentOverrides?: unknown[];
+  creditCardPaymentOverrides?: unknown[];
+  paychecks?: unknown[];
+  extras?: unknown[];
+  categories?: unknown[];
+  creditCards?: unknown[];
+  creditCardStatements?: unknown[];
+  creditCardPromos?: unknown[];
+  creditCardPromoPayments?: unknown[];
+};
+
+export async function importAll(userId: string, payload: ImportPayload): Promise<void> {
   const db = getDb();
+
+  // Delete in dependency order (children before parents). Plaid items are
+  // intentionally untouched — re-linking is the user's path back to live data.
+  await db
+    .delete(creditCardPromoPayments)
+    .where(eq(creditCardPromoPayments.userId, userId))
+    .run();
+  await db
+    .delete(creditCardPromos)
+    .where(eq(creditCardPromos.userId, userId))
+    .run();
   await db
     .delete(creditCardPaymentOverrides)
     .where(eq(creditCardPaymentOverrides.userId, userId))
     .run();
+  // creditCardStatements have no userId column; cascade off creditCards delete
+  // when we delete cards next. But we have to clear them via the join because
+  // the cardId FK references creditCards.id with ON DELETE CASCADE — that
+  // deletes statements for the user's cards automatically. We rely on it.
+  await db.delete(creditCards).where(eq(creditCards.userId, userId)).run();
+  await db.delete(billPaymentOverrides).where(eq(billPaymentOverrides.userId, userId)).run();
   await db.delete(bills).where(eq(bills.userId, userId)).run();
   await db.delete(paychecks).where(eq(paychecks.userId, userId)).run();
   await db.delete(oneTimeExpenses).where(eq(oneTimeExpenses.userId, userId)).run();
-  // Categories: only replace if provided
+
+  // Categories: only replace if provided. Backups created before categories
+  // were exportable would otherwise wipe the user's category list.
   if (Array.isArray(payload.categories)) {
     await db.delete(categories).where(eq(categories.userId, userId)).run();
     for (const c of payload.categories as Array<Partial<CategoryRow>>) {
@@ -1532,6 +1576,90 @@ export async function importAll(
       }).run();
     }
   }
+
+  // Insert in dependency order (parents before children). Cards first so
+  // bills.paidViaCardId / extras.paidViaCardId / statements.cardId all
+  // resolve. Plaid account links are nulled because the Plaid items aren't
+  // exported — restoring on a fresh deployment with a different
+  // PLAID_ENCRYPTION_KEY would otherwise leave dangling references.
+  type CardImport = Partial<CreditCardRow>;
+  for (const card of (payload.creditCards ?? []) as CardImport[]) {
+    if (!card.id || !card.name) continue;
+    if (typeof card.statementDay !== "number" || typeof card.dueDay !== "number") continue;
+    await db.insert(creditCards).values({
+      id: card.id,
+      userId,
+      name: card.name,
+      statementDay: card.statementDay,
+      statementCycleMode: card.statementCycleMode ?? "calendar_day",
+      statementCycleAnchorDate: card.statementCycleAnchorDate ?? null,
+      statementCycleIntervalDays: card.statementCycleIntervalDays ?? 31,
+      dueDay: card.dueDay,
+      currentBalanceCents: card.currentBalanceCents ?? null,
+      autoPay: card.autoPay ?? false,
+      notes: card.notes ?? null,
+      isActive: card.isActive ?? true,
+      plaidAccountId: null,
+    }).run();
+  }
+
+  type StatementImport = Partial<CreditCardStatementRow> & { cardName?: string };
+  for (const s of (payload.creditCardStatements ?? []) as StatementImport[]) {
+    if (!s.cardId || !s.statementDate || !s.dueDate) continue;
+    if (typeof s.statementBalanceCents !== "number") continue;
+    await db.insert(creditCardStatements).values({
+      id: s.id ?? newId(),
+      cardId: s.cardId,
+      statementDate: s.statementDate,
+      dueDate: s.dueDate,
+      statementBalanceCents: s.statementBalanceCents,
+      minimumPaymentCents: s.minimumPaymentCents ?? null,
+      paidAmountCents: s.paidAmountCents ?? null,
+      paidDate: s.paidDate ?? null,
+      notes: s.notes ?? null,
+    }).run();
+  }
+
+  type PromoImport = Partial<CreditCardPromoRow>;
+  for (const p of (payload.creditCardPromos ?? []) as PromoImport[]) {
+    if (!p.cardId || !p.description) continue;
+    if (
+      typeof p.originalAmountCents !== "number" ||
+      typeof p.remainingAmountCents !== "number" ||
+      !p.startDate ||
+      !p.endDate
+    ) {
+      continue;
+    }
+    await db.insert(creditCardPromos).values({
+      id: p.id ?? newId(),
+      userId,
+      cardId: p.cardId,
+      description: p.description,
+      originalAmountCents: p.originalAmountCents,
+      remainingAmountCents: p.remainingAmountCents,
+      startDate: p.startDate,
+      endDate: p.endDate,
+      monthlyPaymentCents: p.monthlyPaymentCents ?? null,
+      notes: p.notes ?? null,
+      isActive: p.isActive ?? true,
+      authoritativeSource: p.authoritativeSource ?? null,
+    }).run();
+  }
+
+  type PromoPaymentImport = Partial<CreditCardPromoPaymentRow>;
+  for (const pp of (payload.creditCardPromoPayments ?? []) as PromoPaymentImport[]) {
+    if (!pp.promoId || !pp.dueDate || typeof pp.amountCents !== "number") continue;
+    await db.insert(creditCardPromoPayments).values({
+      id: pp.id ?? newId(),
+      userId,
+      promoId: pp.promoId,
+      dueDate: pp.dueDate,
+      amountCents: pp.amountCents,
+      note: pp.note ?? null,
+    }).run();
+  }
+
   type LegacyBill = Partial<BillRow> & {
     frequency?: "monthly" | "annual";
     dueDay?: number;

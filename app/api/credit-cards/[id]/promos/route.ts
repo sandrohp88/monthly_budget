@@ -38,6 +38,7 @@ export async function POST(req: Request, ctx: Ctx) {
     endDate: data.endDate,
     monthlyPaymentCents: data.monthlyPaymentCents ?? null,
     notes: data.notes ?? null,
+    authoritativeSource: data.authoritativeSource ?? null,
   });
   return NextResponse.json({ promo }, { status: 201 });
 }

@@ -464,6 +464,7 @@ function promo(over: Partial<CreditCardPromoRow> = {}): CreditCardPromoRow {
     monthlyPaymentCents: null,
     notes: null,
     isActive: true,
+    authoritativeSource: null,
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -640,6 +641,22 @@ describe("projectPromoSchedule", () => {
     expect(schedule).toEqual([{ dueDate: "2026-06-01", amountCents: 25_00 }]);
     const total = schedule.reduce((s, c) => s + c.amountCents, 0);
     expect(total).toBe(25_00);
+  });
+
+  it("never schedules a chunk after the promo endDate", () => {
+    // Cycles whose due date falls past `endDate` collapse to a single lump
+    // on `endDate` itself, not on the post-deadline cycle. This makes the
+    // cliff visualize on the actual interest-free deadline.
+    const schedule = projectPromoSchedule(
+      promo({ remainingAmountCents: 60_00, startDate: "2026-05-01", endDate: "2026-10-31" }),
+      card,
+      "2026-05-03",
+      new Set(),
+    );
+    expect(schedule.length).toBeGreaterThan(0);
+    for (const chunk of schedule) {
+      expect(chunk.dueDate <= "2026-10-31").toBe(true);
+    }
   });
 
   it("converges to zero by the deadline (no overshoot, no shortfall)", () => {

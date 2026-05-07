@@ -9,6 +9,7 @@ import { CardSubTag, PageHead } from "@/components/ui/page-head";
 import { Tile, TileGrid } from "@/components/ui/tile";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AlertBar } from "@/components/ui/alert-bar";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { ProjectionChart } from "@/components/projection-chart";
@@ -38,7 +39,9 @@ export default async function DashboardPage() {
 
   const projection = await buildProjection(userId);
   if (!projection) redirect("/setup");
-  const { rows, projectionMonths } = projection;
+  const { rows, projectionMonths, promoDriftByCard } = projection;
+  const totalPromoDriftCents = Object.values(promoDriftByCard).reduce((s, n) => s + n, 0);
+  const driftedCardCount = Object.keys(promoDriftByCard).length;
 
   const [bills, extras, paychecks, ccStatements] = await Promise.all([
     listBills(userId, false),
@@ -216,12 +219,28 @@ export default async function DashboardPage() {
         />
       </TileGrid>
 
+      {totalPromoDriftCents > 0 ? (
+        <AlertBar tag="DRIFT" variant="amber">
+          Promo records exceed live card balances on{" "}
+          <strong className="text-[var(--amber)]">
+            {driftedCardCount} card{driftedCardCount === 1 ? "" : "s"}
+          </strong>{" "}
+          by <Money cents={totalPromoDriftCents} />. The projection silently caps the
+          difference so the open-cycle estimate stays positive — but this means a promo
+          decrement was missed somewhere.{" "}
+          <Link href="/credit-cards" className="text-[var(--mint)] hover:underline">
+            Reconcile →
+          </Link>
+        </AlertBar>
+      ) : null}
+
       {worst && worstIsRisk ? (
         <div
           className="grid items-center gap-4 rounded-sm border p-4"
           style={{
-            background: "linear-gradient(135deg, rgba(239,68,68,0.08), transparent 60%)",
-            borderColor: "rgba(239,68,68,0.25)",
+            background:
+              "linear-gradient(135deg, color-mix(in oklch, var(--red) 8%, transparent), transparent 60%)",
+            borderColor: "color-mix(in oklch, var(--red) 25%, transparent)",
             gridTemplateColumns: "auto 1fr auto",
           }}
         >

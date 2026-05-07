@@ -2,9 +2,13 @@
 
 import * as React from "react";
 import { Input } from "@/components/ui/input";
+import { dollarsToCents } from "@/lib/money";
 
 /**
  * Controlled money input. Stores cents externally; renders dollars.
+ *
+ * Parsing routes through `dollarsToCents`, which is string-based so the
+ * IEEE-754 trap (1.005 × 100 ≠ 100.5) doesn't drop a cent on the floor.
  */
 export const MoneyInput = React.forwardRef<
   HTMLInputElement,
@@ -24,7 +28,14 @@ export const MoneyInput = React.forwardRef<
 
   React.useEffect(() => {
     const next = valueCents === 0 ? "" : (valueCents / 100).toFixed(2);
-    setText((prev) => (Math.round(Number(prev || "0") * 100) === valueCents ? prev : next));
+    setText((prev) => {
+      try {
+        const prevCents = prev === "" || prev === "-" ? 0 : dollarsToCents(prev);
+        return prevCents === valueCents ? prev : next;
+      } catch {
+        return next;
+      }
+    });
   }, [valueCents]);
 
   return (
@@ -41,8 +52,12 @@ export const MoneyInput = React.forwardRef<
           onChangeCents(0);
           return;
         }
-        const n = Number(cleaned);
-        if (Number.isFinite(n)) onChangeCents(Math.round(n * 100));
+        try {
+          onChangeCents(dollarsToCents(cleaned));
+        } catch {
+          // Mid-typing states like "1." or "-." aren't valid money strings;
+          // leave the displayed text alone and don't mutate the parent value.
+        }
       }}
     />
   );

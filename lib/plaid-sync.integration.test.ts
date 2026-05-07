@@ -287,13 +287,15 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     await updatePromo(user.id, storeOne.id, {
       remainingAmountCents: 200_00,
       endDate: "2026-07-26",
-      notes: "PayPal authoritative promo data copied from issuer promo list",
+      notes: "Copied from PayPal promo list",
+      authoritativeSource: "paypal_promo_list",
       isActive: true,
     });
     await updatePromo(user.id, storeTwo.id, {
       remainingAmountCents: 0,
       endDate: "2026-06-26",
-      notes: "Paid off based on PayPal authoritative promo data",
+      notes: "Paid off per PayPal promo list",
+      authoritativeSource: "paypal_promo_list",
       isActive: false,
     });
 

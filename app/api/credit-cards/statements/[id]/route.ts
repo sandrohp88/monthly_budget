@@ -35,11 +35,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
     ...(data.notes !== undefined ? { notes: data.notes ?? null } : {}),
   });
 
-  // Auto-decrement promo remainings ONLY on the unpaid → paid transition.
-  // Re-saving an already-paid statement would otherwise double-decrement.
+  // Auto-decrement promo remainings ONLY on the unpaid → paid transition with
+  // a positive payment. Re-saving an already-paid statement would otherwise
+  // double-decrement, and a $0 mark-as-paid would silently shrink promo
+  // principal even though no cash moved.
   const wasUnpaid = existing.paidAmountCents == null;
-  const isNowPaid = statement?.paidAmountCents != null;
-  if (wasUnpaid && isNowPaid) {
+  const isNowPaidWithCash = (statement?.paidAmountCents ?? 0) > 0;
+  if (wasUnpaid && isNowPaidWithCash) {
     await applyPromoChunksForPaidStatement(
       auth.userId,
       existing.cardId,

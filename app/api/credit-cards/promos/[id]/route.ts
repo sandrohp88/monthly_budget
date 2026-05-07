@@ -31,6 +31,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
       : {}),
     ...(data.notes !== undefined ? { notes: data.notes ?? null } : {}),
     ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+    ...(data.authoritativeSource !== undefined
+      ? { authoritativeSource: data.authoritativeSource ?? null }
+      : {}),
   });
   return NextResponse.json({ promo: updated });
 }
