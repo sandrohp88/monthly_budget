@@ -5,9 +5,11 @@ import { eq } from "drizzle-orm";
 import { getDb } from "./db/client";
 import { users } from "./db/schema";
 import { loginSchema } from "./validation";
-import { takeToken } from "./rate-limit";
-import { log } from "./log";
 import authConfig from "../auth.config";
+
+// Rate limiting lives in middleware.ts (per real client IP) — the
+// Credentials authorize() callback runs server-side without request headers,
+// so the bucket key would always have collapsed to a single global counter.
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
@@ -16,7 +18,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
-        ip: { type: "text" },
       },
       authorize: async (raw) => {
         const parsed = loginSchema.safeParse({
@@ -24,13 +25,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           password: raw?.password,
         });
         if (!parsed.success) return null;
-
-        const ip = typeof raw?.ip === "string" && raw.ip.length > 0 ? raw.ip : "unknown";
-        const limited = !takeToken(`login:${ip}`, { capacity: 5, refillPerSecond: 0.1 });
-        if (limited) {
-          log.warn("login rate-limited", ip);
-          return null;
-        }
 
         const db = getDb();
         const row = await db

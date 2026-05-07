@@ -1446,13 +1446,18 @@ export async function deletePlaidDraft(
 }
 
 /**
- * Returns the balance of the first account with useAsStartingBalance=true,
- * or null if no such account exists. Used by projection-server to optionally
- * substitute a live bank balance for the manual startingBalanceCents.
+ * Sums the balances of every account flagged useAsStartingBalance=true, or
+ * returns null if no account is opted in. Used by projection-server to
+ * substitute the user's live bank balance for the manual startingBalanceCents.
+ *
+ * Multiple opted-in accounts (e.g. a household with checking + savings both
+ * marked) sum into a single starting balance; nulls are skipped (an account
+ * Plaid hasn't returned a balance for yet contributes 0, not the override
+ * being abandoned).
  */
 export async function getPrimaryLinkedBalance(userId: string): Promise<number | null> {
   const db = getDb();
-  const row = await db
+  const rows = await db
     .select({ balanceCents: plaidAccounts.balanceCents })
     .from(plaidAccounts)
     .where(
@@ -1461,8 +1466,9 @@ export async function getPrimaryLinkedBalance(userId: string): Promise<number | 
         eq(plaidAccounts.useAsStartingBalance, true),
       ),
     )
-    .get();
-  return row?.balanceCents ?? null;
+    .all();
+  if (rows.length === 0) return null;
+  return rows.reduce((sum, r) => sum + (r.balanceCents ?? 0), 0);
 }
 
 // ── export/import ─────────────────────────────────────────────────────────────

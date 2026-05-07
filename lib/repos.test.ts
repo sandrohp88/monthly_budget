@@ -728,6 +728,23 @@ describe("repos / getPrimaryLinkedBalance", () => {
     await seedAccount(user.id, { useAsStartingBalance: true, balanceCents: 250_00 });
     expect(await getPrimaryLinkedBalance(user.id)).toBe(250_00);
   });
+
+  it("sums balances when multiple accounts are opted in", async () => {
+    // Households commonly mark both checking + savings as their starting
+    // balance. The previous implementation silently picked the first row;
+    // the fix sums everything.
+    const user = await makeUser();
+    await seedAccount(user.id, { useAsStartingBalance: true, balanceCents: 250_00, id: "checking" });
+    await seedAccount(user.id, { useAsStartingBalance: true, balanceCents: 750_00, id: "savings" });
+    expect(await getPrimaryLinkedBalance(user.id)).toBe(1000_00);
+  });
+
+  it("treats a null balance from an opted-in account as zero (not as 'no override')", async () => {
+    const user = await makeUser();
+    await seedAccount(user.id, { useAsStartingBalance: true, balanceCents: null, id: "pending" });
+    await seedAccount(user.id, { useAsStartingBalance: true, balanceCents: 100_00, id: "real" });
+    expect(await getPrimaryLinkedBalance(user.id)).toBe(100_00);
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────────
