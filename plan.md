@@ -6,6 +6,29 @@ Working document for the accuracy/automation/theme refactor. Each item has a sta
 **Started:** 2026-05-07
 **Reference:** `CLAUDE.md` is the source of truth for repo conventions; `AGENTS.md` for workflow.
 
+## Rollup (2026-05-07)
+
+**Done (`[x]`):** P0-1, P0-2, P0-3, P1-1, P1-2, P1-3, P1-4, P2-2, P2-4, P2-8, P3-1, T-1, T-2, T-4, T-7
+**Partial (`[~]`):** T-3 (high-visibility primitives done, 2-3 low-visibility spots left), T-5 (theme added, WCAG contrast test missing)
+**Not started (`[ ]`):** P2-1, P2-3, P2-5, P2-6, P2-7, P3-2, P3-3, T-6
+
+**Recommended next** (Codex pick-up order):
+1. **P2-5** (preserve user-edited statement dueDate on Plaid sync) — small migration + repo edit, directly addresses automation/manual blend
+2. **P3-3** (per-card `gracePeriodDays`) — small migration, fixes the hardcoded 14-day floor in `dueDateFromStatement`
+3. **P2-6** (bill ↔ Plaid transaction matcher) — biggest remaining accuracy win; new `lib/transaction-matcher.ts` + UI surface
+4. **P2-7** (auto-approved drafts feed historical projection) — biggest automation/manual blend win; needs a per-account opt-in toggle
+5. **T-3** finish — sweep `app/login/login-form.tsx` and `app/setup/setup-form.tsx` for the last `rgba()` literals
+6. **T-5** WCAG test — add a contrast helper that asserts every theme passes AA on key surfaces
+7. **P2-1** (provenance) — only worth doing if a future feature actually reads `source`; otherwise low ROI
+
+**Don't do** without the user explicitly asking:
+- Build-time CSS generation from `lib/themes.ts` (CSS blocks are hand-maintained and that works fine for a 5-theme registry)
+- Plaid items export (encrypted access tokens are pinned to per-deployment `PLAID_ENCRYPTION_KEY` — restoring on a new host won't work anyway)
+
+## Verification
+
+After every item: `npm run check` (typecheck + lint + 216 vitest + production build) must pass green. The branch's commit history is the audit trail — `git log --oneline feat/accuracy-and-themes` shows what's been merged.
+
 ## Status legend
 - `[ ]` not started
 - `[~]` in progress
