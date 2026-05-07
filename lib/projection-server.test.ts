@@ -336,6 +336,44 @@ describe("buildProjection promo statement reconciliation", () => {
       paymentBalanceCents: 1_000_00,
     });
   });
+
+  it("deduplicates duplicate statement rows for the same card due date", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Shifted Statement Card",
+      statementDay: 10,
+      dueDay: 7,
+      currentBalanceCents: 380_75,
+      autoPay: false,
+      isActive: true,
+    });
+    await createStatement(card.id, {
+      statementDate: "2026-04-10",
+      dueDate: "2026-05-07",
+      statementBalanceCents: 653_13,
+      paidAmountCents: 530_84,
+      paidDate: "2026-04-20",
+      notes: null,
+    });
+    await createStatement(card.id, {
+      statementDate: "2026-04-19",
+      dueDate: "2026-05-07",
+      statementBalanceCents: 653_13,
+      paidAmountCents: 530_84,
+      paidDate: "2026-05-02",
+      notes: null,
+    });
+
+    const row = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-05-07");
+    const events = row?.events.filter((event) => event.label === "Shifted Statement Card payment");
+
+    expect(events).toHaveLength(1);
+    expect(events?.[0]).toMatchObject({
+      amountCents: 122_29,
+      originalAmountCents: 122_29,
+      paymentDueCents: 122_29,
+    });
+  });
 });
 
 describe("buildProjection linked starting balance", () => {

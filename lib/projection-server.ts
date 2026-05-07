@@ -191,27 +191,47 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   // already reflected in the starting balance and are skipped. These events
   // also carry card-balance metadata so a user can plan paying above the
   // statement due amount when a 0% promo balance is present.
-  const ccExtras: ProjectionInput["extras"] = statements
-    .map((s) => {
-      const dueCents = statementCashDueCents(s);
-      const remainingCents = Math.max(0, dueCents - (s.paidAmountCents ?? 0));
-      if (remainingCents <= 0) return null;
-      const override = cardOverridesByCard.get(s.cardId)?.get(s.dueDate);
-      appliedCardOverrideKeys.add(overrideKey(s.cardId, s.dueDate));
-      const amountCents = override?.amountCents ?? remainingCents;
-      return {
-        date: s.dueDate,
-        description: `${s.cardName} payment`,
-        amountCents,
-        sourceId: s.cardId,
-        sourceType: "creditCardPayment" as const,
-        originalAmountCents: remainingCents,
-        relatedDate: movedFromDate(override?.notes),
-        paymentDueCents: remainingCents,
-        paymentBalanceCents: displayBalanceForCard(s.cardId, remainingCents),
-      };
-    })
-    .filter((extra): extra is NonNullable<typeof extra> => extra !== null);
+  const statementDueByCardDate = new Map<
+    string,
+    {
+      cardId: string;
+      cardName: string;
+      dueDate: string;
+      remainingCents: number;
+    }
+  >();
+  for (const s of statements) {
+    const dueCents = statementCashDueCents(s);
+    const remainingCents = Math.max(0, dueCents - (s.paidAmountCents ?? 0));
+    if (remainingCents <= 0) continue;
+    const key = overrideKey(s.cardId, s.dueDate);
+    const existing = statementDueByCardDate.get(key);
+    if (!existing || remainingCents > existing.remainingCents) {
+      statementDueByCardDate.set(key, {
+        cardId: s.cardId,
+        cardName: s.cardName,
+        dueDate: s.dueDate,
+        remainingCents,
+      });
+    }
+  }
+  const ccExtras: ProjectionInput["extras"] = [];
+  for (const group of statementDueByCardDate.values()) {
+    const override = cardOverridesByCard.get(group.cardId)?.get(group.dueDate);
+    appliedCardOverrideKeys.add(overrideKey(group.cardId, group.dueDate));
+    const amountCents = override?.amountCents ?? group.remainingCents;
+    ccExtras.push({
+      date: group.dueDate,
+      description: `${group.cardName} payment`,
+      amountCents,
+      sourceId: group.cardId,
+      sourceType: "creditCardPayment" as const,
+      originalAmountCents: group.remainingCents,
+      relatedDate: movedFromDate(override?.notes),
+      paymentDueCents: group.remainingCents,
+      paymentBalanceCents: displayBalanceForCard(group.cardId, group.remainingCents),
+    });
+  }
 
   const openCycleExtras: ProjectionInput["extras"] = [];
   const promoDriftByCard: Record<string, number> = {};

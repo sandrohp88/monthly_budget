@@ -1418,10 +1418,11 @@ export async function updateCardCycleDays(
 }
 
 /**
- * Upsert a statement keyed by (cardId, statementDate). Uses the unique index
- * added in 0005 so re-syncs are idempotent. Will not overwrite a paid record
- * with empty paid fields — manual reconciliation wins over Plaid's read-only
- * snapshot.
+ * Upsert a statement keyed by (cardId, statementDate), falling back to
+ * (cardId, dueDate) when an issuer shifts the reported statement date for the
+ * same payable cycle. Uses the unique index added in 0005 so exact re-syncs
+ * are idempotent. Will not overwrite a paid record with empty paid fields —
+ * manual reconciliation wins over Plaid's read-only snapshot.
  */
 export async function upsertCreditCardStatementByDate(
   cardId: string,
@@ -1436,7 +1437,7 @@ export async function upsertCreditCardStatementByDate(
   },
 ): Promise<boolean> {
   const db = getDb();
-  const existing = await db
+  let existing = await db
     .select()
     .from(creditCardStatements)
     .where(
@@ -1446,6 +1447,20 @@ export async function upsertCreditCardStatementByDate(
       ),
     )
     .get();
+
+  if (!existing) {
+    existing = await db
+      .select()
+      .from(creditCardStatements)
+      .where(
+        and(
+          eq(creditCardStatements.cardId, cardId),
+          eq(creditCardStatements.dueDate, data.dueDate),
+        ),
+      )
+      .orderBy(desc(creditCardStatements.statementDate))
+      .get();
+  }
 
   if (
     data.statementBalanceCents === 0 &&
@@ -1496,6 +1511,7 @@ export async function upsertCreditCardStatementByDate(
   await db
     .update(creditCardStatements)
     .set({
+      statementDate: data.statementDate,
       dueDate: data.dueDate,
       statementBalanceCents: data.statementBalanceCents,
       minimumPaymentCents: data.minimumPaymentCents ?? null,
