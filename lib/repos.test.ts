@@ -369,6 +369,41 @@ describe("repos / upsertCreditCardStatementByDate", () => {
     });
   });
 
+  it("updates the same due-date statement when Plaid shifts the statement date", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Card",
+      statementDay: 10,
+      dueDay: 7,
+      autoPay: false,
+      isActive: true,
+    });
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-04-10",
+      dueDate: "2026-05-07",
+      statementBalanceCents: 653_13,
+      paidAmountCents: 530_84,
+      paidDate: "2026-04-20",
+    });
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-04-19",
+      dueDate: "2026-05-07",
+      statementBalanceCents: 653_13,
+      paidAmountCents: 530_84,
+      paidDate: "2026-05-02",
+    });
+
+    const stmts = await listStatements(card.id);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toMatchObject({
+      statementDate: "2026-04-19",
+      dueDate: "2026-05-07",
+      statementBalanceCents: 653_13,
+      paidAmountCents: 530_84,
+      paidDate: "2026-05-02",
+    });
+  });
+
   it("persists and updates the Plaid minimum payment on statement upsert", async () => {
     const user = await makeUser();
     const card = await createCreditCard(user.id, {
