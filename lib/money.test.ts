@@ -15,14 +15,29 @@ describe("money helpers", () => {
       expect(dollarsToCents(1)).toBe(100);
       expect(dollarsToCents(1234)).toBe(123_400);
     });
-    it("rounds to the nearest cent via Math.round", () => {
-      // IEEE-754 quirk: 1.005 * 100 == 100.49999999999999, so Math.round → 100.
-      // Pinning current behavior — if we ever switch to a banker-rounding
-      // helper or a Number.EPSILON-adjusted rounder this test will catch it.
-      expect(dollarsToCents(1.005)).toBe(100);
-      expect(dollarsToCents(1.0051)).toBe(101); // unambiguously > .5 cent
+    it("rounds half-away-from-zero on the decimal digits the user typed", () => {
+      // 1.005 must become 101 cents, not 100. The naive `Math.round(x*100)`
+      // path drops a cent here because `1.005 * 100 === 100.49999999999999`.
+      // Our string-based rounder inspects the third decimal digit directly.
+      expect(dollarsToCents(1.005)).toBe(101);
+      expect(dollarsToCents(1.0051)).toBe(101);
       expect(dollarsToCents(1.004)).toBe(100);
-      expect(dollarsToCents(0.1 + 0.2)).toBe(30); // classic FP trap, must still land on 30
+      expect(dollarsToCents(0.1 + 0.2)).toBe(30);
+    });
+
+    it("accepts pre-cleaned strings", () => {
+      expect(dollarsToCents("1.005")).toBe(101);
+      expect(dollarsToCents("12.34")).toBe(1234);
+      expect(dollarsToCents(".5")).toBe(50);
+      expect(dollarsToCents("5.")).toBe(500);
+      expect(dollarsToCents("0")).toBe(0);
+      expect(dollarsToCents("")).toBe(0);
+    });
+
+    it("rounds negatives away from zero (commercial rounding)", () => {
+      expect(dollarsToCents(-1.005)).toBe(-101);
+      expect(dollarsToCents("-1.005")).toBe(-101);
+      expect(dollarsToCents(-1.004)).toBe(-100);
     });
     it("handles negative amounts (refunds)", () => {
       expect(dollarsToCents(-12.34)).toBe(-1234);

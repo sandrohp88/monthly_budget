@@ -3,11 +3,16 @@
  * "server-only" import) so they're directly unit-testable.
  */
 
+import { dollarsToCents } from "./money";
+
 /** Plaid sends amounts as positive for debits and negative for credits.
  *  We store positive = expense, negative = refund — same sign convention.
- *  Plaid amounts are in dollars (floating point); we multiply by 100 and round. */
+ *  Plaid amounts are in dollars (floating point); routing through
+ *  `dollarsToCents` rounds on the decimal digits Plaid actually emitted
+ *  rather than on the IEEE-754 product, so refunds at -x.xx5 don't drift
+ *  one cent toward zero. */
 export function toCents(plaidAmount: number): number {
-  return Math.round(plaidAmount * 100);
+  return dollarsToCents(plaidAmount);
 }
 
 /**

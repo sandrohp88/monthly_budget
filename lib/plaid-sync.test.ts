@@ -17,6 +17,14 @@ describe("plaid-sync helpers", () => {
     it("survives a known floating-point trap (0.1 + 0.2)", () => {
       expect(toCents(0.1 + 0.2)).toBe(30);
     });
+    it("rounds half-away-from-zero on negative refunds (no asymmetric drift)", () => {
+      // Math.round(-0.5) === 0 in JS — that is, half rounds toward zero for
+      // negatives, asymmetric with positives. Routing through `dollarsToCents`
+      // rounds away from zero in both directions, so a -0.005 refund becomes
+      // -1 cent, not 0.
+      expect(toCents(-0.005)).toBe(-1);
+      expect(toCents(-1.005)).toBe(-101);
+    });
   });
 
   // ── looksLikePaid ─────────────────────────────────────────────────────────
