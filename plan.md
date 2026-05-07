@@ -244,7 +244,10 @@ Update Drizzle schema, journal, and repo create-paths to set `source`.
 
 ---
 
-### [ ] P2-4. Validate promo manual schedule sum
+### [x] P2-4. Validate promo manual schedule sum
+**Done.** `PUT /api/credit-cards/promos/[id]/payments` now rejects schedules whose total ≠ `remainingAmountCents` with a clear short/over diff message. Empty arrays (`payments.length === 0`) still clear the manual override and revert to auto-spread, so the contract for "delete the schedule" is preserved.
+
+**Not done**: a UI helper that pre-computes the balancing final cycle (so the user doesn't fight the validator). Add an "Auto-balance final cycle" button in the schedule editor that subtracts the sum-so-far from `remainingAmountCents` and writes the difference into the last row.
 
 **Bug:** `replacePromoPayments` accepts any list, even ones that don't sum to `remainingAmountCents`.
 
@@ -306,7 +309,15 @@ Update Drizzle schema, journal, and repo create-paths to set `source`.
 
 ---
 
-### [ ] P2-8. Backfill `exportAll` / `importAll` for promos and Plaid
+### [x] P2-8. Backfill `exportAll` / `importAll` for promos
+**Done.** `exportAll` now bumps `schemaVersion` to `4` and includes `creditCardPromos` and `creditCardPromoPayments`. `importAll` was rewritten end-to-end:
+- Deletes in dependency order (promo payments → promos → CC overrides → cards [cascades statements] → bill overrides → bills → paychecks → extras)
+- Inserts cards before bills/extras so `paidViaCardId` resolves
+- Inserts statements / promos / promo payments after cards
+- Nulls `plaidAccountId` on imported cards (Plaid items are intentionally not exported — see comment in `repos.ts:exportAll`)
+- Categories still only replace when present in payload (preserves the v3 backward-compat behavior)
+
+**Not done**: Plaid items / accounts / drafts. Skipping them is intentional — the encrypted access tokens are tied to per-deployment `PLAID_ENCRYPTION_KEY` and the Plaid sessions don't survive cross-host moves anyway. Document this in the README backup section.
 
 **Bug:** Exports skip `creditCardPromos`, `creditCardPromoPayments`, `plaidItems`, `plaidAccounts`, `plaidTransactionDrafts`. A "backup" loses promo state on restore.
 
@@ -412,7 +423,8 @@ Replace the binary `ThemeToggle` with a select on `/settings`.
 
 ## Phase 4 — Cleanup (P3)
 
-### [ ] P3-1. `archiveExpiredPromos` runs without Plaid
+### [x] P3-1. `archiveExpiredPromos` runs without Plaid
+**Done.** `app/(app)/layout.tsx` now calls `archiveExpiredPromos(userId, todayIso(timezone))` on every authenticated page render. Wrapped in try/catch so the sweep can never block page load. The Plaid sync still calls it too — both paths are idempotent. Verified single-indexed UPDATE is cheap enough to run unconditionally.
 
 **Bug:** Today only `lib/plaid-sync.ts` triggers the sweep. Users without Plaid never archive expired promos.
 
