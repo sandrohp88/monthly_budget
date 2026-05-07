@@ -138,6 +138,19 @@ describe("statement payment state", () => {
     expect(isStatementOpen(statement({ paidAmountCents: 100_000 }))).toBe(false);
   });
 
+  it("isStatementOpen treats zero due statements as closed without payment", () => {
+    expect(
+      isStatementOpen(
+        statement({
+          statementBalanceCents: 0,
+          minimumPaymentCents: 0,
+          paidAmountCents: null,
+          paidDate: null,
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("paidWithoutInterest: paid in full, on or before due → true", () => {
     expect(
       paidWithoutInterest(
@@ -169,6 +182,19 @@ describe("statement payment state", () => {
 
   it("paidWithoutInterest: never marked paid → false", () => {
     expect(paidWithoutInterest(statement())).toBe(false);
+  });
+
+  it("paidWithoutInterest: zero due statements are fee-safe without a payment", () => {
+    expect(
+      paidWithoutInterest(
+        statement({
+          statementBalanceCents: 0,
+          minimumPaymentCents: null,
+          paidAmountCents: null,
+          paidDate: null,
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("paidWithoutInterest: paid more than statement (post-statement charges) still counts", () => {

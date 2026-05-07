@@ -12,6 +12,7 @@ import {
   listAllPromoPayments,
   listPromos,
   listStatementsForUser,
+  listVariableBills,
   getPrimaryLinkedBalance,
 } from "./repos";
 import {
@@ -26,6 +27,7 @@ import {
   type ProjectionInput,
   type ProjectionRow,
 } from "./projection";
+import { projectVariableBillCardCharges } from "./variable-bills";
 
 export type PromoPaymentSummary = {
   id: string;
@@ -81,6 +83,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     plaidAccts,
     promos,
     promoPayments,
+    variableBills,
   ] =
     await Promise.all([
       listBills(userId, false),
@@ -94,6 +97,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       listPlaidAccounts(userId),
       listPromos(userId, false),
       listAllPromoPayments(userId),
+      listVariableBills(userId, false),
     ]);
   const promoPaymentsByPromoId = new Map<
     string,
@@ -320,6 +324,50 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     });
   }
 
+  const variableBillChargeGroups = new Map<
+    string,
+    { cardId: string; cardName: string; dueDate: string; amountCents: number; names: string[] }
+  >();
+  const variableCharges = projectVariableBillCardCharges({
+    variableBills,
+    cards: activeCards,
+    startDate: today,
+    endDate,
+  });
+  for (const charge of variableCharges) {
+    const card = cardById.get(charge.cardId);
+    if (!card) continue;
+    const key = overrideKey(charge.cardId, charge.dueDate);
+    const existing = variableBillChargeGroups.get(key);
+    if (existing) {
+      existing.amountCents += charge.amountCents;
+      if (!existing.names.includes(charge.name)) existing.names.push(charge.name);
+    } else {
+      variableBillChargeGroups.set(key, {
+        cardId: charge.cardId,
+        cardName: card.name,
+        dueDate: charge.dueDate,
+        amountCents: charge.amountCents,
+        names: [charge.name],
+      });
+    }
+  }
+  const variableBillExtras: ProjectionInput["extras"] = [];
+  for (const group of variableBillChargeGroups.values()) {
+    if (group.amountCents <= 0) continue;
+    appliedCardOverrideKeys.add(overrideKey(group.cardId, group.dueDate));
+    variableBillExtras.push({
+      date: group.dueDate,
+      description: `${group.cardName} variable spend (${group.names.join(", ")})`,
+      amountCents: group.amountCents,
+      sourceId: group.cardId,
+      sourceType: "creditCardPayment",
+      originalAmountCents: group.amountCents,
+      paymentDueCents: group.amountCents,
+      paymentBalanceCents: displayBalanceForCard(group.cardId, group.amountCents),
+    });
+  }
+
   const plannedCardExtras: ProjectionInput["extras"] = [];
   for (const [cardId, overrides] of cardOverridesByCard) {
     const card = cardById.get(cardId);
@@ -383,6 +431,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       ...ccExtras.filter((e) => linkedBalance == null || e.date >= today),
       ...openCycleExtras.filter((e) => linkedBalance == null || e.date >= today),
       ...promoExtras.filter((e) => linkedBalance == null || e.date >= today),
+      ...variableBillExtras.filter((e) => linkedBalance == null || e.date >= today),
       ...plannedCardExtras.filter((e) => linkedBalance == null || e.date >= today),
     ],
   };

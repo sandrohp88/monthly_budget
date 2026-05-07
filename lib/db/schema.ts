@@ -126,6 +126,34 @@ export const billPaymentOverrides = sqliteTable(
   }),
 );
 
+/**
+ * Expected recurring spend with a variable real-world amount, such as
+ * groceries or fuel. These are forecasts, not reconciled transactions. When
+ * linked to credit cards, the projection lands the expected cash movement on
+ * the card statement due date instead of the purchase date.
+ */
+export const variableBills = sqliteTable(
+  "variable_bills",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    category: text("category").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    intervalMonths: integer("interval_months").notNull(),
+    anchorDate: text("anchor_date").notNull(),
+    notes: text("notes"),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    userActive: index("variable_bills_user_active_idx").on(t.userId, t.isActive),
+  }),
+);
+
 export const oneTimeExpenses = sqliteTable(
   "one_time_expenses",
   {
@@ -185,6 +213,30 @@ export const creditCards = sqliteTable(
   (t) => ({
     userActive: index("credit_cards_user_active_idx").on(t.userId, t.isActive),
     plaidAccountUnique: uniqueIndex("credit_cards_plaid_account_unique_idx").on(t.plaidAccountId),
+  }),
+);
+
+export const variableBillCards = sqliteTable(
+  "variable_bill_cards",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    variableBillId: text("variable_bill_id")
+      .notNull()
+      .references(() => variableBills.id, { onDelete: "cascade" }),
+    cardId: text("card_id")
+      .notNull()
+      .references(() => creditCards.id, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    userIdx: index("variable_bill_cards_user_idx").on(t.userId),
+    billIdx: index("variable_bill_cards_bill_idx").on(t.variableBillId),
+    billCardUnique: uniqueIndex("variable_bill_cards_bill_card_unique_idx").on(
+      t.variableBillId,
+      t.cardId,
+    ),
   }),
 );
 
@@ -350,6 +402,8 @@ export type SettingsRow = typeof settings.$inferSelect;
 export type PaycheckRow = typeof paychecks.$inferSelect;
 export type BillRow = typeof bills.$inferSelect;
 export type BillPaymentOverrideRow = typeof billPaymentOverrides.$inferSelect;
+export type VariableBillRow = typeof variableBills.$inferSelect;
+export type VariableBillCardRow = typeof variableBillCards.$inferSelect;
 export type OneTimeExpenseRow = typeof oneTimeExpenses.$inferSelect;
 export type CategoryRow = typeof categories.$inferSelect;
 export type CreditCardRow = typeof creditCards.$inferSelect;
@@ -363,6 +417,8 @@ export type NewSettings = typeof settings.$inferInsert;
 export type NewPaycheck = typeof paychecks.$inferInsert;
 export type NewBill = typeof bills.$inferInsert;
 export type NewBillPaymentOverride = typeof billPaymentOverrides.$inferInsert;
+export type NewVariableBill = typeof variableBills.$inferInsert;
+export type NewVariableBillCard = typeof variableBillCards.$inferInsert;
 export type NewOneTimeExpense = typeof oneTimeExpenses.$inferInsert;
 export type NewCategory = typeof categories.$inferInsert;
 export type NewCreditCard = typeof creditCards.$inferInsert;

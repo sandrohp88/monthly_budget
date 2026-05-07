@@ -136,9 +136,9 @@ export function dueDateFromStatement(statementIso: string, dueDay: number): stri
   return nextDayOfMonthOnOrAfter(earliest, dueDay);
 }
 
-/** A statement is "unpaid" if no paid amount has been recorded. */
+/** A statement is open only when cash is actually due and no payment is recorded. */
 export function isStatementOpen(s: CreditCardStatementRow): boolean {
-  return s.paidAmountCents == null;
+  return statementCashDueCents(s) > 0 && s.paidAmountCents == null;
 }
 
 /**
@@ -155,6 +155,7 @@ export function statementCashDueCents(s: CreditCardStatementRow): number {
 
 /** Did the user pay the full statement on or before the due date? */
 export function paidWithoutInterest(s: CreditCardStatementRow): boolean {
+  if (statementCashDueCents(s) <= 0) return true;
   if (s.paidAmountCents == null || s.paidDate == null) return false;
   return s.paidAmountCents >= statementCashDueCents(s) && s.paidDate <= s.dueDate;
 }
@@ -217,7 +218,7 @@ export function currentCycleWindow(
 export type LinkedBillEstimate = {
   billId: string;
   sourceId: string;
-  sourceType: "bill" | "extra";
+  sourceType: "bill" | "extra" | "variable_bill";
   name: string;
   date: string;       // when it lands in this cycle
   amountCents: number;
