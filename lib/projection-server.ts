@@ -47,6 +47,17 @@ export type ProjectionBundle = {
   projectionMonths: number;
   currency: string;
   promoSummariesByCard: Record<string, PromoPaymentSummary[]>;
+  /**
+   * Per-card "promo records exceed the live card balance after subtracting
+   * unpaid statements" amount in cents. Nonzero values mean our promo state
+   * is drifting higher than the issuer actually has on file — typically
+   * because the unpaid→paid edge that decrements promos didn't fire (e.g.
+   * Plaid never reported a payment, or the statement was marked paid with
+   * $0). The projection silently caps the subtraction so the open-cycle
+   * estimate doesn't go negative; the UI should surface this so the user
+   * knows to reconcile.
+   */
+  promoDriftByCard: Record<string, number>;
 };
 
 export async function buildProjection(userId: string): Promise<ProjectionBundle | null> {
@@ -199,6 +210,7 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     .filter((extra): extra is NonNullable<typeof extra> => extra !== null);
 
   const openCycleExtras: ProjectionInput["extras"] = [];
+  const promoDriftByCard: Record<string, number> = {};
   for (const card of activeCards) {
     const liveBalance = card.plaidAccountId
       ? balanceByPlaidAccount.get(card.plaidAccountId)
@@ -209,9 +221,13 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     // principal (especially on PayPal, where Plaid doesn't return per-payment
     // data so our auto-decrement edge rarely fires). Cap the subtraction at
     // what's actually owed minus unpaid statements, otherwise a $5k drifted
-    // promo total would wipe out a $3k open-cycle estimate to $0.
+    // promo total would wipe out a $3k open-cycle estimate to $0. Record the
+    // overflow so the UI can prompt the user to reconcile.
     const promoRemainingRaw = promoRemainingByCard.get(card.id) ?? 0;
-    const promoRemaining = Math.min(promoRemainingRaw, Math.max(0, liveBalance - unpaid));
+    const headroom = Math.max(0, liveBalance - unpaid);
+    const promoRemaining = Math.min(promoRemainingRaw, headroom);
+    const drift = promoRemainingRaw - promoRemaining;
+    if (drift > 0) promoDriftByCard[card.id] = drift;
     const openCycleCents = Math.max(0, liveBalance - unpaid - promoRemaining);
     if (openCycleCents <= 0) continue;
     const nextStatement = nextStatementDateOnOrAfter(today, card);
@@ -397,5 +413,6 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
     projectionMonths: settings.projectionMonths,
     currency: settings.currency,
     promoSummariesByCard,
+    promoDriftByCard,
   };
 }
