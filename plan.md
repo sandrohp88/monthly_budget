@@ -211,7 +211,10 @@ Update Drizzle schema, journal, and repo create-paths to set `source`.
 
 ---
 
-### [ ] P2-2. Replace magic note `"PayPal authoritative promo data"` with typed column
+### [x] P2-2. Replace magic note `"PayPal authoritative promo data"` with typed column
+**Done.** Migration `0018_authoritative_promo_source.sql` adds `authoritative_source` (nullable text, enum: `paypal_promo_list | manual_reconciliation`) to `credit_card_promos` and backfills from the sentinel substring in `notes`. `lib/db/schema.ts`, validation schemas (`promoCreateSchema`, `promoUpdateSchema`), the create + update API routes, the import helper, and `lib/plaid-sync.ts:reconcilePayPalSpecialFinancing` all read the typed column. CLAUDE.md gotcha #22 + migration list updated. Integration test in `lib/plaid-sync.integration.test.ts` was migrated from setting the magic string to setting `authoritativeSource: "paypal_promo_list"` directly.
+
+**Not done**: a UI surface on `/credit-cards` to flip a promo to `manual_reconciliation` (a lock icon next to the promo would be the natural place). Until that ships, users can only set the column via the API.
 
 **Bug:** `lib/plaid-sync.ts:192` does `promo.notes?.includes(PAYPAL_AUTHORITATIVE_PROMO_NOTE)`. Sentinel string is fragile and undocumented in the UI.
 

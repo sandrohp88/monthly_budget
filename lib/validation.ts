@@ -136,6 +136,11 @@ export const creditCardUpdateSchema = creditCardBaseSchema
     isActive: z.boolean().optional(),
   });
 
+const authoritativeSource = z
+  .enum(["paypal_promo_list", "manual_reconciliation"])
+  .nullable()
+  .optional();
+
 export const promoCreateSchema = z
   .object({
     description: z.string().min(1).max(120),
@@ -151,6 +156,8 @@ export const promoCreateSchema = z
      */
     monthlyPaymentCents: cents.refine((n) => n > 0, "Monthly payment must be positive").nullable().optional(),
     notes: z.string().max(500).nullable().optional(),
+    /** When non-null, Plaid sync will not rewrite this row's amounts/dates. */
+    authoritativeSource,
   })
   .refine((v) => v.endDate >= v.startDate, {
     message: "endDate must be on or after startDate",
@@ -167,6 +174,7 @@ export const promoUpdateSchema = z
     monthlyPaymentCents: cents.refine((n) => n > 0, "Monthly payment must be positive").nullable().optional(),
     notes: z.string().max(500).nullable().optional(),
     isActive: z.boolean().optional(),
+    authoritativeSource,
   })
   .refine(
     (v) => v.startDate == null || v.endDate == null || v.endDate >= v.startDate,

@@ -1643,6 +1643,7 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
       monthlyPaymentCents: p.monthlyPaymentCents ?? null,
       notes: p.notes ?? null,
       isActive: p.isActive ?? true,
+      authoritativeSource: p.authoritativeSource ?? null,
     }).run();
   }
 

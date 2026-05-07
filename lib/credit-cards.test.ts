@@ -464,6 +464,7 @@ function promo(over: Partial<CreditCardPromoRow> = {}): CreditCardPromoRow {
     monthlyPaymentCents: null,
     notes: null,
     isActive: true,
+    authoritativeSource: null,
     createdAt: 0,
     updatedAt: 0,
     ...over,

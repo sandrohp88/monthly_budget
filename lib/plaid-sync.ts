@@ -42,7 +42,6 @@ export { toCents, looksLikePaid } from "./plaid-helpers";
 import { toCents, looksLikePaid } from "./plaid-helpers";
 
 const PLAID_TRANSACTION_HISTORY_DAYS = 730;
-const PAYPAL_AUTHORITATIVE_PROMO_NOTE = "PayPal authoritative promo data";
 
 export interface SyncResult {
   added: number;
@@ -188,8 +187,9 @@ async function reconcilePayPalSpecialFinancing(userId: string, itemId: string): 
       // PayPal's live promo list is more authoritative than transaction FIFO:
       // it includes issuer-specific payoff dates and targeted payment
       // allocation that Plaid transactions do not expose. When a promo row has
-      // been reconciled from that list, never rewrite it from the heuristic.
-      if (promo.notes?.includes(PAYPAL_AUTHORITATIVE_PROMO_NOTE)) continue;
+      // been reconciled from that list (or manually locked), never rewrite it
+      // from the heuristic.
+      if (promo.authoritativeSource !== null) continue;
       // A paid-off PayPal promo should stay paid off. Transaction history alone
       // is not enough to resurrect it on the next sync.
       if (!promo.isActive && promo.remainingAmountCents <= 0) continue;

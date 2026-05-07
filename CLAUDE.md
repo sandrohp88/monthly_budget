@@ -275,6 +275,7 @@ weird gets emitted before merging.
 - `0005_link_card_to_plaid` — `credit_cards.plaid_account_id` (nullable, unique) + unique index on `(card_id, statement_date)` for idempotent statement upsert
 - `0006_flexible_bill_intervals` — replaces `bills.frequency` / `due_day` / `due_month` with `interval_months` (any positive int: 1=monthly, 3=quarterly, 12=annual, etc.) + `anchor_date` (one ISO occurrence; the projection engine generates the rest from there). Table-rebuild migration; backfills monthly→`(1, '2024-01-DD')` and annual→`(12, '2024-MM-DD')` with day clamped to month length.
 - `0007_add_credit_card_promos` — `credit_card_promos` table for 0% APR promotional financing on credit cards (description, original/remaining cents, start/end dates, optional monthly payment override). See §17a.
+- `0018_authoritative_promo_source` — adds `authoritative_source` (nullable enum: `paypal_promo_list | manual_reconciliation`) to `credit_card_promos`. Replaces the legacy `"PayPal authoritative promo data"` magic string in `notes` with a typed column the sync logic checks. Backfills existing rows from the sentinel substring.
 
 ---
 
@@ -484,7 +485,7 @@ These bit us before. Don't repeat:
 19. **Promo chunks never get added to a cycle that has a recorded statement** — the statement balance entered by the user is assumed to already include any promo principal billed in that cycle. `projectPromoSchedule` takes a `skipDueDates` set fed from `recordedDueDatesByCard` in `projection-server.ts`. Skip the skip-set and you double-count.
 20. **Plaid promo detection needs raw transaction text at sync time** — drafts only persist a small subset of Plaid's transaction payload. If you need issuer-specific promo clues, inspect nested fields from the live Transaction object (`payment_meta`, `counterparties`, category, location, etc.) before storing the draft; don't infer a promo from generic PayPal `LOAN_PAYMENTS` rows.
 21. **PayPal Credit special financing is split across two Plaid accounts** — qualifying purchases appear on the PayPal wallet account (`depository/paypal`), while payments appear on the linked PayPal Credit account (`credit/paypal`) as `LOAN_PAYMENTS`. Purchases over $150 can seed promo rows, but Plaid payment rows do not expose PayPal's targeted promo allocation.
-22. **PayPal's promo list beats transaction FIFO** — PayPal's issuer UI exposes actual promotional balances, payoff dates, and targeted paid-off promos that Plaid transaction history does not. When a promo row is marked with `PayPal authoritative promo data`, do not overwrite its amount/date from transaction FIFO; an inactive zero-balance PayPal promo must also stay paid off on later syncs.
+22. **PayPal's promo list beats transaction FIFO** — PayPal's issuer UI exposes actual promotional balances, payoff dates, and targeted paid-off promos that Plaid transaction history does not. When a promo row's `authoritativeSource` column is non-null (introduced in migration `0018`), do not overwrite its amount/date from transaction FIFO; an inactive zero-balance PayPal promo must also stay paid off on later syncs. Legacy rows used a sentinel string `"PayPal authoritative promo data"` in `notes` — `0018` backfills the typed column from that and the sync logic now reads only `authoritativeSource`.
 
 ---
 
