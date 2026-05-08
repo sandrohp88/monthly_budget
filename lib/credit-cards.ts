@@ -183,6 +183,84 @@ export function currentStatementOf(
   return [...statements].sort((a, b) => b.statementDate.localeCompare(a.statementDate))[0];
 }
 
+/**
+ * Most recent statement whose close date is on/before `asOfIso`. Statements
+ * are not assumed to be pre-sorted.
+ */
+export function lastClosedStatement(
+  statements: ReadonlyArray<CreditCardStatementRow>,
+  asOfIso: string,
+): CreditCardStatementRow | undefined {
+  let best: CreditCardStatementRow | undefined;
+  for (const s of statements) {
+    if (s.statementDate > asOfIso) continue;
+    if (!best || s.statementDate > best.statementDate) best = s;
+  }
+  return best;
+}
+
+/** ISO date `months` calendar months before `iso`, day clamped to month length. */
+function subtractMonthsIso(iso: string, months: number): string {
+  const [yStr, mStr, dStr] = iso.split("-");
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const d = Number(dStr);
+  const targetMonthIdx = m - 1 - months; // 0-based, may be negative
+  const targetYear = y + Math.floor(targetMonthIdx / 12);
+  const targetMonth = ((targetMonthIdx % 12) + 12) % 12; // 0..11
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  const day = Math.min(d, lastDay);
+  return `${targetYear}-${String(targetMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/**
+ * Summary of statement balances over recent windows, anchored at `asOfIso`.
+ * Each average is over statements whose close date falls in (asOfIso - N months, asOfIso].
+ * `count` reflects how many statements contributed; the average is `null` when
+ * no statements fall in the window.
+ */
+export type StatementBalanceSummary = {
+  lastClosedCents: number | null;
+  lastClosedDate: string | null;
+  avg3MoCents: number | null;
+  avg3MoCount: number;
+  avg6MoCents: number | null;
+  avg6MoCount: number;
+  avg12MoCents: number | null;
+  avg12MoCount: number;
+};
+
+export function summarizeStatementBalances(
+  statements: ReadonlyArray<CreditCardStatementRow>,
+  asOfIso: string,
+): StatementBalanceSummary {
+  const closed = statements.filter((s) => s.statementDate <= asOfIso);
+  const last = lastClosedStatement(closed, asOfIso);
+
+  const avgWithin = (months: number): { avg: number | null; count: number } => {
+    const cutoff = subtractMonthsIso(asOfIso, months);
+    const inWindow = closed.filter((s) => s.statementDate > cutoff);
+    if (inWindow.length === 0) return { avg: null, count: 0 };
+    const sum = inWindow.reduce((acc, s) => acc + s.statementBalanceCents, 0);
+    return { avg: Math.round(sum / inWindow.length), count: inWindow.length };
+  };
+
+  const m3 = avgWithin(3);
+  const m6 = avgWithin(6);
+  const m12 = avgWithin(12);
+
+  return {
+    lastClosedCents: last?.statementBalanceCents ?? null,
+    lastClosedDate: last?.statementDate ?? null,
+    avg3MoCents: m3.avg,
+    avg3MoCount: m3.count,
+    avg6MoCents: m6.avg,
+    avg6MoCount: m6.count,
+    avg12MoCents: m12.avg,
+    avg12MoCount: m12.count,
+  };
+}
+
 /** Number of days between two ISO dates (UTC, may be negative). */
 export function daysBetween(a: string, b: string): number {
   const da = new Date(a + "T00:00:00Z").getTime();

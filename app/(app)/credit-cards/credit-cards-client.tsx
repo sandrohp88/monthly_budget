@@ -60,6 +60,7 @@ import {
   promoMonthlyChunkAt,
   promoWhatIf,
   statementCashDueCents,
+  summarizeStatementBalances,
   totalDue,
 } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
@@ -634,6 +635,11 @@ function CreditCardTile({
         )}
       </div>
 
+      {/* linked-card statement history snapshot (Plaid-linked cards only) */}
+      {card.plaidAccountId ? (
+        <LinkedStatementSummary statements={statements} today={today} />
+      ) : null}
+
       {/* expected charges this cycle (from linked bills and one-time purchases) */}
       {linkedBillCount > 0 && estimate ? (
         <div className="mb-3 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3">
@@ -749,6 +755,91 @@ function CreditCardTile({
           </div>
         </details>
       ) : null}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Linked-card statement history snapshot
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LinkedStatementSummary({
+  statements,
+  today,
+}: {
+  statements: CreditCardStatementRow[];
+  today: string;
+}) {
+  const summary = React.useMemo(
+    () => summarizeStatementBalances(statements, today),
+    [statements, today],
+  );
+
+  if (
+    summary.lastClosedCents == null &&
+    summary.avg3MoCents == null &&
+    summary.avg6MoCents == null &&
+    summary.avg12MoCents == null
+  ) {
+    return null;
+  }
+
+  return (
+    <div className="mb-3 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3">
+      <div className="mb-2 flex items-center justify-between text-[9px] uppercase tracking-[0.18em] text-[var(--text-3)]">
+        <span>{`// STATEMENT HISTORY`}</span>
+        <StatusPill>LINKED</StatusPill>
+      </div>
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <SummaryStat
+          label="LAST STMT"
+          cents={summary.lastClosedCents}
+          sub={
+            summary.lastClosedDate ? (
+              <DateLabel iso={summary.lastClosedDate} format="short" />
+            ) : (
+              "—"
+            )
+          }
+        />
+        <SummaryStat
+          label="3M AVG"
+          cents={summary.avg3MoCents}
+          sub={`${summary.avg3MoCount} STMT${summary.avg3MoCount === 1 ? "" : "S"}`}
+        />
+        <SummaryStat
+          label="6M AVG"
+          cents={summary.avg6MoCents}
+          sub={`${summary.avg6MoCount} STMT${summary.avg6MoCount === 1 ? "" : "S"}`}
+        />
+        <SummaryStat
+          label="12M AVG"
+          cents={summary.avg12MoCents}
+          sub={`${summary.avg12MoCount} STMT${summary.avg12MoCount === 1 ? "" : "S"}`}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SummaryStat({
+  label,
+  cents,
+  sub,
+}: {
+  label: string;
+  cents: number | null;
+  sub: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-2 py-1.5">
+      <div className="mb-0.5 text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+        {label}
+      </div>
+      <div className="text-[14px] font-bold leading-none tabular text-[var(--text-0)]">
+        {cents == null ? <span className="text-[var(--text-3)]">—</span> : <Money cents={cents} />}
+      </div>
+      <div className="mt-1 text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">{sub}</div>
     </div>
   );
 }

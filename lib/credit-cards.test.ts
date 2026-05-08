@@ -14,6 +14,7 @@ import {
   projectPromoSchedule,
   promoMonthlyChunkAt,
   promoWhatIf,
+  summarizeStatementBalances,
   totalDue,
 } from "./credit-cards";
 import type {
@@ -299,6 +300,57 @@ describe("credit-cards daysBetween", () => {
     expect(daysBetween("2025-01-01", "2025-01-08")).toBe(7);
     expect(daysBetween("2025-01-08", "2025-01-01")).toBe(-7);
     expect(daysBetween("2024-02-28", "2024-03-01")).toBe(2); // includes leap day
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// summarizeStatementBalances
+// ────────────────────────────────────────────────────────────────────────────
+describe("summarizeStatementBalances", () => {
+  const today = "2025-12-15";
+  const stmts: CreditCardStatementRow[] = [
+    statement({ id: "a", statementDate: "2025-12-01", statementBalanceCents: 600_00 }),
+    statement({ id: "b", statementDate: "2025-11-01", statementBalanceCents: 500_00 }),
+    statement({ id: "c", statementDate: "2025-10-01", statementBalanceCents: 400_00 }),
+    statement({ id: "d", statementDate: "2025-07-01", statementBalanceCents: 700_00 }),
+    statement({ id: "e", statementDate: "2025-01-01", statementBalanceCents: 200_00 }),
+    statement({ id: "f", statementDate: "2024-11-01", statementBalanceCents: 999_00 }), // outside 12mo
+  ];
+
+  it("returns the most recent closed statement for last-stmt", () => {
+    const s = summarizeStatementBalances(stmts, today);
+    expect(s.lastClosedDate).toBe("2025-12-01");
+    expect(s.lastClosedCents).toBe(600_00);
+  });
+
+  it("computes 3/6/12 month averages over their respective windows", () => {
+    const s = summarizeStatementBalances(stmts, today);
+    // 3M window: > 2025-09-15 — includes a, b, c
+    expect(s.avg3MoCount).toBe(3);
+    expect(s.avg3MoCents).toBe(Math.round((600_00 + 500_00 + 400_00) / 3));
+    // 6M window: > 2025-06-15 — includes a, b, c, d
+    expect(s.avg6MoCount).toBe(4);
+    expect(s.avg6MoCents).toBe(Math.round((600_00 + 500_00 + 400_00 + 700_00) / 4));
+    // 12M window: > 2024-12-15 — includes a, b, c, d, e (f is outside)
+    expect(s.avg12MoCount).toBe(5);
+    expect(s.avg12MoCents).toBe(Math.round((600_00 + 500_00 + 400_00 + 700_00 + 200_00) / 5));
+  });
+
+  it("ignores statements that close after asOfIso (future)", () => {
+    const future = statement({ id: "fut", statementDate: "2026-01-01", statementBalanceCents: 9_999_00 });
+    const s = summarizeStatementBalances([future, ...stmts], today);
+    expect(s.lastClosedDate).toBe("2025-12-01");
+    expect(s.avg3MoCount).toBe(3);
+  });
+
+  it("returns nulls and zero counts when no statements fall in any window", () => {
+    const s = summarizeStatementBalances([], today);
+    expect(s.lastClosedCents).toBeNull();
+    expect(s.lastClosedDate).toBeNull();
+    expect(s.avg3MoCents).toBeNull();
+    expect(s.avg3MoCount).toBe(0);
+    expect(s.avg6MoCents).toBeNull();
+    expect(s.avg12MoCents).toBeNull();
   });
 });
 
