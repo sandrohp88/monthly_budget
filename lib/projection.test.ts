@@ -21,28 +21,25 @@ const baseInput = (): ProjectionInput => ({
 
 describe("projection engine", () => {
   describe("resolveProjectionStartDate", () => {
-    it("keeps the current month visible when a linked account supplies the live starting balance", () => {
+    it("anchors at today when a linked account supplies the live starting balance", () => {
+      // The Plaid balance is always current — so the projection's running
+      // balance starts there and walks forward. Anything before today is
+      // already inside that snapshot.
       expect(
         resolveProjectionStartDate({
-          firstPaydayDate: "2026-04-30",
+          startingBalanceAsOf: "2026-04-30",
           today: "2026-05-05",
           usesLinkedStartingBalance: true,
         }),
-      ).toBe("2026-05-01");
-
-      expect(
-        resolveProjectionStartDate({
-          firstPaydayDate: "2026-05-08",
-          today: "2026-05-05",
-          usesLinkedStartingBalance: true,
-        }),
-      ).toBe("2026-05-01");
+      ).toBe("2026-05-05");
     });
 
-    it("preserves the historical manual-balance projection window", () => {
+    it("anchors at the user-supplied as-of date for a manual starting balance", () => {
+      // The manual balance was true on the date the user said it was true.
+      // The projection accumulates events from that date forward.
       expect(
         resolveProjectionStartDate({
-          firstPaydayDate: "2026-04-30",
+          startingBalanceAsOf: "2026-04-30",
           today: "2026-05-05",
           usesLinkedStartingBalance: false,
         }),
@@ -50,11 +47,11 @@ describe("projection engine", () => {
 
       expect(
         resolveProjectionStartDate({
-          firstPaydayDate: "2026-05-08",
+          startingBalanceAsOf: "2026-05-05",
           today: "2026-05-05",
           usesLinkedStartingBalance: false,
         }),
-      ).toBe("2026-05-01");
+      ).toBe("2026-05-05");
     });
   });
 

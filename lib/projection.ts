@@ -112,13 +112,29 @@ function formatIsoDate(ts: number): string {
   return `${y}-${mo}-${da}`;
 }
 
+/**
+ * Anchor the projection's running balance.
+ *
+ * The starting balance is a snapshot taken at a known point in time. Walking
+ * the projection forward from that point keeps the running balance aligned
+ * with reality.
+ *
+ *   - With a Plaid-linked account → today, because the live balance is always
+ *     current. Anything before today is already inside that balance.
+ *   - With a manual starting balance → `startingBalanceAsOf`, the date the
+ *     user actually saw that number on their bank statement.
+ *
+ * `firstPaydayDate` is no longer the anchor — only the recurrence anchor for
+ * the paycheck schedule. Conflating the two was the source of the
+ * "balance is off by a paycheck" bug.
+ */
 export function resolveProjectionStartDate(opts: {
-  firstPaydayDate: string;
+  startingBalanceAsOf: string;
   today: string;
   usesLinkedStartingBalance: boolean;
 }): string {
-  if (opts.usesLinkedStartingBalance) return `${opts.today.slice(0, 7)}-01`;
-  return opts.firstPaydayDate < opts.today ? opts.firstPaydayDate : `${opts.today.slice(0, 7)}-01`;
+  if (opts.usesLinkedStartingBalance) return opts.today;
+  return opts.startingBalanceAsOf;
 }
 
 /** Days in the given 1-indexed month of `year` (handles leap years). */

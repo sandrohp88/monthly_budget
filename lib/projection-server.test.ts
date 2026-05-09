@@ -402,7 +402,10 @@ describe("buildProjection linked starting balance", () => {
     await updatePlaidAccount(userId, "checking", { useAsStartingBalance: true });
   }
 
-  it("shows past autopay bills as paid without replaying them against the live balance", async () => {
+  it("anchors on today and skips bills that already happened (their cash is inside the live balance)", async () => {
+    // The Plaid balance is current, so a bill that posted before today is
+    // already accounted for. Replaying it would double-debit. The projection
+    // therefore starts at today and ignores past occurrences entirely.
     const user = await makeUser();
     await seedLinkedStartingBalance(user.id, 500_00);
     await createBill(user.id, {
@@ -410,7 +413,7 @@ describe("buildProjection linked starting balance", () => {
       category: "Housing",
       amountCents: 4400_00,
       intervalMonths: 1,
-      anchorDate: "2026-05-03",
+      anchorDate: "2026-05-03", // yesterday relative to mocked today=2026-05-04
       autoPay: true,
       paidViaCardId: null,
       notes: null,
@@ -418,19 +421,15 @@ describe("buildProjection linked starting balance", () => {
     });
 
     const projection = await buildProjection(user.id);
-    const paidDay = projection?.rows.find((r) => r.date === "2026-05-03");
 
-    expect(projection?.startDate).toBe("2026-05-01");
+    expect(projection?.startDate).toBe("2026-05-04");
     expect(projection?.startingBalanceCents).toBe(500_00);
-    expect(paidDay?.expenseCents).toBe(0);
-    expect(paidDay?.balanceCents).toBe(500_00);
-    expect(paidDay?.events).toEqual([
-      expect.objectContaining({
-        label: "Blue Falls",
-        amountCents: 0,
-        originalAmountCents: 4400_00,
-        isPaid: true,
-      }),
-    ]);
+    expect(projection?.rows[0]?.date).toBe("2026-05-04");
+    expect(projection?.rows[0]?.balanceCents).toBe(500_00);
+
+    // The next month's occurrence (2026-06-03) should still be projected as
+    // a normal cash debit — only past occurrences are skipped.
+    const nextMonth = projection?.rows.find((r) => r.date === "2026-06-03");
+    expect(nextMonth?.expenseCents).toBe(4400_00);
   });
 });

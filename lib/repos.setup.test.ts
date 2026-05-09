@@ -30,6 +30,7 @@ afterEach(() => {
 
 const setupInput = {
   startingBalanceCents: 0,
+  startingBalanceAsOf: "2026-05-08",
   defaultPaycheckCents: 100_00,
   firstPaydayDate: "2026-05-15",
   payFrequencyDays: 14,
