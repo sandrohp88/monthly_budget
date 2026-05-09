@@ -104,6 +104,32 @@ describe("projection engine", () => {
     ]);
   });
 
+  it("routes a negative-amount extra (refund) to the income column", () => {
+    // Plaid uses positive=debit, negative=credit. A refund therefore lands in
+    // the extras stream with a negative amountCents. The projection must add
+    // its absolute value to income (not subtract a negative from expense),
+    // so the row totals — which the UI renders directly — match reality.
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2026-04-29",
+      endDate: "2026-05-02",
+      startingBalanceCents: 100_00,
+      extras: [
+        { date: "2026-04-30", description: "Amazon refund", amountCents: -2500 },
+      ],
+    });
+
+    const refundDay = rows.find((r) => r.date === "2026-04-30")!;
+    expect(refundDay.incomeCents).toBe(2500);
+    expect(refundDay.expenseCents).toBe(0);
+    expect(refundDay.balanceCents).toBe(100_00 + 2500);
+    // The event itself keeps its original (negative) amount so the UI can
+    // detect it; sign-aware rendering takes care of the prefix and column.
+    expect(refundDay.events).toEqual([
+      expect.objectContaining({ kind: "extra", amountCents: -2500 }),
+    ]);
+  });
+
   it("omits settled past bills when they should not be shown as paid", () => {
     const rows = computeProjection({
       ...baseInput(),

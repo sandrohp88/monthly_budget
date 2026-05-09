@@ -271,8 +271,16 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
     let income = 0;
     let expense = 0;
     for (const ev of events) {
-      if (ev.kind === "paycheck") income += ev.amountCents;
-      else expense += ev.amountCents;
+      if (ev.kind === "paycheck") {
+        income += ev.amountCents;
+      } else if (ev.kind === "extra" && ev.amountCents < 0) {
+        // Negative-amount extras are credits (Plaid refunds, returns,
+        // statement credits). They add to the running balance — surface
+        // them in the income column instead of as a "−-$X" expense.
+        income += -ev.amountCents;
+      } else {
+        expense += ev.amountCents;
+      }
     }
     balance += income - expense;
     rows.push({
