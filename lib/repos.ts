@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, lte } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
   bills,
@@ -1705,6 +1705,65 @@ export async function deletePlaidDraft(
   id: string,
 ): Promise<PlaidTransactionDraftRow | undefined> {
   return updatePlaidDraftStatus(userId, id, { status: "dismissed" });
+}
+
+/**
+ * Approved Plaid drafts for accounts flagged useAsStartingBalance, in
+ * [startIso, endIso] inclusive. Used by projection-server to reconstruct
+ * historical balances backward from the live linked balance: each draft's
+ * amountCents represents a real posted cash movement on the day it occurred.
+ *
+ * Excludes pending_review and dismissed drafts. Includes card_payment kind —
+ * a payment to a credit card still leaves the depository account.
+ */
+export async function listStartingBalanceDraftsInRange(
+  userId: string,
+  startIso: string,
+  endIso: string,
+): Promise<
+  Array<{
+    id: string;
+    accountId: string;
+    date: string;
+    description: string;
+    merchantName: string | null;
+    amountCents: number;
+  }>
+> {
+  const db = getDb();
+  const accountRows = await db
+    .select({ id: plaidAccounts.id })
+    .from(plaidAccounts)
+    .where(
+      and(
+        eq(plaidAccounts.userId, userId),
+        eq(plaidAccounts.useAsStartingBalance, true),
+      ),
+    )
+    .all();
+  if (accountRows.length === 0) return [];
+  const accountIds = accountRows.map((r) => r.id);
+  return db
+    .select({
+      id: plaidTransactionDrafts.id,
+      accountId: plaidTransactionDrafts.accountId,
+      date: plaidTransactionDrafts.date,
+      description: plaidTransactionDrafts.description,
+      merchantName: plaidTransactionDrafts.merchantName,
+      amountCents: plaidTransactionDrafts.amountCents,
+    })
+    .from(plaidTransactionDrafts)
+    .where(
+      and(
+        eq(plaidTransactionDrafts.userId, userId),
+        eq(plaidTransactionDrafts.status, "approved" as const),
+        inArray(plaidTransactionDrafts.accountId, accountIds),
+        gte(plaidTransactionDrafts.date, startIso),
+        lte(plaidTransactionDrafts.date, endIso),
+      ),
+    )
+    .orderBy(asc(plaidTransactionDrafts.date))
+    .all();
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   listPlaidAccounts,
   listAllPromoPayments,
   listPromos,
+  listStartingBalanceDraftsInRange,
   listStatementsForUser,
   listVariableBills,
   getPrimaryLinkedBalance,
@@ -24,6 +25,7 @@ import {
 import {
   computeProjection,
   resolveProjectionStartDate,
+  type OneTimeExpense,
   type ProjectionInput,
   type ProjectionRow,
 } from "./projection";
@@ -411,18 +413,67 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
 
   // Opt-in: if the user has marked a linked account as their starting balance source,
   // substitute its live balance for the manual startingBalanceCents.
-  const effectiveStartingBalance = linkedBalance ?? settings.startingBalanceCents;
-  const startDate = resolveProjectionStartDate({
+  const linked = linkedBalance != null;
+  const requestedStartDate = resolveProjectionStartDate({
     startingBalanceAsOf: settings.startingBalanceAsOf,
     today,
-    usesLinkedStartingBalance: linkedBalance != null,
+    usesLinkedStartingBalance: linked,
   });
+  // Cap linked-mode lookback at MAX_LOOKBACK_DAYS so the schema default for
+  // startingBalanceAsOf (1970-01-01, used by users who never set the field)
+  // doesn't replay decades of Plaid drafts on every projection build.
+  const MAX_LOOKBACK_DAYS = 180;
+  const earliestLookback = addDaysIso(today, -MAX_LOOKBACK_DAYS);
+  const startDate =
+    linked && requestedStartDate < earliestLookback ? today : requestedStartDate;
+  // Lookback: linked + the user has rolled startingBalanceAsOf to a past date
+  // (within the cap) to see historical context — paid bills, recent expenses
+  // — alongside the forward projection. Past balances are reconstructed from
+  // posted Plaid drafts on the linked starting-balance accounts.
+  const lookback = linked && startDate < today;
 
-  // The starting balance is an as-of snapshot. Anything before that date is
-  // already inside it; only events on/after it should accumulate. This holds
-  // whether the snapshot came from Plaid (anchor = today) or was entered
-  // manually (anchor = `startingBalanceAsOf`).
-  const onOrAfterStart = (iso: string) => iso >= startDate;
+  const historicalDrafts = lookback
+    ? await listStartingBalanceDraftsInRange(userId, startDate, today)
+    : [];
+  // Each draft on date D subtracts amountCents from the running balance
+  // (positive = expense, negative = refund flows to income). To make a
+  // forward walk land at liveBalance on `today`, seed the start-of-startDate
+  // balance with liveBalance + Σ amountCents — the walk subtracts that sum
+  // off as it crosses the historical window, leaving liveBalance at today.
+  const historicalDeltaSum = historicalDrafts.reduce((sum, d) => sum + d.amountCents, 0);
+  const effectiveStartingBalance = lookback
+    ? (linkedBalance as number) + historicalDeltaSum
+    : (linkedBalance ?? settings.startingBalanceCents);
+
+  // Only consider scheduled events on/after startDate, except in lookback
+  // mode where past events render as zero-amount "paid" markers via the
+  // settledBeforeDate mechanism (and would otherwise be filtered out here).
+  const onOrAfterStart = (iso: string) => lookback || iso >= startDate;
+  // Settle-before pivot:
+  //   - Manual mode: the as-of date — the balance is taken on that date, so
+  //     anything strictly before it is already inside it.
+  //   - Linked + lookback: tomorrow. The live balance reflects everything that
+  //     posted through today, including today's drafts; today's scheduled
+  //     events (which would otherwise double-count with drafts) become paid
+  //     markers, and the projection's first "live" cash-impact row is
+  //     tomorrow.
+  //   - Linked, no lookback: today. There are no past rows to render anyway.
+  const settleBefore = lookback ? addDaysIso(today, 1) : linked ? today : startDate;
+
+  // Shared markers for all credit-card-derived extras: they need to be
+  // settled-before-today in lookback mode so past-dated cycles don't
+  // re-debit the running balance (the live Plaid balance already reflects
+  // any payment that actually cleared).
+  const decorateScheduledExtra = <T extends OneTimeExpense>(e: T): T =>
+    lookback
+      ? { ...e, settledBeforeDate: settleBefore, showSettledBeforeDate: true }
+      : e;
+
+  const historicalExtras: OneTimeExpense[] = historicalDrafts.map((d) => ({
+    date: d.date,
+    description: d.merchantName ?? d.description,
+    amountCents: d.amountCents,
+  }));
 
   const input: ProjectionInput = {
     startingBalanceCents: effectiveStartingBalance,
@@ -434,6 +485,8 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
         payDate: p.payDate,
         amountCents: p.actualReceived && p.actualAmountCents != null ? p.actualAmountCents : p.amountCents,
         note: p.note,
+        settledBeforeDate: settleBefore,
+        showSettledBeforeDate: lookback,
       })),
     bills: cashBills.map((b) => ({
       id: b.id,
@@ -442,8 +495,8 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       intervalMonths: b.intervalMonths,
       anchorDate: b.anchorDate,
       paymentOverrides: billOverridesByBill.get(b.id) ?? [],
-      settledBeforeDate: startDate,
-      showSettledBeforeDate: linkedBalance != null && b.autoPay,
+      settledBeforeDate: settleBefore,
+      showSettledBeforeDate: lookback || (linked && b.autoPay),
     })),
     extras: [
       ...extras
@@ -453,12 +506,15 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
           date: e.date,
           description: e.description,
           amountCents: e.amountCents,
+          settledBeforeDate: settleBefore,
+          showSettledBeforeDate: lookback,
         })),
-      ...ccExtras.filter((e) => onOrAfterStart(e.date)),
-      ...openCycleExtras.filter((e) => onOrAfterStart(e.date)),
-      ...promoExtras.filter((e) => onOrAfterStart(e.date)),
-      ...variableBillExtras.filter((e) => onOrAfterStart(e.date)),
-      ...plannedCardExtras.filter((e) => onOrAfterStart(e.date)),
+      ...ccExtras.filter((e) => onOrAfterStart(e.date)).map(decorateScheduledExtra),
+      ...openCycleExtras.filter((e) => onOrAfterStart(e.date)).map(decorateScheduledExtra),
+      ...promoExtras.filter((e) => onOrAfterStart(e.date)).map(decorateScheduledExtra),
+      ...variableBillExtras.filter((e) => onOrAfterStart(e.date)).map(decorateScheduledExtra),
+      ...plannedCardExtras.filter((e) => onOrAfterStart(e.date)).map(decorateScheduledExtra),
+      ...historicalExtras,
     ],
   };
   const promoSummariesByCard: Record<string, PromoPaymentSummary[]> = {};
