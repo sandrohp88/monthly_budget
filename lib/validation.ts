@@ -365,3 +365,165 @@ export type PlaidDraftActionInput = z.infer<typeof plaidDraftActionSchema>;
 export type PlaidAccountUpdateInput = z.infer<typeof plaidAccountUpdateSchema>;
 export type PlaidSyncInput = z.infer<typeof plaidSyncSchema>;
 export type PlaidLinkCardInput = z.infer<typeof plaidLinkCardSchema>;
+
+// ── Backup import ──────────────────────────────────────────────────────────
+//
+// Strict shape of `/api/backup/import` request bodies. Every entity is
+// modeled top-to-bottom so we reject unknown fields, malformed types, and
+// dangerous values (e.g. negative amounts, non-ISO dates, oversized notes)
+// at the boundary instead of trusting the runtime to coerce them. The
+// import path additionally validates the *graph* — every cardId/billId/
+// promoId referenced by a child row must point to a row in the same
+// payload — see `validateImportGraph` in lib/repos.ts.
+
+const id = z.string().min(1).max(64);
+const optionalNotes = z.string().max(500).nullable().optional();
+
+const importBillSchema = z.object({
+  id: id.optional(),
+  name: z.string().min(1).max(80),
+  category: z.string().min(1).max(50).optional(),
+  amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
+  intervalMonths: z.number().int().min(1).max(120).optional(),
+  anchorDate: isoDate.optional(),
+  // Legacy fields tolerated for old backups (see migration 0006).
+  frequency: z.enum(["monthly", "annual"]).optional(),
+  dueDay: z.number().int().min(1).max(31).optional(),
+  dueMonth: z.number().int().min(1).max(12).nullable().optional(),
+  autoPay: z.boolean().optional(),
+  paidViaCardId: id.nullable().optional(),
+  notes: optionalNotes,
+  isActive: z.boolean().optional(),
+});
+
+const importBillOverrideSchema = z.object({
+  id: id.optional(),
+  billId: id,
+  dueDate: isoDate,
+  amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
+  notes: optionalNotes,
+});
+
+const importVariableBillSchema = z.object({
+  id,
+  name: z.string().min(1).max(80),
+  category: z.string().min(1).max(50).optional(),
+  amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
+  intervalMonths: z.number().int().min(1).max(120),
+  anchorDate: isoDate,
+  notes: optionalNotes,
+  isActive: z.boolean().optional(),
+});
+
+const importVariableBillCardSchema = z.object({
+  id: id.optional(),
+  variableBillId: id,
+  cardId: id,
+});
+
+const importCreditCardPaymentOverrideSchema = z.object({
+  id: id.optional(),
+  cardId: id,
+  dueDate: isoDate,
+  amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
+  notes: optionalNotes,
+});
+
+const importPaycheckSchema = z.object({
+  id: id.optional(),
+  payDate: isoDate,
+  amountCents: cents,
+  note: z.string().max(120).nullable().optional(),
+  actualReceived: z.boolean().optional(),
+  actualAmountCents: cents.nullable().optional(),
+});
+
+const importExtraSchema = z.object({
+  id: id.optional(),
+  date: isoDate,
+  description: z.string().min(1).max(120),
+  amountCents: cents,
+  category: z.string().min(1).max(50).optional(),
+  paidViaCardId: id.nullable().optional(),
+  notes: optionalNotes,
+});
+
+const importCategorySchema = z.object({
+  id: id.optional(),
+  name: z.string().min(1).max(50),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color must be hex"),
+  kind: z.enum(["expense", "income"]),
+});
+
+const importCreditCardSchema = z.object({
+  id,
+  name: z.string().min(1).max(80),
+  statementDay: z.number().int().min(1).max(31),
+  statementCycleMode: z.enum(["calendar_day", "interval_days"]).optional(),
+  statementCycleAnchorDate: isoDate.nullable().optional(),
+  statementCycleIntervalDays: z.number().int().min(1).max(366).optional(),
+  dueDay: z.number().int().min(1).max(31),
+  currentBalanceCents: cents.nullable().optional(),
+  autoPay: z.boolean().optional(),
+  notes: optionalNotes,
+  isActive: z.boolean().optional(),
+});
+
+const importCreditCardStatementSchema = z.object({
+  id: id.optional(),
+  cardId: id,
+  statementDate: isoDate,
+  dueDate: isoDate,
+  statementBalanceCents: cents.refine((n) => n >= 0, "Balance must be non-negative"),
+  minimumPaymentCents: cents.nullable().optional(),
+  paidAmountCents: cents.nullable().optional(),
+  paidDate: isoDate.nullable().optional(),
+  notes: optionalNotes,
+});
+
+const importCreditCardPromoSchema = z.object({
+  id: id.optional(),
+  cardId: id,
+  description: z.string().min(1).max(120),
+  originalAmountCents: cents.refine((n) => n > 0, "Original amount must be positive"),
+  remainingAmountCents: cents.refine((n) => n >= 0, "Remaining cannot be negative"),
+  startDate: isoDate,
+  endDate: isoDate,
+  monthlyPaymentCents: cents.refine((n) => n > 0).nullable().optional(),
+  notes: optionalNotes,
+  isActive: z.boolean().optional(),
+  authoritativeSource,
+});
+
+const importCreditCardPromoPaymentSchema = z.object({
+  id: id.optional(),
+  promoId: id,
+  dueDate: isoDate,
+  amountCents: cents.refine((n) => n > 0, "Amount must be positive"),
+  note: z.string().max(500).nullable().optional(),
+});
+
+/**
+ * Top-level shape of a backup payload. Every collection is bounded so a
+ * pathological backup can't OOM the server. Ordering of inserts is enforced
+ * by `importAll` (parents before children); validation here is shape-only.
+ */
+export const backupImportSchema = z.object({
+  schemaVersion: z.number().int().nonnegative().optional(),
+  exportedAt: z.string().optional(),
+  settings: z.unknown().optional(),
+  bills: z.array(importBillSchema).max(1000).optional(),
+  billPaymentOverrides: z.array(importBillOverrideSchema).max(10000).optional(),
+  variableBills: z.array(importVariableBillSchema).max(1000).optional(),
+  variableBillCards: z.array(importVariableBillCardSchema).max(10000).optional(),
+  creditCardPaymentOverrides: z.array(importCreditCardPaymentOverrideSchema).max(10000).optional(),
+  paychecks: z.array(importPaycheckSchema).max(10000).optional(),
+  extras: z.array(importExtraSchema).max(10000).optional(),
+  categories: z.array(importCategorySchema).max(500).optional(),
+  creditCards: z.array(importCreditCardSchema).max(200).optional(),
+  creditCardStatements: z.array(importCreditCardStatementSchema).max(20000).optional(),
+  creditCardPromos: z.array(importCreditCardPromoSchema).max(2000).optional(),
+  creditCardPromoPayments: z.array(importCreditCardPromoPaymentSchema).max(20000).optional(),
+});
+
+export type BackupImportInput = z.infer<typeof backupImportSchema>;

@@ -1,23 +1,30 @@
 import { NextResponse } from "next/server";
-import { ensureUser, jsonError } from "@/lib/api";
+import { ensureUser, jsonError, readJson } from "@/lib/api";
 import { importAll } from "@/lib/repos";
+import { backupImportSchema } from "@/lib/validation";
 
 export async function POST(req: Request) {
   const auth = await ensureUser();
   if (auth instanceof NextResponse) return auth;
-  let body: unknown;
+
+  const data = await readJson(req, backupImportSchema);
+  if (data instanceof NextResponse) return data;
+
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "invalid json" }, { status: 400 });
-  }
-  if (typeof body !== "object" || body === null) {
-    return NextResponse.json({ error: "expected object" }, { status: 400 });
-  }
-  try {
-    await importAll(auth.userId, body as Record<string, unknown[]>);
+    await importAll(auth.userId, data);
     return NextResponse.json({ ok: true });
   } catch (e) {
-    return jsonError((e as Error).message ?? "import failed");
+    // `importAll` throws with stable, payload-shape messages
+    // ("X references unknown cardId Y", "duplicate creditCard id Z").
+    // Surface these as a 400 — they're caller-correctable; keep the rest
+    // generic so we don't leak internals.
+    const msg = (e as Error).message ?? "import failed";
+    if (
+      msg.includes("references unknown") ||
+      msg.startsWith("duplicate ")
+    ) {
+      return NextResponse.json({ error: msg }, { status: 400 });
+    }
+    return jsonError("import failed");
   }
 }

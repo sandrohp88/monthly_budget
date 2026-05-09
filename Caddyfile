@@ -8,11 +8,46 @@
 {$DOMAIN:budget.local} {
 	tls internal
 	encode zstd gzip
-	reverse_proxy app:3000
+
+	# Strip any forwarding headers a client may have set BEFORE reverse-proxy
+	# adds the trusted hop. Without this, a remote client can send
+	# `X-Forwarded-For: 127.0.0.1` and our middleware would believe it. Caddy
+	# always re-adds the trusted X-Forwarded-For automatically when reverse-
+	# proxying — see https://caddyserver.com/docs/caddyfile/directives/reverse_proxy.
+	request_header -X-Forwarded-For
+	request_header -X-Real-IP
+	request_header -X-Forwarded-Host
+	request_header -X-Forwarded-Proto
+
+	reverse_proxy app:3000 {
+		# Make Next see the real client IP (single trusted hop = Caddy itself).
+		header_up X-Real-IP {http.request.remote.host}
+	}
+
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		X-Frame-Options "DENY"
+
+		# Disable browser features the app doesn't use, so a future XSS can't
+		# silently borrow them. Geolocation/camera/mic stay off; payment too.
+		Permissions-Policy "accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), usb=(), xr-spatial-tracking=()"
+
+		# Isolate the page so cross-origin popups can't poke at the window
+		# reference — defense-in-depth against Spectre-style leaks.
+		Cross-Origin-Opener-Policy "same-origin"
+		# Restrict which contexts can embed our HTML/JSON. CORP same-origin
+		# is the strictest setting that still lets the app load its own
+		# fonts/images served same-host.
+		Cross-Origin-Resource-Policy "same-origin"
+
+		# CSP — tuned for Next 15 + react-plaid-link + Plaid Link. Plaid Link
+		# loads `https://cdn.plaid.com/link/v2/stable/link-initialize.js` from
+		# its CDN and frames `https://*.plaid.com`. `unsafe-inline` is needed
+		# for Next's hydration <script> blob and for inline styles emitted by
+		# our component primitives — replacing those with hashes is a separate
+		# follow-up. `'self'` for everything else; no remote XHR allowed.
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: https://cdn.plaid.com; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src 'self' https://*.plaid.com; worker-src 'self' blob:; manifest-src 'self'"
 	}
 }
