@@ -13,6 +13,7 @@ import { AlertBar } from "@/components/ui/alert-bar";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { ProjectionChart } from "@/components/projection-chart";
+import { Sparkline } from "@/components/ui/sparkline";
 import { addDaysIso, todayIso } from "@/lib/dates";
 import { findWorstDay } from "@/lib/projection";
 import { cn } from "@/lib/cn";
@@ -100,6 +101,11 @@ export default async function DashboardPage() {
   const worst = findWorstDay(rows);
   const worstIsRisk = worst && worst.balanceCents < 50000;
 
+  // Sparkline preview: first ~30 days of the daily projected balance.
+  const heroSparkPoints = rows.slice(0, 30).map((r) => r.balanceCents);
+  const heroEndCents = heroSparkPoints[heroSparkPoints.length - 1] ?? projection.startingBalanceCents;
+  const heroDeltaCents = heroEndCents - projection.startingBalanceCents;
+
   // Build "upcoming events" list — next 6 income/expense rows
   const upcomingEvents = rows
     .filter((r) => r.date >= today && (r.events.length > 0))
@@ -127,13 +133,56 @@ export default async function DashboardPage() {
         }
       />
 
+      <div
+        className="relative overflow-hidden rounded-sm border border-[var(--border-raw)] bg-[var(--bg-card)] p-6"
+        style={{ borderTop: "2px solid var(--mint)" }}
+      >
+        <span className="absolute left-[-1px] top-[-1px] h-3 w-3 border-l border-t border-[var(--border-2)]" />
+        <span className="absolute right-[-1px] bottom-[-1px] h-3 w-3 border-b border-r border-[var(--border-2)]" />
+
+        <div className="grid items-center gap-6 lg:grid-cols-[1.4fr_1fr]">
+          <div>
+            <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-3)]">
+              {"// NET POSITION — STARTING BALANCE"}
+            </div>
+            <div className="tabular text-[44px] font-bold leading-none tracking-tight text-[var(--text-0)]">
+              <Money cents={projection.startingBalanceCents} />
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Badge>LIVE</Badge>
+              <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+                projection through{" "}
+                <span className="text-[var(--text-1)]">
+                  <DateLabel iso={projection.endDate} format="short" />
+                </span>{" "}
+                · {projectionMonths} mo
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Sparkline data={heroSparkPoints} height={70} stroke="var(--mint)" />
+            <div className="flex items-center justify-between text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+              <span>TODAY</span>
+              <span
+                className={cn(
+                  "tabular text-[10px]",
+                  heroDeltaCents > 0
+                    ? "text-[var(--mint)]"
+                    : heroDeltaCents < 0
+                      ? "text-[var(--red)]"
+                      : "text-[var(--text-2)]",
+                )}
+              >
+                {heroDeltaCents > 0 ? "+" : heroDeltaCents < 0 ? "−" : ""}
+                <Money cents={Math.abs(heroDeltaCents)} /> · 30D
+              </span>
+              <span>T+30D</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <TileGrid>
-        <Tile
-          label="STARTING BALANCE"
-          badge={<Badge>LIVE</Badge>}
-          value={<Money cents={projection.startingBalanceCents} />}
-          delta={<>through <DateLabel iso={projection.endDate} format="short" /></>}
-        />
         <Tile
           label="MONTHLY BILLS"
           value={<Money cents={totalMonthlyBills} />}

@@ -439,6 +439,93 @@
     --mint-glow: var(--cyan-glow);
   }
 
+  /* ── OLIVE DRAB THEME ────────────────────────────────────────────────────
+     Field-tactical khaki bones with a mustard yellow-green primary accent
+     and forest success. Mirrors `lib/themes.ts:OLIVE_TOKENS`. */
+  .olive, [data-theme="olive"] {
+    color-scheme: dark;
+
+    --bg-0: #0E100A;
+    --bg-1: #181B11;
+    --bg-2: #22271A;
+    --bg-3: #2C3220;
+    --bg-card: #181B11;
+    --bg-inset: #0A0B06;
+
+    --cyan: #D4DC4A;
+    --cyan-bright: #E8EE6A;
+    --cyan-dim: #A0AB36;
+    --cyan-glow: rgba(212, 220, 74, 0.30);
+
+    --phosphor: #7FB069;
+    --phosphor-dim: #5B8A48;
+    --phosphor-glow: rgba(127, 176, 105, 0.25);
+
+    --olive: #6B7C4A;
+    --olive-dark: #3D4A2B;
+
+    --amber: #E8943A;
+    --red: #C44545;
+    --red-glow: rgba(196, 69, 69, 0.20);
+    --success: #7FB069;
+    --info: #7AA9C9;
+
+    --text-0: #F0EFDF;
+    --text-1: #C8C9A8;
+    --text-2: #A8B088;
+    --text-3: #6F7853;
+
+    --border-raw: #2E3520;
+    --border-2: #454F2E;
+    --border-dim: #1F2316;
+
+    --background: 75 14% 5%;
+    --foreground: 56 36% 91%;
+    --card: 73 25% 9%;
+    --card-foreground: 56 36% 91%;
+    --popover: 73 22% 16%;
+    --popover-foreground: 56 36% 91%;
+    --primary: 63 67% 58%;
+    --primary-foreground: 75 14% 5%;
+    --secondary: 73 22% 13%;
+    --secondary-foreground: 56 23% 72%;
+    --muted: 73 22% 13%;
+    --muted-foreground: 73 16% 62%;
+    --accent: 100 30% 56%;
+    --accent-foreground: 75 14% 5%;
+    --destructive: 0 50% 52%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 100 30% 56%;
+    --warning: 27 78% 57%;
+    --border: 76 25% 17%;
+    --input: 76 25% 17%;
+    --ring: 63 52% 44%;
+
+    --bg-glow-1: rgba(212, 220, 74, 0.05);
+    --bg-glow-2: rgba(127, 176, 105, 0.04);
+    --bg-grid:   rgba(46, 53, 32, 0.45);
+    --header-glass: rgba(14, 16, 10, 0.85);
+
+    --surface-veil:        rgba(24, 27, 17, 0.92);
+    --surface-veil-strong: rgba(24, 27, 17, 0.96);
+    --cyan-tint-soft:      rgba(212, 220, 74, 0.06);
+    --cyan-tint:           rgba(212, 220, 74, 0.10);
+    --cyan-tint-row:       rgba(212, 220, 74, 0.14);
+    --cyan-tint-edge:      rgba(212, 220, 74, 0.24);
+    --cyan-tint-edge-hi:   rgba(212, 220, 74, 0.28);
+    --cyan-tint-hover:     rgba(212, 220, 74, 0.08);
+    --cyan-tint-zebra:     rgba(212, 220, 74, 0.018);
+    --phosphor-tint-soft:  rgba(127, 176, 105, 0.05);
+    --phosphor-tint:       rgba(127, 176, 105, 0.07);
+    --phosphor-tint-row:   rgba(127, 176, 105, 0.10);
+    --amber-tint-soft:     rgba(232, 148, 58, 0.05);
+
+    --mint: var(--cyan);
+    --mint-bright: var(--cyan-bright);
+    --mint-dim: var(--cyan-dim);
+    --mint-glow: var(--cyan-glow);
+  }
+
   /* ── HIGH-CONTRAST THEME ─────────────────────────────────────────────────
      Pure black/white plus a single yellow accent. Targets WCAG AAA on
      text. Mirrors `lib/themes.ts:HIGH_CONTRAST_TOKENS`. */

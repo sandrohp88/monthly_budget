@@ -226,6 +226,48 @@ const DAYLIGHT_TOKENS: ThemeTokens = {
 };
 
 /**
+ * Olive Drab — field-tactical yellow-green. Mirrors the LedgerOps
+ * "OLIVE DRAB" profile: warm khaki bones, mustard primary accent,
+ * forest success. Sits between the cool tactical-cyan default and the
+ * monochrome amber Phosphor theme.
+ */
+const OLIVE_TOKENS: ThemeTokens = {
+  "bg-0": "#0E100A",
+  "bg-1": "#181B11",
+  "bg-2": "#22271A",
+  "bg-3": "#2C3220",
+  "bg-card": "#181B11",
+  "bg-inset": "#0A0B06",
+
+  cyan: "#D4DC4A",
+  "cyan-bright": "#E8EE6A",
+  "cyan-dim": "#A0AB36",
+  "cyan-glow": "rgba(212, 220, 74, 0.30)",
+
+  phosphor: "#7FB069",
+  "phosphor-dim": "#5B8A48",
+  "phosphor-glow": "rgba(127, 176, 105, 0.25)",
+
+  olive: "#6B7C4A",
+  "olive-dark": "#3D4A2B",
+
+  amber: "#E8943A",
+  red: "#C44545",
+  "red-glow": "rgba(196, 69, 69, 0.20)",
+  success: "#7FB069",
+  info: "#7AA9C9",
+
+  "text-0": "#F0EFDF",
+  "text-1": "#C8C9A8",
+  "text-2": "#A8B088",
+  "text-3": "#6F7853",
+
+  "border-raw": "#2E3520",
+  "border-2": "#454F2E",
+  "border-dim": "#1F2316",
+};
+
+/**
  * High-contrast — pure black/white with structural accents only. Targets
  * WCAG AAA. Useful for users with low vision or working in bright
  * sunlight on a glossy display.
@@ -294,6 +336,13 @@ export const THEMES: Theme[] = [
     mode: "light",
     description: "Warm cream paper for outdoor / glossy-screen reading",
     tokens: DAYLIGHT_TOKENS,
+  },
+  {
+    id: "olive",
+    label: "Olive Drab",
+    mode: "dark",
+    description: "Field-tactical khaki + mustard accent",
+    tokens: OLIVE_TOKENS,
   },
   {
     id: "high-contrast",
