@@ -27,9 +27,11 @@ import {
   createPlaidItem,
   createPromo,
   createStatement,
+  updateSettings,
   upsertCreditCardPaymentOverride,
   upsertPlaidAccount,
   updatePlaidAccount,
+  upsertPlaidDraft,
 } from "./repos";
 
 let dbDir: string;
@@ -431,5 +433,114 @@ describe("buildProjection linked starting balance", () => {
     // a normal cash debit — only past occurrences are skipped.
     const nextMonth = projection?.rows.find((r) => r.date === "2026-06-03");
     expect(nextMonth?.expenseCents).toBe(4400_00);
+  });
+
+  it("reconstructs past balances from drafts when startingBalanceAsOf is rolled back", async () => {
+    // User sets startingBalanceAsOf to 2026-05-01 (3 days before mocked today
+    // 2026-05-04). Live linked balance is $500. Two posted drafts in window:
+    //   2026-05-02: -$100 (expense)
+    //   2026-05-03: +$30 (refund — negative amount = credit)
+    // Reconstruction:
+    //   end-of 2026-05-03 balance = $500
+    //   end-of 2026-05-02 balance = $500 - (-$30) = $530   (refund hadn't landed)
+    //   end-of 2026-05-01 balance = $530 - (-$100) = $630  (expense hadn't landed)
+    // Forward walk lands at $500 on today.
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 500_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-05-01" });
+    await upsertPlaidDraft({
+      id: "txn-1",
+      userId: user.id,
+      accountId: "checking",
+      date: "2026-05-02",
+      description: "Coffee",
+      originalDescription: null,
+      amountCents: 100_00,
+      plaidCategory: null,
+      merchantName: "Cafe",
+      pending: false,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+    await upsertPlaidDraft({
+      id: "txn-2",
+      userId: user.id,
+      accountId: "checking",
+      date: "2026-05-03",
+      description: "Refund",
+      originalDescription: null,
+      amountCents: -30_00,
+      plaidCategory: null,
+      merchantName: "Store",
+      pending: false,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+
+    const projection = await buildProjection(user.id);
+
+    expect(projection?.startDate).toBe("2026-05-01");
+    expect(projection?.startingBalanceCents).toBe(570_00); // 500 + (100 + -30)
+
+    const may1 = projection?.rows.find((r) => r.date === "2026-05-01");
+    expect(may1?.balanceCents).toBe(570_00);
+
+    const may2 = projection?.rows.find((r) => r.date === "2026-05-02");
+    expect(may2?.expenseCents).toBe(100_00);
+    expect(may2?.balanceCents).toBe(470_00);
+
+    const may3 = projection?.rows.find((r) => r.date === "2026-05-03");
+    expect(may3?.incomeCents).toBe(30_00); // refund flows to income
+    expect(may3?.balanceCents).toBe(500_00);
+
+    const today = projection?.rows.find((r) => r.date === "2026-05-04");
+    expect(today?.balanceCents).toBe(500_00);
+  });
+
+  it("renders past scheduled bills as paid markers (zero amount, isPaid) in lookback mode", async () => {
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 500_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-05-01" });
+    await createBill(user.id, {
+      name: "Blue Falls",
+      category: "Housing",
+      amountCents: 4400_00,
+      intervalMonths: 1,
+      anchorDate: "2026-05-03", // before today=2026-05-04
+      autoPay: false,
+      paidViaCardId: null,
+      notes: null,
+      isActive: true,
+    });
+
+    const projection = await buildProjection(user.id);
+    const may3 = projection?.rows.find((r) => r.date === "2026-05-03");
+    const billEvent = may3?.events.find((ev) => ev.label === "Blue Falls");
+
+    expect(billEvent).toMatchObject({
+      kind: "bill",
+      amountCents: 0,
+      originalAmountCents: 4400_00,
+      isPaid: true,
+    });
+    // Past occurrence is a marker only — no balance impact.
+    expect(may3?.expenseCents).toBe(0);
+  });
+
+  it("clamps lookback when startingBalanceAsOf is older than the cap (default 1970-01-01)", async () => {
+    // Sanity check on the MAX_LOOKBACK_DAYS clamp: a user who never set the
+    // field still gets the linked-no-lookback experience.
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 500_00);
+    // Default startingBalanceAsOf is 1970-01-01 from the schema.
+
+    const projection = await buildProjection(user.id);
+    expect(projection?.startDate).toBe("2026-05-04");
+    expect(projection?.startingBalanceCents).toBe(500_00);
+    expect(projection?.rows[0]?.date).toBe("2026-05-04");
   });
 });

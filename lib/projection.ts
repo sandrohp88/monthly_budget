@@ -17,6 +17,14 @@ export type Paycheck = {
   payDate: string;
   amountCents: number;
   note?: string | null;
+  /**
+   * When the starting balance comes from a live bank account, deposits before
+   * today are already reflected in that balance. Past paycheck occurrences
+   * before this date should not change the running projection again.
+   */
+  settledBeforeDate?: string;
+  /** Show settled past occurrences as paid rows instead of hiding them. */
+  showSettledBeforeDate?: boolean;
 };
 
 export type Bill = {
@@ -50,6 +58,14 @@ export type OneTimeExpense = {
   paymentDueCents?: number;
   paymentBalanceCents?: number;
   isPaid?: boolean;
+  /**
+   * When the starting balance comes from a live bank account, cash movements
+   * before today are already reflected in that balance. Extras before this
+   * date should not change the running projection again.
+   */
+  settledBeforeDate?: string;
+  /** Show settled past occurrences as paid rows instead of hiding them. */
+  showSettledBeforeDate?: boolean;
 };
 
 export type ProjectionEventKind = "paycheck" | "bill" | "extra";
@@ -133,7 +149,14 @@ export function resolveProjectionStartDate(opts: {
   today: string;
   usesLinkedStartingBalance: boolean;
 }): string {
-  if (opts.usesLinkedStartingBalance) return opts.today;
+  // Manual mode: anchor at the user's as-of date (the date they typed the
+  // balance). Linked mode: anchor at today (the live balance is always
+  // current), but allow startingBalanceAsOf to extend the row window
+  // backward for historical context. Reconstruction of past balances from
+  // posted Plaid drafts happens in projection-server.
+  if (opts.usesLinkedStartingBalance) {
+    return opts.startingBalanceAsOf < opts.today ? opts.startingBalanceAsOf : opts.today;
+  }
   return opts.startingBalanceAsOf;
 }
 
@@ -185,10 +208,37 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
 
   for (const p of input.paychecks) {
     const label = p.note?.trim() ? p.note.trim() : "Paycheck";
+    if (p.settledBeforeDate && p.payDate < p.settledBeforeDate) {
+      if (!p.showSettledBeforeDate) continue;
+      addEvent(p.payDate, {
+        kind: "paycheck",
+        label,
+        amountCents: 0,
+        originalAmountCents: p.amountCents,
+        isPaid: true,
+      });
+      continue;
+    }
     addEvent(p.payDate, { kind: "paycheck", label, amountCents: p.amountCents });
   }
 
   for (const e of input.extras) {
+    if (e.settledBeforeDate && e.date < e.settledBeforeDate) {
+      if (!e.showSettledBeforeDate) continue;
+      addEvent(e.date, {
+        kind: "extra",
+        label: e.description,
+        amountCents: 0,
+        sourceId: e.sourceId,
+        sourceType: e.sourceType,
+        originalAmountCents: e.originalAmountCents ?? e.amountCents,
+        relatedDate: e.relatedDate,
+        paymentDueCents: e.paymentDueCents,
+        paymentBalanceCents: e.paymentBalanceCents,
+        isPaid: true,
+      });
+      continue;
+    }
     addEvent(e.date, {
       kind: "extra",
       label: e.description,

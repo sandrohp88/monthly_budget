@@ -21,13 +21,26 @@ const baseInput = (): ProjectionInput => ({
 
 describe("projection engine", () => {
   describe("resolveProjectionStartDate", () => {
-    it("anchors at today when a linked account supplies the live starting balance", () => {
-      // The Plaid balance is always current — so the projection's running
-      // balance starts there and walks forward. Anything before today is
-      // already inside that snapshot.
+    it("rolls the start back to startingBalanceAsOf when linked, to expose past rows for context", () => {
+      // The Plaid balance is always current, but in linked mode
+      // startingBalanceAsOf is repurposed as the lookback floor: rendering
+      // past rows (already-paid bills, recent expenses) requires extending
+      // the row window backward. projection-server reconstructs past
+      // balances from posted Plaid drafts.
       expect(
         resolveProjectionStartDate({
           startingBalanceAsOf: "2026-04-30",
+          today: "2026-05-05",
+          usesLinkedStartingBalance: true,
+        }),
+      ).toBe("2026-04-30");
+    });
+
+    it("collapses linked-mode start to today when the as-of date is in the future", () => {
+      // No lookback if the user hasn't actually set a past date.
+      expect(
+        resolveProjectionStartDate({
+          startingBalanceAsOf: "2026-05-10",
           today: "2026-05-05",
           usesLinkedStartingBalance: true,
         }),
