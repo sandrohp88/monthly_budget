@@ -382,8 +382,15 @@ export function ProjectionClient({
                         {r.events.map((event, eventIndex) => {
                           const isFirstEvent = eventIndex === 0;
                           const isLastEvent = eventIndex === r.events.length - 1;
-                          const isIncomeEvent = event.kind === "paycheck";
+                          // A paycheck is income. A negative-amount extra is
+                          // also income (Plaid refund, return, statement
+                          // credit). Everything else lands in the expense
+                          // column.
+                          const isRefundEvent =
+                            event.kind === "extra" && event.amountCents < 0;
+                          const isIncomeEvent = event.kind === "paycheck" || isRefundEvent;
                           const isExpenseEvent = !isIncomeEvent;
+                          const eventAbsCents = Math.abs(event.amountCents);
                           return (
                             <tr
                               id={isFirstEvent ? `d-${r.date}` : undefined}
@@ -425,7 +432,11 @@ export function ProjectionClient({
                                   {isNegativeBalance && isFirstEvent ? (
                                     <StatusPill variant="danger">NEGATIVE</StatusPill>
                                   ) : null}
-                                  {isIncomeEvent ? <StatusPill>PAYCHECK SOURCE</StatusPill> : null}
+                                  {isRefundEvent ? (
+                                    <StatusPill>REFUND</StatusPill>
+                                  ) : isIncomeEvent ? (
+                                    <StatusPill>PAYCHECK SOURCE</StatusPill>
+                                  ) : null}
                                   <ProjectionEventItem
                                     row={r}
                                     event={event}
@@ -438,7 +449,7 @@ export function ProjectionClient({
                               <td className="px-4 py-2.5 text-right">
                                 {isIncomeEvent ? (
                                   <span className="text-[var(--mint)] font-semibold">
-                                    +<Money cents={event.amountCents} />
+                                    +<Money cents={eventAbsCents} />
                                   </span>
                                 ) : (
                                   <span className="text-[var(--text-3)]">—</span>
@@ -451,7 +462,7 @@ export function ProjectionClient({
                                   </span>
                                 ) : isExpenseEvent ? (
                                   <span className="text-[var(--red)] font-semibold">
-                                    −<Money cents={event.amountCents} />
+                                    −<Money cents={eventAbsCents} />
                                   </span>
                                 ) : (
                                   <span className="text-[var(--text-3)]">—</span>
