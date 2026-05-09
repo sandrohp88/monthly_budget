@@ -633,7 +633,9 @@
     background-attachment: fixed;
   }
 
-  /* Subtle tactical grid — uses theme grid color so it matches panel edges. */
+  /* Tactical grid — fixed, theme-aware, masked to fade out at viewport edges
+     so panel chrome stays the visual focus. The mask is what makes the grid
+     feel like a "tactical surround" rather than wallpaper. */
   body::before {
     content: '';
     position: fixed;
@@ -644,7 +646,9 @@
     background-size: 48px 48px;
     pointer-events: none;
     z-index: 0;
-    opacity: 0.5;
+    opacity: 0.6;
+    -webkit-mask-image: radial-gradient(ellipse at center, black 35%, transparent 85%);
+            mask-image: radial-gradient(ellipse at center, black 35%, transparent 85%);
   }
 
   /* Heading typography — Orbitron, uppercase, wide tracking per Home Apps. */
@@ -700,23 +704,31 @@
   }
   .fade-in { animation: fade-in 0.3s ease-out both; }
 
-  /* Tactical corner brackets — opt-in via .bracketed.
-     Adds 12px L-shaped marks at top-left & bottom-right of a positioned
-     container. Most existing cards already do this manually with absolute
-     spans; this is the shorthand for new code. */
-  .bracketed { position: relative; }
+  /* Tactical corner brackets — subtle 8px L-shaped marks at top-left &
+     bottom-right of a positioned container, in the brighter border tone.
+     Cards apply this by default (see Card component); use `.no-brackets` to
+     opt out. The `.bracketed` class remains as a one-off shorthand for
+     non-Card surfaces (custom hero panels etc.) that want the same look. */
+  .bracketed,
+  .has-brackets { position: relative; }
   .bracketed::before,
-  .bracketed::after {
+  .bracketed::after,
+  .has-brackets::before,
+  .has-brackets::after {
     content: '';
     position: absolute;
-    width: 12px;
-    height: 12px;
-    border-color: var(--cyan);
+    width: 8px;
+    height: 8px;
+    border-color: var(--border-2);
     border-style: solid;
     pointer-events: none;
   }
-  .bracketed::before { top: -1px; left: -1px; border-width: 2px 0 0 2px; }
-  .bracketed::after { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; }
+  .bracketed::before,
+  .has-brackets::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+  .bracketed::after,
+  .has-brackets::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+  .no-brackets::before,
+  .no-brackets::after { display: none; }
 }
 
 /* App container z-index above the grid overlay */

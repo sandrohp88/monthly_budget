@@ -15,6 +15,14 @@ import {
   Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { Sparkline } from "@/components/ui/sparkline";
+import { Money } from "@/components/money";
+
+export type SidebarSummary = {
+  startingBalanceCents: number;
+  sparkline: number[];
+  deltaCents: number;
+};
 
 const NAV: ReadonlyArray<{
   href: string;
@@ -34,7 +42,15 @@ const NAV: ReadonlyArray<{
   { href: "/settings", label: "Settings", icon: Settings, shortcut: "s", section: 2 },
 ];
 
-export function Sidebar({ displayName, role }: { displayName: string; role: string }) {
+export function Sidebar({
+  displayName,
+  role,
+  summary,
+}: {
+  displayName: string;
+  role: string;
+  summary: SidebarSummary | null;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const [armed, setArmed] = React.useState(false);
@@ -145,6 +161,37 @@ export function Sidebar({ displayName, role }: { displayName: string; role: stri
       {armed ? (
         <div className="mx-3 mb-2 rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-2)] px-3 py-1.5 text-[9px] uppercase tracking-[0.15em] text-[var(--mint)]">
       press: d b a t c p e x s
+        </div>
+      ) : null}
+
+      {/* net position widget */}
+      {summary && summary.sparkline.length >= 2 ? (
+        <div className="border-t border-[var(--border-raw)] px-5 py-3">
+          <div className="mb-1.5 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
+            {"// NET POSITION"}
+          </div>
+          <div className="tabular text-[15px] font-bold leading-none text-[var(--text-0)]">
+            <Money cents={summary.startingBalanceCents} />
+          </div>
+          <div className="mt-2">
+            <Sparkline data={summary.sparkline} height={26} stroke="var(--mint)" />
+          </div>
+          <div className="mt-1 flex items-center justify-between text-[9px] uppercase tracking-[0.15em]">
+            <span className="text-[var(--text-3)]">30D</span>
+            <span
+              className={cn(
+                "tabular",
+                summary.deltaCents > 0
+                  ? "text-[var(--mint)]"
+                  : summary.deltaCents < 0
+                    ? "text-[var(--red)]"
+                    : "text-[var(--text-2)]",
+              )}
+            >
+              {summary.deltaCents > 0 ? "+" : summary.deltaCents < 0 ? "−" : ""}
+              <Money cents={Math.abs(summary.deltaCents)} />
+            </span>
+          </div>
         </div>
       ) : null}
 
