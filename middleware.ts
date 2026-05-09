@@ -2,6 +2,7 @@ import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
 import authConfig from "./auth.config";
 import { takeToken } from "./lib/rate-limit";
+import { clientIp, hostAllowed, originAllowed } from "./lib/security";
 
 const { auth } = NextAuth(authConfig);
 
@@ -10,22 +11,32 @@ const PUBLIC_PREFIXES = ["/api/auth", "/api/health", "/api/setup", "/_next", "/f
 
 const CREDENTIALS_CALLBACK = "/api/auth/callback/credentials";
 
-/**
- * Pull the originating client IP out of the request. We trust the leftmost
- * x-forwarded-for hop (Caddy sets this in our deploy), and fall back to a
- * literal "unknown" so the rate limiter still has a stable key per process.
- */
-function clientIp(req: Request): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) {
-    const first = xff.split(",")[0]?.trim();
-    if (first) return first;
-  }
-  return req.headers.get("x-real-ip")?.trim() || "unknown";
-}
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;
+
+  // Block requests whose Host header doesn't match AUTH_URL/APP_URL — defends
+  // against cache-poisoning and host-header attacks that would otherwise
+  // route absolute URLs (password reset emails, Plaid OAuth redirect) through
+  // an attacker-controlled domain.
+  if (!hostAllowed(req)) {
+    return new NextResponse(JSON.stringify({ error: "host not allowed" }), {
+      status: 421,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  // Origin enforcement on state-changing requests catches simple CSRF where
+  // SameSite cookies aren't enough (e.g. an old browser, an extension that
+  // injects requests). API routes that legitimately need cross-origin
+  // POSTs (none today) would have to be exempted explicitly.
+  if (MUTATING_METHODS.has(req.method) && pathname.startsWith("/api/") && !originAllowed(req)) {
+    return new NextResponse(JSON.stringify({ error: "origin not allowed" }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    });
+  }
 
   // Per-IP login rate limit. The Credentials provider's authorize() callback
   // doesn't have request headers in next-auth v5, so we gate the POST here
@@ -38,6 +49,19 @@ export default auth((req) => {
       return new NextResponse(JSON.stringify({ error: "rate-limited" }), {
         status: 429,
         headers: { "content-type": "application/json", "retry-after": "60" },
+      });
+    }
+  }
+
+  // /api/setup is the highest-impact unauthenticated endpoint — it creates
+  // the very first admin and seeds defaults. Throttle creation attempts hard.
+  if (req.method === "POST" && pathname === "/api/setup") {
+    const ip = clientIp(req);
+    const ok = takeToken(`setup:${ip}`, { capacity: 3, refillPerSecond: 0.005 });
+    if (!ok) {
+      return new NextResponse(JSON.stringify({ error: "rate-limited" }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "120" },
       });
     }
   }

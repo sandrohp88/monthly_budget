@@ -50,7 +50,6 @@ import {
   type SettingsRow,
   type UserRow,
   type UserSafe,
-  type VariableBillCardRow,
   type VariableBillRow,
 } from "./db/schema";
 import { newId } from "./ids";
@@ -179,6 +178,19 @@ export async function deleteUser(id: string): Promise<void> {
 
 // ── setup ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Sentinel thrown by `createOwnerAndDefaults` when another request beat us to
+ * the empty-DB check. The route handler maps this to a 409 with a generic
+ * message; never surface the inner reason to the caller. The setup endpoint
+ * must be racing-safe even though the legitimate flow only ever runs once.
+ */
+export class OwnerAlreadyExistsError extends Error {
+  constructor() {
+    super("owner already exists");
+    this.name = "OwnerAlreadyExistsError";
+  }
+}
+
 export async function createOwnerAndDefaults(input: {
   email: string;
   password: string;
@@ -193,34 +205,47 @@ export async function createOwnerAndDefaults(input: {
 }): Promise<UserRow> {
   const db = getDb();
   const userId = newId();
+  // Hash before opening the transaction so we don't hold a write lock for the
+  // ~100ms argon2 cost. The user row is inserted atomically below — if a
+  // concurrent setup wins the race, the existence check inside the
+  // transaction throws and the discarded hash never reaches disk.
   const passwordHash = await hashPassword(input.password);
 
-  const newUser = {
-    id: userId,
-    email: input.email.toLowerCase(),
-    passwordHash,
-    displayName: input.displayName,
-    role: "admin" as const,
-  };
-  await db.insert(users).values(newUser).run();
+  db.transaction((tx) => {
+    // Re-check inside the transaction so two simultaneous /api/setup calls
+    // can't both pass the pre-flight `userExists()` and create two admins.
+    // The unique email index would still catch matching emails, but two
+    // setup calls from different browsers (different emails) would both
+    // succeed without this guard.
+    const existing = tx.select({ id: users.id }).from(users).limit(1).get();
+    if (existing) throw new OwnerAlreadyExistsError();
 
-  const newSettings: NewSettings = {
-    id: newId(),
-    userId,
-    startingBalanceCents: input.startingBalanceCents,
-    defaultPaycheckCents: input.defaultPaycheckCents,
-    firstPaydayDate: input.firstPaydayDate,
-    payFrequencyDays: input.payFrequencyDays,
-    projectionMonths: input.projectionMonths,
-    currency: input.currency,
-    timezone: input.timezone,
-  };
-  await db.insert(settings).values(newSettings).run();
+    tx.insert(users).values({
+      id: userId,
+      email: input.email.toLowerCase(),
+      passwordHash,
+      displayName: input.displayName,
+      role: "admin" as const,
+    }).run();
 
-  for (const c of DEFAULT_CATEGORIES) {
-    const cat: NewCategory = { id: newId(), userId, ...c };
-    await db.insert(categories).values(cat).run();
-  }
+    const newSettings: NewSettings = {
+      id: newId(),
+      userId,
+      startingBalanceCents: input.startingBalanceCents,
+      defaultPaycheckCents: input.defaultPaycheckCents,
+      firstPaydayDate: input.firstPaydayDate,
+      payFrequencyDays: input.payFrequencyDays,
+      projectionMonths: input.projectionMonths,
+      currency: input.currency,
+      timezone: input.timezone,
+    };
+    tx.insert(settings).values(newSettings).run();
+
+    for (const c of DEFAULT_CATEGORIES) {
+      const cat: NewCategory = { id: newId(), userId, ...c };
+      tx.insert(categories).values(cat).run();
+    }
+  });
 
   return (await db.select().from(users).where(eq(users.id, userId)).get())!;
 }
@@ -1760,57 +1785,145 @@ export async function exportAll(userId: string) {
   };
 }
 
-type ImportPayload = {
-  bills?: unknown[];
-  billPaymentOverrides?: unknown[];
-  variableBills?: unknown[];
-  variableBillCards?: unknown[];
-  creditCardPaymentOverrides?: unknown[];
-  paychecks?: unknown[];
-  extras?: unknown[];
-  categories?: unknown[];
-  creditCards?: unknown[];
-  creditCardStatements?: unknown[];
-  creditCardPromos?: unknown[];
-  creditCardPromoPayments?: unknown[];
-};
+import type { BackupImportInput } from "./validation";
 
-export async function importAll(userId: string, payload: ImportPayload): Promise<void> {
+/**
+ * Build the set of valid IDs that child rows may reference inside a backup
+ * payload, then verify every cross-row reference points either at a payload
+ * row or at one of the user's existing rows that survives the restore (only
+ * `paidViaCardId` survives — cards owned by other users are NEVER acceptable
+ * because the import is single-user-scoped).
+ *
+ * Throws on the first violation with a stable string the route maps to a 400.
+ */
+async function validateImportGraph(
+  userId: string,
+  payload: BackupImportInput,
+): Promise<{ cardIds: Set<string>; billIds: Set<string>; promoIds: Set<string>; variableBillIds: Set<string> }> {
+  const cardIds = new Set<string>();
+  for (const c of payload.creditCards ?? []) cardIds.add(c.id);
+
+  const billIds = new Set<string>();
+  for (const b of payload.bills ?? []) {
+    if (b.id) billIds.add(b.id);
+  }
+
+  const promoIds = new Set<string>();
+  for (const p of payload.creditCardPromos ?? []) {
+    if (p.id) promoIds.add(p.id);
+  }
+
+  const variableBillIds = new Set<string>();
+  for (const v of payload.variableBills ?? []) variableBillIds.add(v.id);
+
+  // Reject duplicate ids within a single collection so the dedup-by-set above
+  // doesn't quietly mask collisions that would alias rows on insert.
+  const seenCardIds = new Set<string>();
+  for (const c of payload.creditCards ?? []) {
+    if (seenCardIds.has(c.id)) throw new Error(`duplicate creditCard id ${c.id}`);
+    seenCardIds.add(c.id);
+  }
+  const seenVbIds = new Set<string>();
+  for (const v of payload.variableBills ?? []) {
+    if (seenVbIds.has(v.id)) throw new Error(`duplicate variableBill id ${v.id}`);
+    seenVbIds.add(v.id);
+  }
+
+  const ensureCard = (cardId: string, where: string) => {
+    if (!cardIds.has(cardId)) throw new Error(`${where} references unknown cardId ${cardId}`);
+  };
+  const ensureBill = (billId: string, where: string) => {
+    if (!billIds.has(billId)) throw new Error(`${where} references unknown billId ${billId}`);
+  };
+  const ensurePromo = (promoId: string, where: string) => {
+    if (!promoIds.has(promoId)) throw new Error(`${where} references unknown promoId ${promoId}`);
+  };
+  const ensureVariableBill = (vbId: string, where: string) => {
+    if (!variableBillIds.has(vbId)) {
+      throw new Error(`${where} references unknown variableBillId ${vbId}`);
+    }
+  };
+
+  for (const b of payload.bills ?? []) {
+    if (b.paidViaCardId) ensureCard(b.paidViaCardId, "bills.paidViaCardId");
+  }
+  for (const e of payload.extras ?? []) {
+    if (e.paidViaCardId) ensureCard(e.paidViaCardId, "extras.paidViaCardId");
+  }
+  for (const o of payload.billPaymentOverrides ?? []) ensureBill(o.billId, "billPaymentOverrides.billId");
+  for (const o of payload.creditCardPaymentOverrides ?? []) {
+    ensureCard(o.cardId, "creditCardPaymentOverrides.cardId");
+  }
+  for (const s of payload.creditCardStatements ?? []) ensureCard(s.cardId, "creditCardStatements.cardId");
+  for (const p of payload.creditCardPromos ?? []) ensureCard(p.cardId, "creditCardPromos.cardId");
+  for (const link of payload.variableBillCards ?? []) {
+    ensureVariableBill(link.variableBillId, "variableBillCards.variableBillId");
+    ensureCard(link.cardId, "variableBillCards.cardId");
+  }
+  for (const pp of payload.creditCardPromoPayments ?? []) {
+    ensurePromo(pp.promoId, "creditCardPromoPayments.promoId");
+  }
+
+  return { cardIds, billIds, promoIds, variableBillIds };
+}
+
+/**
+ * Restore a backup over the current user's data. Runs as a single SQLite
+ * transaction so a failure mid-restore reverts every delete and insert —
+ * the user never observes a half-imported state.
+ *
+ * Validation rules:
+ *   - Caller is responsible for Zod-parsing the payload first (see
+ *     `backupImportSchema`).
+ *   - Foreign keys inside the payload (statements → cards, overrides →
+ *     bills/cards, etc.) MUST resolve to a row inside the same payload.
+ *     Cross-user references are rejected before any write fires.
+ *   - Plaid items / accounts / drafts are intentionally not touched —
+ *     re-linking is how the user gets live data back, and exposing those
+ *     IDs in a backup would let one user's import overwrite another's
+ *     Plaid linkage.
+ */
+export async function importAll(userId: string, payload: BackupImportInput): Promise<void> {
   const db = getDb();
+  await validateImportGraph(userId, payload);
 
-  // Delete in dependency order (children before parents). Plaid items are
-  // intentionally untouched — re-linking is the user's path back to live data.
-  await db
-    .delete(creditCardPromoPayments)
-    .where(eq(creditCardPromoPayments.userId, userId))
-    .run();
-  await db
-    .delete(creditCardPromos)
-    .where(eq(creditCardPromos.userId, userId))
-    .run();
-  await db.delete(variableBillCards).where(eq(variableBillCards.userId, userId)).run();
-  await db.delete(variableBills).where(eq(variableBills.userId, userId)).run();
-  await db
-    .delete(creditCardPaymentOverrides)
-    .where(eq(creditCardPaymentOverrides.userId, userId))
-    .run();
-  // creditCardStatements have no userId column; cascade off creditCards delete
-  // when we delete cards next. But we have to clear them via the join because
-  // the cardId FK references creditCards.id with ON DELETE CASCADE — that
-  // deletes statements for the user's cards automatically. We rely on it.
-  await db.delete(creditCards).where(eq(creditCards.userId, userId)).run();
-  await db.delete(billPaymentOverrides).where(eq(billPaymentOverrides.userId, userId)).run();
-  await db.delete(bills).where(eq(bills.userId, userId)).run();
-  await db.delete(paychecks).where(eq(paychecks.userId, userId)).run();
-  await db.delete(oneTimeExpenses).where(eq(oneTimeExpenses.userId, userId)).run();
+  db.transaction((tx) => {
+    // Delete in dependency order (children before parents). Plaid items are
+    // intentionally untouched — re-linking is the user's path back to live data.
+    tx.delete(creditCardPromoPayments).where(eq(creditCardPromoPayments.userId, userId)).run();
+    tx.delete(creditCardPromos).where(eq(creditCardPromos.userId, userId)).run();
+    tx.delete(variableBillCards).where(eq(variableBillCards.userId, userId)).run();
+    tx.delete(variableBills).where(eq(variableBills.userId, userId)).run();
+    tx.delete(creditCardPaymentOverrides).where(eq(creditCardPaymentOverrides.userId, userId)).run();
+    // creditCardStatements have no userId column; cascade off creditCards delete
+    // when we delete cards next. But we have to clear them via the join because
+    // the cardId FK references creditCards.id with ON DELETE CASCADE — that
+    // deletes statements for the user's cards automatically. We rely on it.
+    tx.delete(creditCards).where(eq(creditCards.userId, userId)).run();
+    tx.delete(billPaymentOverrides).where(eq(billPaymentOverrides.userId, userId)).run();
+    tx.delete(bills).where(eq(bills.userId, userId)).run();
+    tx.delete(paychecks).where(eq(paychecks.userId, userId)).run();
+    tx.delete(oneTimeExpenses).where(eq(oneTimeExpenses.userId, userId)).run();
 
+    importInsideTransaction(tx, userId, payload);
+  });
+}
+
+/**
+ * Insert side of the restore. Runs inside the import transaction so any
+ * insert error rolls back the deletes above.
+ */
+function importInsideTransaction(
+  tx: Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0],
+  userId: string,
+  payload: BackupImportInput,
+): void {
   // Categories: only replace if provided. Backups created before categories
   // were exportable would otherwise wipe the user's category list.
   if (Array.isArray(payload.categories)) {
-    await db.delete(categories).where(eq(categories.userId, userId)).run();
-    for (const c of payload.categories as Array<Partial<CategoryRow>>) {
-      if (!c.name || !c.color || !c.kind) continue;
-      await db.insert(categories).values({
+    tx.delete(categories).where(eq(categories.userId, userId)).run();
+    for (const c of payload.categories) {
+      tx.insert(categories).values({
         id: c.id ?? newId(),
         userId,
         name: c.name,
@@ -1825,11 +1938,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
   // resolve. Plaid account links are nulled because the Plaid items aren't
   // exported — restoring on a fresh deployment with a different
   // PLAID_ENCRYPTION_KEY would otherwise leave dangling references.
-  type CardImport = Partial<CreditCardRow>;
-  for (const card of (payload.creditCards ?? []) as CardImport[]) {
-    if (!card.id || !card.name) continue;
-    if (typeof card.statementDay !== "number" || typeof card.dueDay !== "number") continue;
-    await db.insert(creditCards).values({
+  for (const card of payload.creditCards ?? []) {
+    tx.insert(creditCards).values({
       id: card.id,
       userId,
       name: card.name,
@@ -1846,11 +1956,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
     }).run();
   }
 
-  type StatementImport = Partial<CreditCardStatementRow> & { cardName?: string };
-  for (const s of (payload.creditCardStatements ?? []) as StatementImport[]) {
-    if (!s.cardId || !s.statementDate || !s.dueDate) continue;
-    if (typeof s.statementBalanceCents !== "number") continue;
-    await db.insert(creditCardStatements).values({
+  for (const s of payload.creditCardStatements ?? []) {
+    tx.insert(creditCardStatements).values({
       id: s.id ?? newId(),
       cardId: s.cardId,
       statementDate: s.statementDate,
@@ -1863,18 +1970,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
     }).run();
   }
 
-  type PromoImport = Partial<CreditCardPromoRow>;
-  for (const p of (payload.creditCardPromos ?? []) as PromoImport[]) {
-    if (!p.cardId || !p.description) continue;
-    if (
-      typeof p.originalAmountCents !== "number" ||
-      typeof p.remainingAmountCents !== "number" ||
-      !p.startDate ||
-      !p.endDate
-    ) {
-      continue;
-    }
-    await db.insert(creditCardPromos).values({
+  for (const p of payload.creditCardPromos ?? []) {
+    tx.insert(creditCardPromos).values({
       id: p.id ?? newId(),
       userId,
       cardId: p.cardId,
@@ -1890,11 +1987,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
     }).run();
   }
 
-  type VariableBillImport = Partial<VariableBillRow>;
-  for (const b of (payload.variableBills ?? []) as VariableBillImport[]) {
-    if (!b.id || !b.name || typeof b.amountCents !== "number") continue;
-    if (typeof b.intervalMonths !== "number" || !b.anchorDate) continue;
-    await db.insert(variableBills).values({
+  for (const b of payload.variableBills ?? []) {
+    tx.insert(variableBills).values({
       id: b.id,
       userId,
       name: b.name,
@@ -1906,10 +2000,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
       isActive: b.isActive ?? true,
     }).run();
   }
-  type VariableBillCardImport = Partial<VariableBillCardRow>;
-  for (const link of (payload.variableBillCards ?? []) as VariableBillCardImport[]) {
-    if (!link.variableBillId || !link.cardId) continue;
-    await db.insert(variableBillCards).values({
+  for (const link of payload.variableBillCards ?? []) {
+    tx.insert(variableBillCards).values({
       id: link.id ?? newId(),
       userId,
       variableBillId: link.variableBillId,
@@ -1917,10 +2009,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
     }).run();
   }
 
-  type PromoPaymentImport = Partial<CreditCardPromoPaymentRow>;
-  for (const pp of (payload.creditCardPromoPayments ?? []) as PromoPaymentImport[]) {
-    if (!pp.promoId || !pp.dueDate || typeof pp.amountCents !== "number") continue;
-    await db.insert(creditCardPromoPayments).values({
+  for (const pp of payload.creditCardPromoPayments ?? []) {
+    tx.insert(creditCardPromoPayments).values({
       id: pp.id ?? newId(),
       userId,
       promoId: pp.promoId,
@@ -1930,14 +2020,11 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
     }).run();
   }
 
-  type LegacyBill = Partial<BillRow> & {
-    frequency?: "monthly" | "annual";
-    dueDay?: number;
-    dueMonth?: number | null;
-  };
+  // Bills: support legacy frequency/dueDay/dueMonth backups (pre-0006) by
+  // converting to the new (intervalMonths, anchorDate) shape. New backups
+  // already supply both fields.
   const monthDays = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  for (const b of (payload.bills ?? []) as LegacyBill[]) {
-    if (!b.name || typeof b.amountCents !== "number") continue;
+  for (const b of payload.bills ?? []) {
     let intervalMonths: number;
     let anchorDate: string;
     if (typeof b.intervalMonths === "number" && typeof b.anchorDate === "string") {
@@ -1957,7 +2044,7 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
     } else {
       continue;
     }
-    await db.insert(bills).values({
+    tx.insert(bills).values({
       id: b.id ?? newId(),
       userId,
       name: b.name,
@@ -1971,9 +2058,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
       isActive: b.isActive ?? true,
     }).run();
   }
-  for (const o of (payload.billPaymentOverrides ?? []) as Array<Partial<BillPaymentOverrideRow>>) {
-    if (!o.billId || !o.dueDate || typeof o.amountCents !== "number") continue;
-    await db.insert(billPaymentOverrides).values({
+  for (const o of payload.billPaymentOverrides ?? []) {
+    tx.insert(billPaymentOverrides).values({
       id: o.id ?? newId(),
       userId,
       billId: o.billId,
@@ -1982,11 +2068,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
       notes: o.notes ?? null,
     }).run();
   }
-  for (const o of (payload.creditCardPaymentOverrides ?? []) as Array<
-    Partial<CreditCardPaymentOverrideRow>
-  >) {
-    if (!o.cardId || !o.dueDate || typeof o.amountCents !== "number") continue;
-    await db.insert(creditCardPaymentOverrides).values({
+  for (const o of payload.creditCardPaymentOverrides ?? []) {
+    tx.insert(creditCardPaymentOverrides).values({
       id: o.id ?? newId(),
       userId,
       cardId: o.cardId,
@@ -1995,9 +2078,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
       notes: o.notes ?? null,
     }).run();
   }
-  for (const p of (payload.paychecks ?? []) as Array<Partial<PaycheckRow>>) {
-    if (!p.payDate || typeof p.amountCents !== "number") continue;
-    await db.insert(paychecks).values({
+  for (const p of payload.paychecks ?? []) {
+    tx.insert(paychecks).values({
       id: p.id ?? newId(),
       userId,
       payDate: p.payDate,
@@ -2007,9 +2089,8 @@ export async function importAll(userId: string, payload: ImportPayload): Promise
       actualAmountCents: p.actualAmountCents ?? null,
     }).run();
   }
-  for (const e of (payload.extras ?? []) as Array<Partial<OneTimeExpenseRow>>) {
-    if (!e.date || !e.description || typeof e.amountCents !== "number") continue;
-    await db.insert(oneTimeExpenses).values({
+  for (const e of payload.extras ?? []) {
+    tx.insert(oneTimeExpenses).values({
       id: e.id ?? newId(),
       userId,
       date: e.date,
