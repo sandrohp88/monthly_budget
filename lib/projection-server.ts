@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { addDaysIso, todayIso } from "./dates";
 import {
   getSettings,
@@ -64,7 +65,9 @@ export type ProjectionBundle = {
   promoDriftByCard: Record<string, number>;
 };
 
-export async function buildProjection(userId: string): Promise<ProjectionBundle | null> {
+export const buildProjection = cache(_buildProjection);
+
+async function _buildProjection(userId: string): Promise<ProjectionBundle | null> {
   const settings = await getSettings(userId);
   if (!settings) return null;
 

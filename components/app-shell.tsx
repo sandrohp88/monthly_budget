@@ -2,10 +2,11 @@
 
 import * as React from "react";
 import { usePathname } from "next/navigation";
-import { Sidebar } from "@/components/sidebar";
+import { Sidebar, type SidebarSummary } from "@/components/sidebar";
 import { Toaster } from "sonner";
 import { CurrencyProvider } from "@/components/currency-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { UtcClock } from "@/components/utc-clock";
 
 const ROUTE_TO_CRUMB: Record<string, string> = {
   "/": "DASHBOARD",
@@ -19,15 +20,19 @@ const ROUTE_TO_CRUMB: Record<string, string> = {
   "/settings": "SETTINGS",
 };
 
+export type { SidebarSummary };
+
 export function AppShell({
   currency,
   displayName,
   role = "OWNER",
+  sidebarSummary,
   children,
 }: {
   currency: string;
   displayName: string;
   role?: string;
+  sidebarSummary?: SidebarSummary | null;
   children: React.ReactNode;
 }) {
   const pathname = usePathname() ?? "/";
@@ -39,16 +44,19 @@ export function AppShell({
         data-app-shell
         className="flex h-screen w-screen overflow-hidden bg-[var(--bg-0)] text-[var(--text-0)]"
       >
-        <Sidebar displayName={displayName} role={role} />
+        <Sidebar displayName={displayName} role={role} summary={sidebarSummary ?? null} />
         <div className="flex min-w-0 flex-1 flex-col">
           <header
             className="sticky top-0 z-10 flex h-[60px] shrink-0 items-center justify-between border-b border-[var(--border-raw)] px-9 backdrop-blur-md"
             style={{ background: "var(--header-glass)" }}
           >
-            <div className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-2)]">
-              SYS <span className="text-[var(--text-3)] mx-2">/</span>
-              ROOT <span className="text-[var(--text-3)] mx-2">/</span>
-              <span className="text-[var(--mint)]">{crumb}</span>
+            <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-[var(--text-2)]">
+              <span>
+                <span className="text-[var(--text-3)]">{"// "}</span>
+                <span className="text-[var(--mint)]">{crumb}</span>
+              </span>
+              <span className="text-[var(--border-raw)]">|</span>
+              <UtcClock />
             </div>
             <div className="flex items-center gap-4">
               <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">

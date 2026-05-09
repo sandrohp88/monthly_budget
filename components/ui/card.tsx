@@ -10,7 +10,7 @@ export const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDi
     <div
       ref={ref}
       className={cn(
-        "rounded-sm border border-[var(--border-raw)] bg-[var(--bg-card)] text-[var(--text-0)]",
+        "has-brackets rounded-sm border border-[var(--border-raw)] bg-[var(--bg-card)] text-[var(--text-0)]",
         className,
       )}
       {...props}
