@@ -13,6 +13,12 @@ const CREDENTIALS_CALLBACK = "/api/auth/callback/credentials";
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+// Paths that bypass the Host allowlist. Only liveness checks belong here —
+// the Docker healthcheck hits this from inside the container with
+// `Host: 127.0.0.1`, which the allowlist would otherwise reject. The route
+// itself returns no sensitive data, so a host-header bypass here is safe.
+const HOST_CHECK_BYPASS = new Set<string>(["/api/health"]);
+
 export default auth((req) => {
   const { pathname } = req.nextUrl;
 
@@ -20,7 +26,7 @@ export default auth((req) => {
   // against cache-poisoning and host-header attacks that would otherwise
   // route absolute URLs (password reset emails, Plaid OAuth redirect) through
   // an attacker-controlled domain.
-  if (!hostAllowed(req)) {
+  if (!HOST_CHECK_BYPASS.has(pathname) && !hostAllowed(req)) {
     return new NextResponse(JSON.stringify({ error: "host not allowed" }), {
       status: 421,
       headers: { "content-type": "application/json" },
