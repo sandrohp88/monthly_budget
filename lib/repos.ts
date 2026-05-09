@@ -135,6 +135,7 @@ export async function createMember(input: {
       id: newId(),
       userId,
       startingBalanceCents: 0,
+      startingBalanceAsOf: new Date().toISOString().slice(0, 10),
       defaultPaycheckCents: 0,
       firstPaydayDate: new Date().toISOString().slice(0, 10),
       payFrequencyDays: 14,
@@ -196,6 +197,7 @@ export async function createOwnerAndDefaults(input: {
   password: string;
   displayName: string;
   startingBalanceCents: number;
+  startingBalanceAsOf: string;
   defaultPaycheckCents: number;
   firstPaydayDate: string;
   payFrequencyDays: number;
@@ -232,6 +234,7 @@ export async function createOwnerAndDefaults(input: {
       id: newId(),
       userId,
       startingBalanceCents: input.startingBalanceCents,
+      startingBalanceAsOf: input.startingBalanceAsOf,
       defaultPaycheckCents: input.defaultPaycheckCents,
       firstPaydayDate: input.firstPaydayDate,
       payFrequencyDays: input.payFrequencyDays,

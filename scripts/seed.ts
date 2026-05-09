@@ -23,6 +23,7 @@ async function main() {
     password,
     displayName,
     startingBalanceCents: 0,
+    startingBalanceAsOf: today,
     defaultPaycheckCents: 0,
     firstPaydayDate: today,
     payFrequencyDays: 14,

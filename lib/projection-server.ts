@@ -413,17 +413,23 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
   // substitute its live balance for the manual startingBalanceCents.
   const effectiveStartingBalance = linkedBalance ?? settings.startingBalanceCents;
   const startDate = resolveProjectionStartDate({
-    firstPaydayDate: settings.firstPaydayDate,
+    startingBalanceAsOf: settings.startingBalanceAsOf,
     today,
     usesLinkedStartingBalance: linkedBalance != null,
   });
+
+  // The starting balance is an as-of snapshot. Anything before that date is
+  // already inside it; only events on/after it should accumulate. This holds
+  // whether the snapshot came from Plaid (anchor = today) or was entered
+  // manually (anchor = `startingBalanceAsOf`).
+  const onOrAfterStart = (iso: string) => iso >= startDate;
 
   const input: ProjectionInput = {
     startingBalanceCents: effectiveStartingBalance,
     startDate,
     endDate,
     paychecks: paychecks
-      .filter((p) => linkedBalance == null || p.payDate >= today)
+      .filter((p) => onOrAfterStart(p.payDate))
       .map((p) => ({
         payDate: p.payDate,
         amountCents: p.actualReceived && p.actualAmountCents != null ? p.actualAmountCents : p.amountCents,
@@ -436,23 +442,23 @@ export async function buildProjection(userId: string): Promise<ProjectionBundle 
       intervalMonths: b.intervalMonths,
       anchorDate: b.anchorDate,
       paymentOverrides: billOverridesByBill.get(b.id) ?? [],
-      settledBeforeDate: linkedBalance != null ? today : undefined,
+      settledBeforeDate: startDate,
       showSettledBeforeDate: linkedBalance != null && b.autoPay,
     })),
     extras: [
       ...extras
-        .filter((e) => linkedBalance == null || e.date >= today)
+        .filter((e) => onOrAfterStart(e.date))
         .filter((e) => e.paidViaCardId == null || !activeCardIds.has(e.paidViaCardId))
         .map((e) => ({
           date: e.date,
           description: e.description,
           amountCents: e.amountCents,
         })),
-      ...ccExtras.filter((e) => linkedBalance == null || e.date >= today),
-      ...openCycleExtras.filter((e) => linkedBalance == null || e.date >= today),
-      ...promoExtras.filter((e) => linkedBalance == null || e.date >= today),
-      ...variableBillExtras.filter((e) => linkedBalance == null || e.date >= today),
-      ...plannedCardExtras.filter((e) => linkedBalance == null || e.date >= today),
+      ...ccExtras.filter((e) => onOrAfterStart(e.date)),
+      ...openCycleExtras.filter((e) => onOrAfterStart(e.date)),
+      ...promoExtras.filter((e) => onOrAfterStart(e.date)),
+      ...variableBillExtras.filter((e) => onOrAfterStart(e.date)),
+      ...plannedCardExtras.filter((e) => onOrAfterStart(e.date)),
     ],
   };
   const promoSummariesByCard: Record<string, PromoPaymentSummary[]> = {};

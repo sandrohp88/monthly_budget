@@ -28,6 +28,17 @@ export const settings = sqliteTable("settings", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   startingBalanceCents: integer("starting_balance_cents").notNull().default(0),
+  /**
+   * Date the `startingBalanceCents` snapshot was taken. The projection walks
+   * forward from this date — paychecks/extras/bills before it are treated as
+   * already-applied to the starting balance, after it they accumulate. When
+   * a Plaid account is linked as the starting balance, the projection uses
+   * `today` instead of this column (live balance is always current).
+   *
+   * Defaults to today on first setup; users can edit it on the settings page
+   * if they later realise the original snapshot was wrong.
+   */
+  startingBalanceAsOf: text("starting_balance_as_of").notNull().default("1970-01-01"),
   defaultPaycheckCents: integer("default_paycheck_cents").notNull().default(0),
   firstPaydayDate: text("first_payday_date").notNull(),
   payFrequencyDays: integer("pay_frequency_days").notNull().default(14),

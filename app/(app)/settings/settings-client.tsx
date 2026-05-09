@@ -47,6 +47,7 @@ export function SettingsClient({
   initialCategories,
 }: Props) {
   const [startingBalanceCents, setStartingBalance] = React.useState(initial.startingBalanceCents);
+  const [startingBalanceAsOf, setStartingBalanceAsOf] = React.useState(initial.startingBalanceAsOf);
   const [defaultPaycheckCents, setDefaultPaycheck] = React.useState(initial.defaultPaycheckCents);
   const [firstPaydayDate, setFirstPayday] = React.useState(initial.firstPaydayDate);
   const [payFrequencyDays, setPayFrequency] = React.useState<number>(initial.payFrequencyDays);
@@ -87,6 +88,7 @@ export function SettingsClient({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           startingBalanceCents,
+          startingBalanceAsOf,
           defaultPaycheckCents,
           firstPaydayDate,
           payFrequencyDays,
@@ -201,6 +203,16 @@ export function SettingsClient({
                 <div className="space-y-1.5">
                   <Label>STARTING BALANCE</Label>
                   <MoneyInput valueCents={startingBalanceCents} onChangeCents={setStartingBalance} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="startingBalanceAsOf">STARTING BALANCE AS OF</Label>
+                  <Input
+                    id="startingBalanceAsOf"
+                    type="date"
+                    required
+                    value={startingBalanceAsOf}
+                    onChange={(e) => setStartingBalanceAsOf(e.target.value)}
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label>DEFAULT PAYCHECK</Label>

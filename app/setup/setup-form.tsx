@@ -17,6 +17,7 @@ export function SetupForm() {
   const [password, setPassword] = React.useState("");
   const [displayName, setDisplayName] = React.useState("");
   const [startingBalanceCents, setStartingBalanceCents] = React.useState(0);
+  const [startingBalanceAsOf, setStartingBalanceAsOf] = React.useState(today);
   const [defaultPaycheckCents, setDefaultPaycheckCents] = React.useState(0);
   const [firstPaydayDate, setFirstPaydayDate] = React.useState(today);
   const [error, setError] = React.useState<string | null>(null);
@@ -64,6 +65,7 @@ export function SetupForm() {
                   password,
                   displayName,
                   startingBalanceCents,
+                  startingBalanceAsOf,
                   defaultPaycheckCents,
                   firstPaydayDate,
                   payFrequencyDays: 14,
@@ -120,6 +122,16 @@ export function SetupForm() {
                   id="startingBalance"
                   valueCents={startingBalanceCents}
                   onChangeCents={setStartingBalanceCents}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="startingBalanceAsOf">AS OF</Label>
+                <Input
+                  id="startingBalanceAsOf"
+                  type="date"
+                  required
+                  value={startingBalanceAsOf}
+                  onChange={(e) => setStartingBalanceAsOf(e.target.value)}
                 />
               </div>
               <div className="space-y-1.5">

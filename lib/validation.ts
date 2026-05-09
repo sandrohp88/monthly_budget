@@ -80,6 +80,8 @@ export const extraUpdateSchema = extraCreateSchema;
 
 export const settingsUpdateSchema = z.object({
   startingBalanceCents: cents,
+  /** Date the starting balance was true. See settings.startingBalanceAsOf in schema.ts. */
+  startingBalanceAsOf: isoDate,
   defaultPaycheckCents: cents,
   firstPaydayDate: isoDate,
   payFrequencyDays: z.number().int().min(1).max(60),
@@ -93,6 +95,7 @@ export const setupSchema = z.object({
   password: z.string().min(8).max(200),
   displayName: z.string().min(1).max(80),
   startingBalanceCents: cents,
+  startingBalanceAsOf: isoDate,
   defaultPaycheckCents: cents,
   firstPaydayDate: isoDate,
   payFrequencyDays: z.number().int().min(1).max(60),
