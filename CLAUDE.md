@@ -213,11 +213,30 @@ are semantically accurate.
 - **State telegraphs in color, not just copy** — variant badges/borders carry the meaning.
 - Pages animate in with `fade-in` class on the root.
 
-### Dark only
-The app forces `dark` class in `app/layout.tsx`. There is no light mode. The
-theme tokens in `globals.css` map shadcn HSL vars onto the Home Apps palette
-so existing primitives (Button, Dialog, etc.) inherit automatically — no
-per-component edit needed for the rebrand.
+### Themes
+The app ships **6 themes**, registered in `lib/themes.ts` and mirrored as
+`[data-theme="<id>"]` blocks in `app/globals.css`. Switched at runtime by
+`next-themes` via `<ThemeToggle />` in the topbar; persisted to
+localStorage. `lib/themes.test.ts` enforces token exhaustiveness — adding a
+new `TokenName` requires every theme to define it.
+
+| ID | Label | Vibe |
+|---|---|---|
+| `dark` | Tactical Dark | Cyan + phosphor-green on tactical black (default) |
+| `light` | Field Manual | Cool field-manual paper, navy-teal + forest |
+| `phosphor` | Phosphor CRT | Single-accent amber monochrome — terminal nostalgia |
+| `daylight` | Daylight | Warm cream paper for outdoor / glossy-screen reading |
+| `olive` | Olive Drab | Field-tactical khaki + mustard accent |
+| `high-contrast` | High Contrast | Pure black/white, WCAG-AAA targeting |
+
+Adding a new theme:
+1. Append a `<ID>_TOKENS` block + `THEMES` entry in `lib/themes.ts`.
+2. Mirror it as a `[data-theme="<id>"]` CSS block in `app/globals.css`,
+   defining both the raw palette vars (`--bg-0`, `--cyan`, etc.) AND the
+   shadcn HSL bridge (`--background`, `--primary`, etc.) so Button/Dialog
+   inherit the new look without per-component edits.
+3. The picker auto-renders the new option; `THEME_IDS` flows into
+   `<NextThemes themes={...}>` automatically.
 
 ---
 
