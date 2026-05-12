@@ -45,7 +45,7 @@ npm run typecheck
 npm run lint
 npm run test               # vitest
 npm run build
-npx playwright test        # E2E happy-path (rare; spins its own server on :3217)
+npx playwright test        # E2E happy-path (rare; builds + spins localhost:3000)
 ```
 
 **Always `npm run check` before committing.** It catches everything CI would.
@@ -505,6 +505,7 @@ These bit us before. Don't repeat:
 20. **Plaid promo detection needs raw transaction text at sync time** — drafts only persist a small subset of Plaid's transaction payload. If you need issuer-specific promo clues, inspect nested fields from the live Transaction object (`payment_meta`, `counterparties`, category, location, etc.) before storing the draft; don't infer a promo from generic PayPal `LOAN_PAYMENTS` rows.
 21. **PayPal Credit special financing is split across two Plaid accounts** — qualifying purchases appear on the PayPal wallet account (`depository/paypal`), while payments appear on the linked PayPal Credit account (`credit/paypal`) as `LOAN_PAYMENTS`. Purchases over $150 can seed promo rows, but Plaid payment rows do not expose PayPal's targeted promo allocation.
 22. **PayPal's promo list beats transaction FIFO** — PayPal's issuer UI exposes actual promotional balances, payoff dates, and targeted paid-off promos that Plaid transaction history does not. When a promo row's `authoritativeSource` column is non-null (introduced in migration `0018`), do not overwrite its amount/date from transaction FIFO; an inactive zero-balance PayPal promo must also stay paid off on later syncs. Legacy rows used a sentinel string `"PayPal authoritative promo data"` in `notes` — `0018` backfills the typed column from that and the sync logic now reads only `authoritativeSource`.
+23. **Playwright must use a host allowed by `AUTH_URL`** — middleware rejects unknown `Host` headers with 421. The E2E config builds and serves on `localhost:3000` to match local `.env`; changing the test port/host also requires updating the auth URL used at build time.
 
 ---
 

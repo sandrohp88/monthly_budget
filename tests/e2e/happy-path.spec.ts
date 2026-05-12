@@ -4,16 +4,7 @@ import { test, expect } from "@playwright/test";
 // Locators use case-insensitive regex so a future copy tweak (or a casing
 // change in the design system) doesn't silently break the suite.
 
-// TODO: this happy-path test needs maintenance. The setup form renders and
-// fields fill correctly, but the post-submit navigation to "/" intermittently
-// times out — likely the JWT cookie isn't being set under `next start` with
-// the current AUTH_URL/AUTH_SECRET fixture. Skipping until we can either:
-//   (a) reproduce the failure in dev and fix the root cause, or
-//   (b) replace this with a test that bypasses NextAuth (e.g. seeds a session
-//       cookie directly via API) and exercises the post-login screens.
-// Strong coverage is provided by the 127 unit + integration tests covering
-// the math, repo, and Plaid-sync surface — see lib/*.test.ts.
-test.skip("setup → add a bill → add an extra → see them in projection", async ({ page }) => {
+test("setup -> add a bill -> add an extra -> see them in projection", async ({ page }) => {
   await page.goto("/setup");
   await expect(page.getByText(/CREATE OWNER ACCOUNT/i)).toBeVisible();
 
@@ -29,17 +20,19 @@ test.skip("setup → add a bill → add an extra → see them in projection", as
 
   await page.goto("/bills");
   await page.getByRole("button", { name: /^ADD BILL$/i }).click();
-  await page.getByLabel(/^name$/i).fill("Rent");
-  await page.getByLabel(/^amount$/i).fill("700");
-  await page.getByLabel(/due day/i).fill("1");
-  await page.getByRole("button", { name: /^save$/i }).click();
+  const billDialog = page.getByRole("dialog", { name: /add bill/i });
+  await billDialog.getByLabel(/^name$/i).fill("Rent");
+  await billDialog.getByLabel(/amount/i).fill("700");
+  await billDialog.getByLabel(/next due date/i).fill("2026-05-15");
+  await billDialog.getByRole("button", { name: /^save$/i }).click();
   await expect(page.getByText("Rent").first()).toBeVisible();
 
   await page.goto("/extras");
   await page.getByRole("button", { name: /^ADD EXPENSE$/i }).first().click();
-  await page.getByLabel(/description/i).fill("Concert tickets");
-  await page.getByLabel(/^amount$/i).fill("90");
-  await page.getByRole("button", { name: /^save$/i }).click();
+  const extraDialog = page.getByRole("dialog", { name: /add expense/i });
+  await extraDialog.getByLabel(/description/i).fill("Concert tickets");
+  await extraDialog.getByLabel(/amount/i).fill("90");
+  await extraDialog.getByRole("button", { name: /^save$/i }).click();
   await expect(page.getByText("Concert tickets").first()).toBeVisible();
 
   await page.goto("/projection");

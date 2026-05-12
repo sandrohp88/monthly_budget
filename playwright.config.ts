@@ -9,7 +9,7 @@ export default defineConfig({
   reporter: "list",
   globalSetup: "./tests/e2e/global-setup.ts",
   use: {
-    baseURL: "http://127.0.0.1:3217",
+    baseURL: "http://localhost:3000",
     trace: "on-first-retry",
   },
   projects: [
@@ -19,14 +19,14 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npx next start -p 3217 -H 127.0.0.1",
-    url: "http://127.0.0.1:3217",
+    command: "npx next build && npx next start -p 3000 -H localhost",
+    url: "http://localhost:3000",
     reuseExistingServer: false,
     timeout: 180_000,
     env: {
       DATABASE_URL: "file:./data/test.db",
       AUTH_SECRET: "test-secret-test-secret-test-secret-test",
-      AUTH_URL: "http://127.0.0.1:3217",
+      AUTH_URL: "http://localhost:3000",
       NODE_ENV: "production",
     },
   },
