@@ -311,44 +311,44 @@ const HIGH_CONTRAST_TOKENS: ThemeTokens = {
 export const THEMES: Theme[] = [
   {
     id: "dark",
-    label: "Tactical Dark",
+    label: "Midnight",
     mode: "dark",
-    description: "Cyberpunk × military: cyan + phosphor on tactical black",
+    description: "A low-glare dark workspace.",
     tokens: DARK_TOKENS,
   },
   {
     id: "light",
-    label: "Field Manual",
+    label: "Daylight",
     mode: "light",
-    description: "Cool field-manual paper, navy-teal + forest accents",
+    description: "Warm paper, soft cards, calm contrast.",
     tokens: LIGHT_TOKENS,
   },
   {
     id: "phosphor",
-    label: "Phosphor CRT",
+    label: "Indigo",
     mode: "dark",
-    description: "Single-accent amber monochrome — terminal nostalgia",
+    description: "Cool evening tones with clear accent color.",
     tokens: PHOSPHOR_TOKENS,
   },
   {
     id: "daylight",
-    label: "Daylight",
+    label: "Cream",
     mode: "light",
-    description: "Warm cream paper for outdoor / glossy-screen reading",
+    description: "A softer notebook-like budget view.",
     tokens: DAYLIGHT_TOKENS,
   },
   {
     id: "olive",
-    label: "Olive Drab",
+    label: "Sage",
     mode: "dark",
-    description: "Field-tactical khaki + mustard accent",
+    description: "Muted green surfaces for long planning sessions.",
     tokens: OLIVE_TOKENS,
   },
   {
     id: "high-contrast",
     label: "High Contrast",
     mode: "dark",
-    description: "Pure black/white, WCAG-AAA targeting",
+    description: "Extra separation for focused review.",
     tokens: HIGH_CONTRAST_TOKENS,
   },
 ];
@@ -363,4 +363,4 @@ export function getTheme(id: string): Theme | undefined {
  * Default theme id when the user hasn't picked one. Matches `next-themes`
  * defaultTheme so SSR and hydration agree.
  */
-export const DEFAULT_THEME_ID = "dark";
+export const DEFAULT_THEME_ID = "light";

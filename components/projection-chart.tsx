@@ -101,25 +101,25 @@ export function ProjectionChart({ data }: { data: ReadonlyArray<Point> }) {
           <XAxis
             dataKey="date"
             minTickGap={32}
-            tick={{ fontSize: 9, fill: tokens.text3, fontFamily: "var(--font-mono)" }}
+            tick={{ fontSize: 11, fill: tokens.text3, fontFamily: "var(--font-ui)" }}
             stroke={tokens.border2}
             tickFormatter={(v: string) => v.slice(5)}
           />
           <YAxis
             tickFormatter={(v: number) => formatCents(Math.round(v * 100), currency)}
-            tick={{ fontSize: 9, fill: tokens.text3, fontFamily: "var(--font-mono)" }}
+            tick={{ fontSize: 11, fill: tokens.text3, fontFamily: "var(--font-ui)" }}
             width={80}
             stroke={tokens.border2}
           />
           <Tooltip
             formatter={(v: number) => formatCents(Math.round(v * 100), currency)}
-            labelStyle={{ color: tokens.text1, fontSize: 10, fontFamily: "var(--font-mono)" }}
-            itemStyle={{ color: tokens.cyan, fontFamily: "var(--font-mono)", fontSize: 11 }}
+            labelStyle={{ color: tokens.text1, fontSize: 12, fontFamily: "var(--font-ui)" }}
+            itemStyle={{ color: tokens.cyan, fontFamily: "var(--font-ui)", fontSize: 12 }}
             contentStyle={{
               background: tokens.bg1,
               border: `1px solid ${tokens.border2}`,
-              borderRadius: 3,
-              fontFamily: "var(--font-mono)",
+              borderRadius: 12,
+              fontFamily: "var(--font-ui)",
             }}
           />
           <ReferenceLine y={0} stroke={tokens.red} strokeDasharray="4 4" />

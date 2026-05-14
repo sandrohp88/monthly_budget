@@ -16,7 +16,7 @@ const SheetOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
-    className={cn("fixed inset-0 z-50 bg-black/65 backdrop-blur-[2px]", className)}
+    className={cn("fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px]", className)}
     {...props}
   />
 ));
@@ -31,15 +31,14 @@ export const SheetContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed inset-y-0 z-50 flex w-full max-w-[480px] flex-col gap-0 bg-[var(--bg-1)] p-0 " +
-          "shadow-[-20px_0_40px_rgba(0,0,0,0.4),-1px_0_20px_var(--mint-glow)]",
-        side === "right" ? "right-0 border-l border-[var(--mint-dim)]" : "left-0 border-r border-[var(--mint-dim)]",
+        "fixed inset-y-0 z-50 flex w-full max-w-[480px] flex-col gap-0 bg-[var(--bg-0)] p-0 shadow-[var(--shadow-lg)]",
+        side === "right" ? "right-0 border-l border-[var(--border-raw)]" : "left-0 border-r border-[var(--border-raw)]",
         className,
       )}
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 text-[var(--text-2)] hover:text-[var(--mint)]">
+      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full p-2 opacity-70 transition-opacity hover:bg-[var(--bg-2)] hover:opacity-100 text-[var(--text-2)] hover:text-[var(--mint)]">
         <X className="h-4 w-4" />
       </DialogPrimitive.Close>
     </DialogPrimitive.Content>
@@ -71,7 +70,7 @@ export const SheetTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn("text-[14px] font-bold uppercase tracking-[0.15em] text-[var(--text-0)]", className)}
+    className={cn("text-[16px] font-bold tracking-normal text-[var(--text-0)]", className)}
     {...props}
   />
 ));
@@ -83,7 +82,7 @@ export const SheetDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn("text-[10px] tracking-wider text-[var(--text-2)]", className)}
+    className={cn("text-[13px] leading-relaxed text-[var(--text-2)]", className)}
     {...props}
   />
 ));

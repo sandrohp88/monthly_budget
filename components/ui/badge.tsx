@@ -2,11 +2,8 @@ import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/cn";
 
-/* FINANCE_OS badge: rectangular pill, monospace, uppercase, letter-spaced.
-   Variant colors derive from theme tokens via color-mix() so every theme
-   (including phosphor / high-contrast / daylight) flips correctly. */
 const badgeVariants = cva(
-  "inline-flex items-center rounded-sm border px-2 py-[2px] text-[9px] font-medium uppercase tracking-[0.12em] font-mono",
+  "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium tracking-normal",
   {
     variants: {
       variant: {

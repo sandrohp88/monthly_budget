@@ -25,20 +25,19 @@ export function SetupForm() {
 
   return (
     <div className="w-full max-w-lg">
-      {/* Brand */}
       <div className="mb-6 flex items-center gap-3">
         <div
-          className="grid h-8 w-8 place-items-center rounded-sm bg-[var(--mint)] text-[15px] font-extrabold text-[var(--bg-0)]"
-          style={{ boxShadow: "0 0 16px var(--mint-glow)" }}
+          className="grid h-10 w-10 place-items-center rounded-full bg-[var(--mint)] text-[18px] font-extrabold text-[var(--button-primary-fg)]"
+          style={{ boxShadow: "var(--shadow-sm)" }}
         >
           $
         </div>
         <div>
-          <div className="text-[14px] font-bold uppercase tracking-[0.12em] text-[var(--text-0)]">
-            FINANCE_OS
+          <div className="text-[22px] font-extrabold tracking-normal text-[var(--text-0)]">
+            Ledger
           </div>
-          <div className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-            INITIAL_BOOTSTRAP // OWNER_PROVISION
+          <div className="text-[13px] text-[var(--text-3)]">
+            Set up your budget
           </div>
         </div>
       </div>
@@ -46,8 +45,8 @@ export function SetupForm() {
       <Card>
         <CardHeader>
           <div>
-            <CardSubTag>SETUP_PROMPT</CardSubTag>
-            <CardTitle className="mt-0.5">CREATE OWNER ACCOUNT</CardTitle>
+            <CardSubTag>First run</CardSubTag>
+            <CardTitle className="mt-0.5">Create owner account</CardTitle>
           </div>
         </CardHeader>
         <CardContent>
@@ -87,7 +86,7 @@ export function SetupForm() {
           >
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label htmlFor="displayName">DISPLAY NAME</Label>
+                <Label htmlFor="displayName">Display name</Label>
                 <Input
                   id="displayName"
                   required
@@ -96,7 +95,7 @@ export function SetupForm() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="email">EMAIL</Label>
+                <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
                   type="email"
@@ -106,7 +105,7 @@ export function SetupForm() {
                 />
               </div>
               <div className="col-span-2 space-y-1.5">
-                <Label htmlFor="password">PASSWORD (MIN 8 CHARS)</Label>
+                <Label htmlFor="password">Password (min 8 chars)</Label>
                 <Input
                   id="password"
                   type="password"
@@ -117,7 +116,7 @@ export function SetupForm() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="startingBalance">STARTING BALANCE</Label>
+                <Label htmlFor="startingBalance">Starting balance</Label>
                 <MoneyInput
                   id="startingBalance"
                   valueCents={startingBalanceCents}
@@ -125,7 +124,7 @@ export function SetupForm() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="startingBalanceAsOf">AS OF</Label>
+                <Label htmlFor="startingBalanceAsOf">As of</Label>
                 <Input
                   id="startingBalanceAsOf"
                   type="date"
@@ -135,7 +134,7 @@ export function SetupForm() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="defaultPaycheck">DEFAULT PAYCHECK</Label>
+                <Label htmlFor="defaultPaycheck">Default paycheck</Label>
                 <MoneyInput
                   id="defaultPaycheck"
                   valueCents={defaultPaycheckCents}
@@ -143,7 +142,7 @@ export function SetupForm() {
                 />
               </div>
               <div className="col-span-2 space-y-1.5">
-                <Label htmlFor="firstPayday">FIRST PAYDAY</Label>
+                <Label htmlFor="firstPayday">First payday</Label>
                 <Input
                   id="firstPayday"
                   type="date"
@@ -154,12 +153,12 @@ export function SetupForm() {
               </div>
             </div>
             {error ? (
-              <p className="rounded-sm border border-[rgba(239,68,68,0.3)] bg-[var(--red-glow)] px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-[var(--red)]">
+              <p className="rounded-[10px] border border-[rgba(239,68,68,0.3)] bg-[var(--red-glow)] px-3 py-2 text-[13px] text-[var(--red)]">
                 {error}
               </p>
             ) : null}
             <Button type="submit" variant="primary" className="w-full" disabled={loading}>
-              {loading ? "PROVISIONING…" : "CREATE ACCOUNT"}
+              {loading ? "Creating account..." : "Create account"}
             </Button>
           </form>
         </CardContent>

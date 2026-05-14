@@ -1,8 +1,6 @@
 import * as React from "react";
 import { cn } from "@/lib/cn";
 
-/* FINANCE_OS KPI tile: dark card with optional corner brackets, label,
-   value, and small delta line. */
 export function Tile({
   label,
   value,
@@ -28,15 +26,12 @@ export function Tile({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-sm border border-[var(--border-raw)] bg-[var(--bg-card)] " +
-          "px-[18px] py-4 transition-colors hover:border-[var(--border-2)]",
+        "relative overflow-hidden rounded-[14px] border border-[var(--border-raw)] bg-[var(--bg-card)] " +
+          "px-5 py-4 shadow-[var(--shadow-sm)] transition-colors hover:border-[var(--border-2)]",
         className,
       )}
     >
-      <span className="absolute right-2 top-2 h-2 w-2 border-r border-t border-[var(--mint-dim)]" />
-      <span className="absolute bottom-2 left-2 h-2 w-2 border-b border-l border-[var(--mint-dim)]" />
-
-      <div className="mb-3 flex items-center justify-between text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-2)]">
+      <div className="mb-3 flex items-center justify-between text-[12px] font-medium text-[var(--text-2)]">
         <span>{label}</span>
         {badge}
       </div>
@@ -44,7 +39,7 @@ export function Tile({
         {value}
       </div>
       {delta != null ? (
-        <div className="text-[10px] tracking-wide text-[var(--text-2)]">{delta}</div>
+        <div className="text-[12px] leading-relaxed text-[var(--text-2)]">{delta}</div>
       ) : null}
     </div>
   );

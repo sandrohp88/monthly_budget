@@ -1,9 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { ensureAuth } from "./auth";
 
-// All UI copy is uppercase + letter-spaced per the Home Apps design system.
-// Locators use case-insensitive regex so a future copy tweak (or a casing
-// change in the design system) doesn't silently break the suite.
+// Locators use case-insensitive regex so copy casing tweaks do not silently
+// break the suite.
 
 test("setup -> add a bill -> add an extra -> see them in projection", async ({ page }) => {
   await ensureAuth(page);
@@ -38,6 +37,6 @@ test("app boots: /setup or /login renders", async ({ page }) => {
   await page.goto("/");
   // Middleware redirects unauth users; we should land on /setup or /login.
   await page.waitForURL(/\/(setup|login)/);
-  // FINANCE_OS branding is on every entry screen.
-  await expect(page.getByText(/FINANCE_OS/).first()).toBeVisible();
+  // Ledger branding is on every entry screen.
+  await expect(page.getByText(/^Ledger$/).first()).toBeVisible();
 });

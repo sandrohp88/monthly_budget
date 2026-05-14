@@ -11,17 +11,17 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { UtcClock } from "@/components/utc-clock";
 
 const ROUTE_TO_CRUMB: Record<string, string> = {
-  "/": "DASHBOARD",
-  "/bills": "BILLS",
-  "/accounts": "ACCOUNTS",
-  "/transactions": "TRANSACTIONS",
-  "/credit-cards": "CREDIT CARDS",
-  "/paychecks": "PAYCHECKS",
-  "/extras": "ONE-TIME",
-  "/projection": "LEDGER",
-  "/assets": "ASSETS",
-  "/reports": "REPORTS",
-  "/settings": "SETTINGS",
+  "/": "Dashboard",
+  "/bills": "Bills",
+  "/accounts": "Accounts",
+  "/transactions": "Transactions",
+  "/credit-cards": "Credit cards",
+  "/paychecks": "Paychecks",
+  "/extras": "One-time",
+  "/projection": "Ledger",
+  "/assets": "Assets",
+  "/reports": "Reports",
+  "/settings": "Settings",
 };
 
 export type { SidebarSummary };
@@ -57,31 +57,26 @@ export function AppShell({
         />
         <div className="flex min-w-0 flex-1 flex-col">
           <header
-            className="sticky top-0 z-10 flex h-[60px] shrink-0 items-center justify-between border-b border-[var(--border-raw)] px-4 backdrop-blur-md md:px-9"
+            className="sticky top-0 z-10 flex h-[64px] shrink-0 items-center justify-between border-b border-[var(--border-raw)] px-4 backdrop-blur-md md:px-9"
             style={{ background: "var(--header-glass)" }}
           >
-            <div className="flex items-center gap-3 text-[10px] tracking-[0.2em] text-[var(--text-2)] uppercase">
+            <div className="flex items-center gap-3 text-[13px] font-medium text-[var(--text-2)]">
               <button
                 type="button"
                 onClick={() => setMobileNavOpen(true)}
-                className="mr-1 text-[var(--mint)] transition-colors hover:text-[var(--text-0)] md:hidden"
+                className="mr-1 rounded-full p-2 text-[var(--text-1)] transition-colors hover:bg-[var(--bg-2)] hover:text-[var(--text-0)] md:hidden"
                 aria-label="Open navigation"
               >
                 <Menu className="h-5 w-5" />
               </button>
-              <span>
-                <span className="text-[var(--text-3)]">{"// "}</span>
-                <span className="text-[var(--mint)]">{crumb}</span>
-              </span>
-              <span className="text-[var(--border-raw)]">|</span>
+              <span className="text-[var(--text-0)]">{crumb}</span>
+              <span className="h-1 w-1 rounded-full bg-[var(--border-2)]" />
               <UtcClock />
             </div>
-            <div className="flex items-center gap-4">
-              <div className="text-[10px] tracking-[0.15em] text-[var(--text-2)] uppercase">
-                <span className="text-[var(--text-3)]">USER</span>{" "}
-                <span className="text-[var(--text-1)]">{displayName}</span>
-                <span className="mx-2 text-[var(--text-3)]">/</span>
-                <span className="text-[var(--mint)]">{role}</span>
+            <div className="flex items-center gap-3">
+              <div className="hidden text-right text-[12px] text-[var(--text-2)] sm:block">
+                <span className="block font-semibold text-[var(--text-0)]">{displayName}</span>
+                <span>{role}</span>
               </div>
               <ThemeToggle />
             </div>
@@ -96,9 +91,10 @@ export function AppShell({
             background: "var(--bg-1)",
             color: "var(--text-0)",
             border: "1px solid var(--border-2)",
-            fontFamily: "var(--font-mono)",
-            fontSize: "11px",
-            letterSpacing: "0.05em",
+            borderRadius: "14px",
+            boxShadow: "var(--shadow-md)",
+            fontFamily: "var(--font-ui)",
+            fontSize: "13px",
           },
         }}
       />

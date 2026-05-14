@@ -18,20 +18,19 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
 
   return (
     <div className="w-full max-w-sm">
-      {/* Brand block matching the sidebar */}
       <div className="mb-6 flex items-center gap-3">
         <div
-          className="grid h-8 w-8 place-items-center rounded-sm bg-[var(--mint)] text-[15px] font-extrabold text-[var(--bg-0)]"
-          style={{ boxShadow: "0 0 16px var(--mint-glow)" }}
+          className="grid h-10 w-10 place-items-center rounded-full bg-[var(--mint)] text-[18px] font-extrabold text-[var(--button-primary-fg)]"
+          style={{ boxShadow: "var(--shadow-sm)" }}
         >
           $
         </div>
         <div>
-          <div className="text-[14px] font-bold uppercase tracking-[0.12em] text-[var(--text-0)]">
-            FINANCE_OS
+          <div className="text-[22px] font-extrabold tracking-normal text-[var(--text-0)]">
+            Ledger
           </div>
-          <div className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-            v1.0.0 // local
+          <div className="text-[13px] text-[var(--text-3)]">
+            Personal budget
           </div>
         </div>
       </div>
@@ -39,8 +38,8 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
       <Card>
         <CardHeader>
           <div>
-            <CardSubTag>AUTH_PROMPT</CardSubTag>
-            <CardTitle className="mt-0.5">SIGN IN</CardTitle>
+            <CardSubTag>Welcome back</CardSubTag>
+            <CardTitle className="mt-0.5">Sign in</CardTitle>
           </div>
         </CardHeader>
         <CardContent>
@@ -58,7 +57,7 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
               });
               setLoading(false);
               if (!res || res.error) {
-                setError("INVALID CREDENTIALS OR RATE-LIMITED");
+                setError("Invalid credentials or rate-limited.");
                 return;
               }
               router.push(callbackUrl || "/");
@@ -66,7 +65,7 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
             }}
           >
             <div className="space-y-1.5">
-              <Label htmlFor="email">EMAIL</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
                 name="email"
@@ -78,7 +77,7 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="password">PASSWORD</Label>
+              <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
                 name="password"
@@ -90,21 +89,19 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
               />
             </div>
             {error ? (
-              <p className="rounded-sm border border-[rgba(239,68,68,0.3)] bg-[var(--red-glow)] px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-[var(--red)]">
+              <p className="rounded-[10px] border border-[rgba(239,68,68,0.3)] bg-[var(--red-glow)] px-3 py-2 text-[13px] text-[var(--red)]">
                 {error}
               </p>
             ) : null}
             <Button type="submit" variant="primary" className="w-full" disabled={loading}>
-              {loading ? "AUTHENTICATING…" : "SIGN IN"}
+              {loading ? "Signing in..." : "Sign in"}
             </Button>
           </form>
         </CardContent>
       </Card>
 
-      <div className="mt-4 flex items-center gap-2 text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-        <span>{">"}</span>
-        <span>READY</span>
-        <span className="blink text-[var(--mint)]">_</span>
+      <div className="mt-4 text-[12px] text-[var(--text-3)]">
+        Ready
       </div>
     </div>
   );

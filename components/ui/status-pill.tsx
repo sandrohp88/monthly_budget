@@ -1,10 +1,6 @@
 import * as React from "react";
 import { cn } from "@/lib/cn";
 
-/* A pill smaller than Badge with a 1px border and uppercase text. Used inline
-   in tables and cards to mark row state. Variant colors derive from theme
-   tokens via color-mix() so every theme (phosphor, daylight, high-contrast)
-   gets a coherent fill/border. */
 export function StatusPill({
   children,
   variant = "default",
@@ -25,7 +21,7 @@ export function StatusPill({
   return (
     <span
       className={cn(
-        "inline-block rounded-sm border px-2 py-[3px] text-[9px] font-medium uppercase tracking-[0.12em] font-mono",
+        "inline-block rounded-full border px-2.5 py-1 text-[11px] font-medium tracking-normal",
         map[variant],
         className,
       )}

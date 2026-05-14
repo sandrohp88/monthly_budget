@@ -22,7 +22,7 @@ export function UtcClock() {
 
   return (
     <span
-      className="font-mono text-[10px] tabular-nums tracking-[0.1em] text-[var(--text-3)]"
+      className="text-[12px] tabular-nums text-[var(--text-3)]"
       suppressHydrationWarning
     >
       {now ?? "0000.00.00 · 00:00:00 UTC"}

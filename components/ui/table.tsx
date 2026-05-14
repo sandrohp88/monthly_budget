@@ -6,7 +6,7 @@ export const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTM
     <div className="relative w-full overflow-auto">
       <table
         ref={ref}
-        className={cn("w-full caption-bottom text-[11px] font-mono tabular", className)}
+        className={cn("w-full caption-bottom text-[13px] tabular", className)}
         {...props}
       />
     </div>
@@ -20,7 +20,7 @@ export const TableHeader = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <thead
     ref={ref}
-    className={cn("[&_tr]:border-b [&_tr]:border-[var(--border-raw)] sticky top-0 bg-[var(--bg-1)]", className)}
+    className={cn("[&_tr]:border-b [&_tr]:border-[var(--border-raw)] sticky top-0 bg-[var(--bg-card)]", className)}
     {...props}
   />
 ));
@@ -41,7 +41,7 @@ export const TableFooter = React.forwardRef<
   <tfoot
     ref={ref}
     className={cn(
-      "border-t border-[var(--mint-dim)] bg-[var(--bg-1)] text-[var(--text-0)] font-bold tracking-widest [&>tr]:last:border-b-0",
+      "border-t border-[var(--border-raw)] bg-[var(--bg-card)] text-[var(--text-0)] font-bold [&>tr]:last:border-b-0",
       className,
     )}
     {...props}
@@ -70,7 +70,7 @@ export const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      "px-4 py-3 text-left align-middle text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)] whitespace-nowrap " +
+      "px-4 py-3 text-left align-middle text-[11px] font-semibold tracking-normal text-[var(--text-3)] whitespace-nowrap " +
         "[&:has([role=checkbox])]:pr-0",
       className,
     )}
@@ -86,7 +86,7 @@ export const TableCell = React.forwardRef<
   <td
     ref={ref}
     className={cn(
-      "px-4 py-3 align-middle text-[var(--text-1)] tracking-tight whitespace-nowrap [&:has([role=checkbox])]:pr-0",
+      "px-4 py-3 align-middle text-[var(--text-1)] tracking-normal whitespace-nowrap [&:has([role=checkbox])]:pr-0",
       className,
     )}
     {...props}

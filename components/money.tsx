@@ -19,8 +19,7 @@ export function Money({
   const currency = useCurrency();
   const value = formatCents(Math.abs(cents), currency);
   const display = cents < 0 ? `-${value}` : signed && cents > 0 ? `+${value}` : value;
-  // Money is "data" per the Home Apps spec — render in JetBrains Mono.
-  // The .tabular class applies both font-mono and font-variant-numeric.
+  // Keep money aligned without switching away from the app's readable UI font.
   const color = colorize ? (cents < 0 ? "text-destructive" : cents > 0 ? "text-emerald-600" : "") : "";
   return (
     <span className={cn("tabular", color, className)}>{display}</span>
