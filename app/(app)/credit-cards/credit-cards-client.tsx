@@ -1271,13 +1271,13 @@ function StatementEditDialog({
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>STATEMENT BALANCE</Label>
+            <Label>Statement balance</Label>
             <MoneyInput valueCents={statementBalanceCents} onChangeCents={setBalance} />
           </div>
-          <label className="flex cursor-pointer items-center justify-between border-y border-[var(--border-raw)] py-3">
-            <Label>MARK AS PAID</Label>
-            <Switch checked={paidToggle} onCheckedChange={setPaidToggle} />
-          </label>
+          <div className="flex items-center justify-between border-y border-[var(--border-raw)] py-3">
+            <Label>Mark as paid</Label>
+            <Switch aria-label="Mark as paid" checked={paidToggle} onCheckedChange={setPaidToggle} />
+          </div>
           {paidToggle ? (
             <>
               <div className="grid grid-cols-2 gap-4">

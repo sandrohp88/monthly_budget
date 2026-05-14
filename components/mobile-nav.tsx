@@ -34,28 +34,26 @@ export function MobileNav({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="left" className="w-60 max-w-60 p-0">
+      <SheetContent side="left" className="w-72 max-w-72 p-0">
         <SheetTitle className="sr-only">Navigation</SheetTitle>
 
         {/* brand */}
-        <div className="flex items-center gap-2.5 border-b border-[var(--border-raw)] px-5 py-[14px]">
+        <div className="flex items-center gap-3 border-b border-[var(--border-raw)] px-5 py-4">
           <div
-            className="grid h-7 w-7 place-items-center rounded-sm bg-[var(--mint)] text-[14px] font-extrabold text-[var(--bg-0)] tracking-tight"
-            style={{ boxShadow: "0 0 14px var(--mint-glow)" }}
+            className="grid h-9 w-9 place-items-center rounded-full bg-[var(--mint)] text-[16px] font-extrabold tracking-tight text-[var(--button-primary-fg)]"
+            style={{ boxShadow: "var(--shadow-sm)" }}
           >
             $
           </div>
           <div>
-            <div className="text-[12px] font-bold uppercase tracking-[0.1em]">FINANCE_OS</div>
-            <div className="text-[9px] uppercase tracking-[0.1em] text-[var(--text-3)] mt-0.5">
-              v1.0.0 // local
-            </div>
+            <div className="text-[18px] font-extrabold tracking-normal">Ledger</div>
+            <div className="mt-0.5 text-[12px] text-[var(--text-3)]">Personal budget</div>
           </div>
         </div>
 
         {/* nav */}
         <nav className="flex-1 overflow-y-auto py-3">
-          <SectionLabel>NAV_01</SectionLabel>
+          <SectionLabel>Plan</SectionLabel>
           {NAV.filter((n) => n.section === 1).map((item) => {
             const Icon = item.icon;
             const active = pathname === item.href;
@@ -64,19 +62,19 @@ export function MobileNav({
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex items-center gap-2.5 px-5 py-2.5 text-[11px] uppercase tracking-[0.1em] cursor-pointer",
-                  "border-l-2 border-transparent transition-all",
+                  "mx-3 flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] font-medium",
+                  "border border-transparent transition-all",
                   active
-                    ? "bg-gradient-to-r from-[var(--mint-glow)] to-transparent text-[var(--mint)] border-l-[var(--mint)]"
+                    ? "border-[var(--border-raw)] bg-[var(--bg-card)] text-[var(--mint)] shadow-[var(--shadow-sm)]"
                     : "text-[var(--text-1)] hover:bg-[var(--bg-2)] hover:text-[var(--text-0)]",
                 )}
               >
-                <Icon className="h-3.5 w-3.5" />
+                <Icon className="h-4 w-4" />
                 <span className="flex-1">{item.label}</span>
               </Link>
             );
           })}
-          <SectionLabel className="mt-4">NAV_02</SectionLabel>
+          <SectionLabel className="mt-4">Manage</SectionLabel>
           {NAV.filter((n) => n.section === 2).map((item) => {
             const Icon = item.icon;
             const active = pathname === item.href;
@@ -85,14 +83,14 @@ export function MobileNav({
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex items-center gap-2.5 px-5 py-2.5 text-[11px] uppercase tracking-[0.1em] cursor-pointer",
-                  "border-l-2 border-transparent transition-all",
+                  "mx-3 flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] font-medium",
+                  "border border-transparent transition-all",
                   active
-                    ? "bg-gradient-to-r from-[var(--mint-glow)] to-transparent text-[var(--mint)] border-l-[var(--mint)]"
+                    ? "border-[var(--border-raw)] bg-[var(--bg-card)] text-[var(--mint)] shadow-[var(--shadow-sm)]"
                     : "text-[var(--text-1)] hover:bg-[var(--bg-2)] hover:text-[var(--text-0)]",
                 )}
               >
-                <Icon className="h-3.5 w-3.5" />
+                <Icon className="h-4 w-4" />
                 <span className="flex-1">{item.label}</span>
               </Link>
             );
@@ -102,8 +100,8 @@ export function MobileNav({
         {/* net position widget */}
         {summary && summary.sparkline.length >= 2 ? (
           <div className="border-t border-[var(--border-raw)] px-5 py-3">
-            <div className="mb-1.5 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
-              {"// NET POSITION"}
+            <div className="mb-1.5 text-[12px] font-medium text-[var(--text-3)]">
+              Net position
             </div>
             <div className="tabular text-[15px] font-bold leading-none text-[var(--text-0)]">
               <Money cents={summary.startingBalanceCents} />
@@ -111,7 +109,7 @@ export function MobileNav({
             <div className="mt-2">
               <Sparkline data={summary.sparkline} height={26} stroke="var(--mint)" />
             </div>
-            <div className="mt-1 flex items-center justify-between text-[9px] uppercase tracking-[0.15em]">
+            <div className="mt-1 flex items-center justify-between text-[11px]">
               <span className="text-[var(--text-3)]">30D</span>
               <span
                 className={cn(
@@ -144,11 +142,11 @@ function SectionLabel({
   return (
     <div
       className={cn(
-        "px-5 pt-2 pb-1.5 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]",
+        "px-6 pt-2 pb-1.5 text-[12px] font-semibold text-[var(--text-3)]",
         className,
       )}
     >
-      {`// ${children}`}
+      {children}
     </div>
   );
 }

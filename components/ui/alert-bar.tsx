@@ -37,14 +37,14 @@ export function AlertBar({
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-sm border px-4 py-3 text-[11px] text-[var(--text-1)]",
+        "flex items-center gap-3 rounded-[14px] border px-4 py-3 text-[13px] text-[var(--text-1)]",
         tone.wrap,
         className,
       )}
     >
       <span
         className={cn(
-          "rounded-sm px-2 py-[3px] text-[9px] font-bold uppercase tracking-[0.15em]",
+          "rounded-full px-2.5 py-1 text-[11px] font-semibold tracking-normal",
           tone.tag,
         )}
       >

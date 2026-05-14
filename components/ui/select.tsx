@@ -16,9 +16,9 @@ export const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      "flex h-9 w-full items-center justify-between rounded-sm border border-[var(--border-raw)] " +
-        "bg-[var(--bg-1)] px-3 py-2 text-[12px] text-[var(--text-0)] font-mono " +
-        "focus:outline-none focus:border-[var(--mint-dim)] focus:shadow-[0_0_0_1px_var(--mint-glow)] " +
+      "flex h-10 w-full items-center justify-between rounded-[10px] border border-[var(--border-raw)] " +
+        "bg-[var(--bg-1)] px-3 py-2 text-[13px] text-[var(--text-0)] " +
+        "focus:outline-none focus:border-[var(--mint-dim)] focus:shadow-[0_0_0_3px_var(--mint-glow)] " +
         "disabled:cursor-not-allowed disabled:opacity-50 transition-colors",
       className,
     )}
@@ -40,8 +40,8 @@ export const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-sm border border-[var(--border-raw)] " +
-          "bg-[var(--bg-1)] text-[var(--text-0)] shadow-[0_8px_24px_rgba(0,0,0,0.5)]",
+        "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-[12px] border border-[var(--border-raw)] " +
+          "bg-[var(--bg-card)] text-[var(--text-0)] shadow-[var(--shadow-md)]",
         position === "popper" && "translate-y-1",
         className,
       )}
@@ -61,8 +61,8 @@ export const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-7 pr-2 " +
-        "text-[12px] outline-none font-mono " +
+      "relative flex w-full cursor-default select-none items-center rounded-[9px] py-2 pl-8 pr-2 " +
+        "text-[13px] outline-none " +
         "focus:bg-[var(--bg-3)] focus:text-[var(--mint)] data-[disabled]:opacity-50",
       className,
     )}

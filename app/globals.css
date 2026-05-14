@@ -733,3 +733,291 @@
 
 /* App container z-index above the grid overlay */
 [data-app-shell] { position: relative; z-index: 1; }
+
+/* Claude Design v2 app-wide refresh.
+   The original token names stay intact so existing pages inherit the new
+   visual language without rewiring their data or behavior. */
+@layer base {
+  :root,
+  .light,
+  [data-theme="light"] {
+    color-scheme: light;
+    --font-display: var(--font-ui);
+    --bg-0: #F7F6F2;
+    --bg-1: #FFFFFF;
+    --bg-2: #FBFAF6;
+    --bg-3: #F0EFEA;
+    --bg-card: #FFFFFF;
+    --bg-inset: #F0EFEA;
+    --mint: #1F8A5B;
+    --mint-bright: #166F49;
+    --mint-dim: #91C7AD;
+    --mint-glow: rgba(31, 138, 91, 0.12);
+    --cyan: #3B6FB5;
+    --cyan-bright: #2F5E9D;
+    --cyan-dim: #9BB5DA;
+    --cyan-glow: rgba(59, 111, 181, 0.12);
+    --phosphor: #1F8A5B;
+    --phosphor-dim: #91C7AD;
+    --phosphor-glow: rgba(31, 138, 91, 0.12);
+    --amber: #D08A2D;
+    --red: #C25450;
+    --red-glow: rgba(194, 84, 80, 0.12);
+    --success: #1F8A5B;
+    --info: #3B6FB5;
+    --text-0: #1C1B17;
+    --text-1: #56554E;
+    --text-2: #74726A;
+    --text-3: #92908A;
+    --text-4: #B8B6AF;
+    --border-raw: #EAE7DE;
+    --border-2: #D6D2C7;
+    --border-dim: #F2F0EA;
+    --radius: 14px;
+    --radius-chip: 999px;
+    --shadow-sm: 0 1px 2px rgba(28, 27, 23, 0.04), 0 8px 22px rgba(28, 27, 23, 0.06);
+    --shadow-md: 0 14px 34px rgba(28, 27, 23, 0.12);
+    --shadow-lg: 0 24px 60px rgba(28, 27, 23, 0.16);
+    --header-glass: rgba(247, 246, 242, 0.82);
+    --button-primary-fg: #FFFFFF;
+    --surface-veil: rgba(255, 255, 255, 0.9);
+    --surface-veil-strong: rgba(255, 255, 255, 0.96);
+    --cyan-tint-soft: rgba(59, 111, 181, 0.06);
+    --cyan-tint: rgba(59, 111, 181, 0.1);
+    --cyan-tint-row: rgba(59, 111, 181, 0.12);
+    --cyan-tint-edge: rgba(59, 111, 181, 0.18);
+    --cyan-tint-edge-hi: rgba(59, 111, 181, 0.22);
+    --cyan-tint-hover: rgba(59, 111, 181, 0.08);
+    --cyan-tint-zebra: rgba(59, 111, 181, 0.03);
+    --phosphor-tint-soft: rgba(31, 138, 91, 0.07);
+    --phosphor-tint: rgba(31, 138, 91, 0.1);
+    --phosphor-tint-row: rgba(31, 138, 91, 0.12);
+    --amber-tint-soft: rgba(208, 138, 45, 0.1);
+    --background: 44 25% 96%;
+    --foreground: 45 10% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 45 10% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 45 10% 10%;
+    --primary: 150 63% 33%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 48 28% 97%;
+    --secondary-foreground: 60 5% 32%;
+    --muted: 48 20% 94%;
+    --muted-foreground: 44 4% 45%;
+    --accent: 150 63% 33%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 2 47% 54%;
+    --destructive-foreground: 0 0% 100%;
+    --warning: 34 63% 50%;
+    --border: 43 22% 89%;
+    --input: 43 22% 89%;
+    --ring: 150 63% 33%;
+  }
+
+  .dark,
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --font-display: var(--font-ui);
+    --bg-0: #0E0F11;
+    --bg-1: #17191D;
+    --bg-2: #1B1D22;
+    --bg-3: #1F2228;
+    --bg-card: #17191D;
+    --bg-inset: #0A0B0D;
+    --mint: #34D399;
+    --mint-bright: #6EE7B7;
+    --mint-dim: #2F7F63;
+    --mint-glow: rgba(52, 211, 153, 0.13);
+    --cyan: #7AA7F7;
+    --cyan-bright: #AFC8FA;
+    --cyan-dim: #3E5E94;
+    --cyan-glow: rgba(122, 167, 247, 0.14);
+    --phosphor: #34D399;
+    --phosphor-dim: #2F7F63;
+    --phosphor-glow: rgba(52, 211, 153, 0.13);
+    --amber: #FBBF24;
+    --red: #F87171;
+    --red-glow: rgba(248, 113, 113, 0.13);
+    --success: #34D399;
+    --info: #7AA7F7;
+    --text-0: #F2F1ED;
+    --text-1: #D8D6CF;
+    --text-2: #A8A6A0;
+    --text-3: #6E6D67;
+    --text-4: #4A4A45;
+    --border-raw: #262A30;
+    --border-2: #363B43;
+    --border-dim: #1C1F24;
+    --radius: 14px;
+    --radius-chip: 999px;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25), 0 10px 24px rgba(0, 0, 0, 0.24);
+    --shadow-md: 0 18px 44px rgba(0, 0, 0, 0.36);
+    --shadow-lg: 0 28px 70px rgba(0, 0, 0, 0.44);
+    --header-glass: rgba(14, 15, 17, 0.82);
+    --button-primary-fg: #0E0F11;
+    --surface-veil: rgba(23, 25, 29, 0.92);
+    --surface-veil-strong: rgba(23, 25, 29, 0.96);
+    --cyan-tint-soft: rgba(122, 167, 247, 0.07);
+    --cyan-tint: rgba(122, 167, 247, 0.11);
+    --cyan-tint-row: rgba(122, 167, 247, 0.14);
+    --cyan-tint-edge: rgba(122, 167, 247, 0.22);
+    --cyan-tint-edge-hi: rgba(122, 167, 247, 0.27);
+    --cyan-tint-hover: rgba(122, 167, 247, 0.08);
+    --cyan-tint-zebra: rgba(122, 167, 247, 0.035);
+    --phosphor-tint-soft: rgba(52, 211, 153, 0.07);
+    --phosphor-tint: rgba(52, 211, 153, 0.1);
+    --phosphor-tint-row: rgba(52, 211, 153, 0.12);
+    --amber-tint-soft: rgba(251, 191, 36, 0.1);
+    --background: 220 10% 6%;
+    --foreground: 48 16% 94%;
+    --card: 220 12% 10%;
+    --card-foreground: 48 16% 94%;
+    --popover: 220 12% 10%;
+    --popover-foreground: 48 16% 94%;
+    --primary: 158 64% 52%;
+    --primary-foreground: 220 10% 6%;
+    --secondary: 220 12% 12%;
+    --secondary-foreground: 48 10% 84%;
+    --muted: 220 12% 12%;
+    --muted-foreground: 48 5% 66%;
+    --accent: 158 64% 52%;
+    --accent-foreground: 220 10% 6%;
+    --destructive: 0 91% 71%;
+    --destructive-foreground: 220 10% 6%;
+    --warning: 43 96% 56%;
+    --border: 216 12% 17%;
+    --input: 216 12% 17%;
+    --ring: 158 64% 52%;
+  }
+
+  .daylight,
+  [data-theme="daylight"] {
+    --bg-0: #F6F0E6;
+    --bg-1: #FFFCF6;
+    --bg-2: #FBF5EA;
+    --bg-3: #EFE5D6;
+    --bg-card: #FFFCF6;
+    --bg-inset: #EFE5D6;
+    --mint: #2D7D63;
+    --mint-bright: #256B54;
+    --mint-dim: #9BC8B7;
+    --mint-glow: rgba(45, 125, 99, 0.12);
+    --cyan: #5B75AA;
+    --text-0: #211D16;
+    --text-1: #5E574B;
+    --text-2: #7B7366;
+    --text-3: #A0988A;
+    --border-raw: #E7DCCB;
+    --border-2: #D1C2AD;
+    --header-glass: rgba(246, 240, 230, 0.84);
+  }
+
+  .phosphor,
+  [data-theme="phosphor"] {
+    --bg-0: #10121B;
+    --bg-1: #181B27;
+    --bg-2: #202331;
+    --bg-3: #282C3C;
+    --bg-card: #181B27;
+    --bg-inset: #0C0E15;
+    --mint: #8EA7FF;
+    --mint-bright: #B8C7FF;
+    --mint-dim: #465A9A;
+    --mint-glow: rgba(142, 167, 255, 0.15);
+    --cyan: #93C5FD;
+    --phosphor: #8EA7FF;
+    --text-0: #F3F1FF;
+    --text-1: #C9C7DD;
+    --text-2: #9B99B2;
+    --text-3: #6D6C83;
+    --border-raw: #2B3043;
+    --border-2: #3E4560;
+    --header-glass: rgba(16, 18, 27, 0.84);
+    --button-primary-fg: #10121B;
+  }
+
+  .olive,
+  [data-theme="olive"] {
+    --bg-0: #F2F4ED;
+    --bg-1: #FFFFFF;
+    --bg-2: #F7F8F2;
+    --bg-3: #E8ECDF;
+    --bg-card: #FFFFFF;
+    --bg-inset: #E8ECDF;
+    --mint: #5B7B52;
+    --mint-bright: #476440;
+    --mint-dim: #A9BDA2;
+    --mint-glow: rgba(91, 123, 82, 0.12);
+    --cyan: #617AA3;
+    --text-0: #1F211B;
+    --text-1: #585D4E;
+    --text-2: #737967;
+    --text-3: #999F8F;
+    --border-raw: #E0E5D7;
+    --border-2: #C8D0BC;
+    --header-glass: rgba(242, 244, 237, 0.84);
+    --button-primary-fg: #FFFFFF;
+  }
+
+  body {
+    background:
+      radial-gradient(circle at 20% 0%, color-mix(in oklch, var(--mint) 8%, transparent) 0, transparent 30rem),
+      var(--bg-0);
+    color: var(--text-0);
+    font-family: var(--font-ui), system-ui, sans-serif;
+    letter-spacing: 0;
+  }
+
+  body::before {
+    display: none;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-ui), system-ui, sans-serif;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .tabular {
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bracketed::before,
+  .bracketed::after,
+  .has-brackets::before,
+  .has-brackets::after {
+    display: none;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--border-2);
+  }
+
+  ::selection {
+    background: var(--mint-glow);
+    color: var(--text-0);
+  }
+}
+
+/* Legacy Tailwind utilities from the tactical interface are still present in
+   page-specific JSX. Normalize them globally so secondary screens inherit the
+   v2 readable, sentence-case treatment until those pages are revisited. */
+.uppercase {
+  text-transform: none !important;
+}
+
+.font-mono:not(code):not(pre),
+.font-display {
+  font-family: var(--font-ui), system-ui, sans-serif !important;
+}
+
+.rounded-sm {
+  border-radius: 10px !important;
+}
+
+[class*="tracking-[0."] {
+  letter-spacing: 0 !important;
+}

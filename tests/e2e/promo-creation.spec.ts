@@ -17,8 +17,8 @@ test("create card -> add 0% promo -> verify promo chunk in projection", async ({
   await expect(page.getByText("Promo Card").first()).toBeVisible();
 
   // ── add a 0% promo ────────────────────────────────────────────────────
-  // The ADD button is inside the promos section of the card panel
-  await page.locator("button").filter({ hasText: /^ADD$/i }).first().click();
+  // The promo action is the add button in the card's 0% promos section.
+  await page.getByRole("button", { name: /^add$/i }).first().click();
 
   const promoDialog = page.getByRole("dialog");
   await expect(promoDialog.getByText(/ADD 0% PROMO/i)).toBeVisible();

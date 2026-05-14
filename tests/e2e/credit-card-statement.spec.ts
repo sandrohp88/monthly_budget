@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { ensureAuth } from "./auth";
 
-test("create card -> enter statement -> mark paid -> verify in projection", async ({ page }) => {
+test("create card -> enter statement -> mark paid -> verify paid state", async ({ page }) => {
   await ensureAuth(page);
 
   // ── create a credit card ──────────────────────────────────────────────
@@ -30,17 +30,22 @@ test("create card -> enter statement -> mark paid -> verify in projection", asyn
   await expect(page.getByText("$500.00").first()).toBeVisible();
 
   // ── mark the statement as paid ────────────────────────────────────────
-  // Click the statement row to open the edit dialog
-  await page.getByText("2026-05-15").first().click();
+  // Use the explicit statement action; the visual card now renders friendly
+  // dates instead of the raw ISO statement date.
+  await page.getByRole("button", { name: /mark paid/i }).click();
 
   const editDialog = page.getByRole("dialog");
   await expect(editDialog.getByText(/STATEMENT/i).first()).toBeVisible();
-  // Toggle "MARK AS PAID"
-  await editDialog.locator("label").filter({ hasText: /mark as paid/i }).click();
+  // Toggle "Mark as paid"
+  await editDialog.getByRole("switch", { name: /mark as paid/i }).click();
   await editDialog.getByRole("button", { name: /save/i }).click();
+  await expect(editDialog).toBeHidden();
 
-  // ── verify in projection ──────────────────────────────────────────────
+  // ── verify paid state ─────────────────────────────────────────────────
+  await expect(page.getByText(/last paid/i).first()).toBeVisible();
+  await expect(page.getByText(/on time/i).first()).toBeVisible();
+
+  // Paid statements should no longer appear as future ledger events.
   await page.goto("/projection");
-  // The card name should appear in the projection as a payment event
-  await expect(page.getByText("Test Visa").first()).toBeVisible();
+  await expect(page.getByText(/0 ledger events/i).first()).toBeVisible();
 });
