@@ -18,7 +18,7 @@ const ROUTE_TO_CRUMB: Record<string, string> = {
   "/credit-cards": "CREDIT CARDS",
   "/paychecks": "PAYCHECKS",
   "/extras": "ONE-TIME",
-  "/projection": "PROJECTION",
+  "/projection": "LEDGER",
   "/assets": "ASSETS",
   "/reports": "REPORTS",
   "/settings": "SETTINGS",
@@ -50,17 +50,21 @@ export function AppShell({
         className="flex h-screen w-screen overflow-hidden bg-[var(--bg-0)] text-[var(--text-0)]"
       >
         <Sidebar displayName={displayName} role={role} summary={sidebarSummary ?? null} />
-        <MobileNav open={mobileNavOpen} onOpenChange={setMobileNavOpen} summary={sidebarSummary ?? null} />
+        <MobileNav
+          open={mobileNavOpen}
+          onOpenChange={setMobileNavOpen}
+          summary={sidebarSummary ?? null}
+        />
         <div className="flex min-w-0 flex-1 flex-col">
           <header
-            className="sticky top-0 z-10 flex h-[60px] shrink-0 items-center justify-between border-b border-[var(--border-raw)] px-4 md:px-9 backdrop-blur-md"
+            className="sticky top-0 z-10 flex h-[60px] shrink-0 items-center justify-between border-b border-[var(--border-raw)] px-4 backdrop-blur-md md:px-9"
             style={{ background: "var(--header-glass)" }}
           >
-            <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-[var(--text-2)]">
+            <div className="flex items-center gap-3 text-[10px] tracking-[0.2em] text-[var(--text-2)] uppercase">
               <button
                 type="button"
                 onClick={() => setMobileNavOpen(true)}
-                className="mr-1 md:hidden text-[var(--mint)] hover:text-[var(--text-0)] transition-colors"
+                className="mr-1 text-[var(--mint)] transition-colors hover:text-[var(--text-0)] md:hidden"
                 aria-label="Open navigation"
               >
                 <Menu className="h-5 w-5" />
@@ -73,7 +77,7 @@ export function AppShell({
               <UtcClock />
             </div>
             <div className="flex items-center gap-4">
-              <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
+              <div className="text-[10px] tracking-[0.15em] text-[var(--text-2)] uppercase">
                 <span className="text-[var(--text-3)]">USER</span>{" "}
                 <span className="text-[var(--text-1)]">{displayName}</span>
                 <span className="mx-2 text-[var(--text-3)]">/</span>
@@ -82,7 +86,7 @@ export function AppShell({
               <ThemeToggle />
             </div>
           </header>
-          <main className="min-h-0 flex-1 overflow-auto px-4 md:px-9 pb-16 pt-7">{children}</main>
+          <main className="min-h-0 flex-1 overflow-auto px-4 pt-7 pb-16 md:px-9">{children}</main>
         </div>
       </div>
       <Toaster

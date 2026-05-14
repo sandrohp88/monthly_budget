@@ -40,7 +40,7 @@ export const NAV: ReadonlyArray<{
   { href: "/credit-cards", label: "Credit Cards", icon: Wallet, shortcut: "c", section: 1 },
   { href: "/paychecks", label: "Paychecks", icon: CircleDollarSign, shortcut: "p", section: 1 },
   { href: "/extras", label: "One-Time", icon: PartyPopper, shortcut: "e", section: 1 },
-  { href: "/projection", label: "Projection", icon: ChartLine, shortcut: "x", section: 1 },
+  { href: "/projection", label: "Ledger", icon: ChartLine, shortcut: "x", section: 1 },
   { href: "/assets", label: "Assets", icon: Gem, shortcut: "w", section: 1 },
   { href: "/reports", label: "Reports", icon: BarChart3, shortcut: "r", section: 1 },
   { href: "/settings", label: "Settings", icon: Settings, shortcut: "s", section: 2 },
@@ -64,9 +64,7 @@ export function Sidebar({
       const target = e.target as HTMLElement | null;
       if (
         target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
       ) {
         return;
       }
@@ -104,26 +102,26 @@ export function Sidebar({
         key={item.href}
         href={item.href}
         className={cn(
-          "flex items-center gap-2.5 px-5 py-2.5 text-[11px] uppercase tracking-[0.1em] cursor-pointer",
+          "flex cursor-pointer items-center gap-2.5 px-5 py-2.5 text-[11px] tracking-[0.1em] uppercase",
           "border-l-2 border-transparent transition-all",
           active
-            ? "bg-gradient-to-r from-[var(--mint-glow)] to-transparent text-[var(--mint)] border-l-[var(--mint)]"
+            ? "border-l-[var(--mint)] bg-gradient-to-r from-[var(--mint-glow)] to-transparent text-[var(--mint)]"
             : "text-[var(--text-1)] hover:bg-[var(--bg-2)] hover:text-[var(--text-0)]",
         )}
       >
         <Icon className="h-3.5 w-3.5" />
         <span className="flex-1">{item.label}</span>
-        <kbd className="text-[9px] text-[var(--text-3)] tracking-normal">g {item.shortcut}</kbd>
+        <kbd className="text-[9px] tracking-normal text-[var(--text-3)]">g {item.shortcut}</kbd>
       </Link>
     );
   };
 
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-[var(--border-raw)] bg-[var(--bg-1)] md:flex relative">
+    <aside className="relative hidden w-60 shrink-0 flex-col border-r border-[var(--border-raw)] bg-[var(--bg-1)] md:flex">
       {/* mint glow on the right edge */}
       <div
         aria-hidden
-        className="absolute right-[-1px] top-0 bottom-0 w-px opacity-50"
+        className="absolute top-0 right-[-1px] bottom-0 w-px opacity-50"
         style={{
           background:
             "linear-gradient(180deg, transparent, var(--mint-dim) 30%, var(--mint-dim) 70%, transparent)",
@@ -133,21 +131,21 @@ export function Sidebar({
       {/* brand */}
       <div className="flex items-center gap-2.5 border-b border-[var(--border-raw)] px-5 py-[14px]">
         <div
-          className="grid h-7 w-7 place-items-center rounded-sm bg-[var(--mint)] text-[14px] font-extrabold text-[var(--bg-0)] tracking-tight"
+          className="grid h-7 w-7 place-items-center rounded-sm bg-[var(--mint)] text-[14px] font-extrabold tracking-tight text-[var(--bg-0)]"
           style={{ boxShadow: "0 0 14px var(--mint-glow)" }}
         >
           $
         </div>
         <div>
-          <div className="text-[12px] font-bold uppercase tracking-[0.1em]">FINANCE_OS</div>
-          <div className="text-[9px] uppercase tracking-[0.1em] text-[var(--text-3)] mt-0.5">
+          <div className="text-[12px] font-bold tracking-[0.1em] uppercase">FINANCE_OS</div>
+          <div className="mt-0.5 text-[9px] tracking-[0.1em] text-[var(--text-3)] uppercase">
             v1.0.0 // local
           </div>
         </div>
       </div>
 
       {/* status block */}
-      <div className="border-b border-[var(--border-raw)] px-5 py-3 text-[10px] tracking-wider text-[var(--text-2)] leading-[1.9]">
+      <div className="border-b border-[var(--border-raw)] px-5 py-3 text-[10px] leading-[1.9] tracking-wider text-[var(--text-2)]">
         <Row k="// SYSTEM" v="ONLINE" />
         <Row k="// SYNC" v="OK" />
         <Row k="// MODE" v="LOCAL" />
@@ -163,24 +161,24 @@ export function Sidebar({
       </nav>
 
       {armed ? (
-        <div className="mx-3 mb-2 rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-2)] px-3 py-1.5 text-[9px] uppercase tracking-[0.15em] text-[var(--mint)]">
-      press: d b a t c p e x w r s
+        <div className="mx-3 mb-2 rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-2)] px-3 py-1.5 text-[9px] tracking-[0.15em] text-[var(--mint)] uppercase">
+          press: d b a t c p e x w r s
         </div>
       ) : null}
 
       {/* net position widget */}
       {summary && summary.sparkline.length >= 2 ? (
         <div className="border-t border-[var(--border-raw)] px-5 py-3">
-          <div className="mb-1.5 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
+          <div className="mb-1.5 text-[9px] tracking-[0.2em] text-[var(--text-3)] uppercase">
             {"// NET POSITION"}
           </div>
-          <div className="tabular text-[15px] font-bold leading-none text-[var(--text-0)]">
+          <div className="tabular text-[15px] leading-none font-bold text-[var(--text-0)]">
             <Money cents={summary.startingBalanceCents} />
           </div>
           <div className="mt-2">
             <Sparkline data={summary.sparkline} height={26} stroke="var(--mint)" />
           </div>
-          <div className="mt-1 flex items-center justify-between text-[9px] uppercase tracking-[0.15em]">
+          <div className="mt-1 flex items-center justify-between text-[9px] tracking-[0.15em] uppercase">
             <span className="text-[var(--text-3)]">30D</span>
             <span
               className={cn(
@@ -208,7 +206,7 @@ export function Sidebar({
           <div className="truncate text-[11px] font-semibold text-[var(--text-0)]">
             {displayName.toUpperCase()}
           </div>
-          <div className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">{role}</div>
+          <div className="text-[9px] tracking-[0.12em] text-[var(--text-2)] uppercase">{role}</div>
         </div>
       </div>
     </aside>
@@ -224,17 +222,11 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-function SectionLabel({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
+function SectionLabel({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <div
       className={cn(
-        "px-5 pt-2 pb-1.5 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]",
+        "px-5 pt-2 pb-1.5 text-[9px] tracking-[0.2em] text-[var(--text-3)] uppercase",
         className,
       )}
     >
