@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { buildProjection } from "@/lib/projection-server";
-import { PageHead } from "@/components/ui/page-head";
 import { DateLabel } from "@/components/date-label";
 import { ProjectionClient } from "./projection-client";
 
@@ -14,20 +13,27 @@ export default async function ProjectionPage() {
 
   const projection = await buildProjection(userId);
   if (!projection) redirect("/setup");
-  const { rows, startDate, endDate, today, promoSummariesByCard, variableBillCategoriesByKey } = projection;
+  const { rows, startDate, endDate, today, promoSummariesByCard, variableBillCategoriesByKey } =
+    projection;
 
   return (
-    <div className="space-y-6 fade-in">
-      <PageHead
-        module="MODULE_05"
-        title="PROJECTION"
-        subtitle={
-          <>
-            Daily ledger · <DateLabel iso={startDate} format="short" /> –{" "}
+    <div className="fade-in space-y-5">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <div className="mb-2 text-[13px] font-medium text-[var(--text-3)]">Projection</div>
+          <div
+            role="heading"
+            aria-level={1}
+            className="text-[34px] leading-none font-semibold tracking-normal text-[var(--text-0)]"
+          >
+            Ledger
+          </div>
+          <p className="mt-2 text-[14px] text-[var(--text-2)]">
+            Daily cash-flow from <DateLabel iso={startDate} format="short" /> to{" "}
             <DateLabel iso={endDate} format="short" /> · {rows.length} days
-          </>
-        }
-      />
+          </p>
+        </div>
+      </div>
       <ProjectionClient
         rows={rows}
         startDate={startDate}
