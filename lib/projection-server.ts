@@ -63,6 +63,8 @@ export type ProjectionBundle = {
    * knows to reconcile.
    */
   promoDriftByCard: Record<string, number>;
+  /** Category names for variable bill charge groups, keyed by `cardId:dueDate`. */
+  variableBillCategoriesByKey: Record<string, string[]>;
 };
 
 export const buildProjection = cache(_buildProjection);
@@ -351,7 +353,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
 
   const variableBillChargeGroups = new Map<
     string,
-    { cardId: string; cardName: string; dueDate: string; amountCents: number; names: string[] }
+    { cardId: string; cardName: string; dueDate: string; amountCents: number; names: string[]; categories: string[] }
   >();
   const variableCharges = projectVariableBillCardCharges({
     variableBills,
@@ -367,6 +369,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     if (existing) {
       existing.amountCents += charge.amountCents;
       if (!existing.names.includes(charge.name)) existing.names.push(charge.name);
+      if (!existing.categories.includes(charge.category)) existing.categories.push(charge.category);
     } else {
       variableBillChargeGroups.set(key, {
         cardId: charge.cardId,
@@ -374,6 +377,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
         dueDate: charge.dueDate,
         amountCents: charge.amountCents,
         names: [charge.name],
+        categories: [charge.category],
       });
     }
   }
@@ -538,6 +542,15 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     list.sort((a, b) => a.endDate.localeCompare(b.endDate));
   }
 
+  // Build a lookup of categories for variable bill charges grouped by (cardId, dueDate).
+  // Key format matches the event sourceId + row.date so the client can look up categories.
+  const variableBillCategoriesByKey: Record<string, string[]> = {};
+  for (const [key, group] of variableBillChargeGroups) {
+    if (group.categories.length > 0) {
+      variableBillCategoriesByKey[key] = group.categories;
+    }
+  }
+
   return {
     rows: computeProjection(input),
     startDate,
@@ -548,5 +561,6 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     currency: settings.currency,
     promoSummariesByCard,
     promoDriftByCard,
+    variableBillCategoriesByKey,
   };
 }

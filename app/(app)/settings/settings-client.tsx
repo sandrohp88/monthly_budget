@@ -116,8 +116,14 @@ export function SettingsClient({
         headers: { "content-type": "application/json" },
         body: JSON.stringify(json),
       });
-      if (!res.ok) throw new Error((await res.json()).error ?? "import failed");
-      toast.success("Imported. Reloading…");
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "import failed");
+      const warnings: string[] = body.warnings ?? [];
+      if (warnings.length > 0) {
+        toast.warning(`Imported with ${warnings.length} warning(s): ${warnings[0]}`);
+      } else {
+        toast.success("Imported. Reloading…");
+      }
       setTimeout(() => window.location.reload(), 600);
     } catch (e) {
       toast.error((e as Error).message);

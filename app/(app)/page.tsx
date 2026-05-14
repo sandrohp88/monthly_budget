@@ -2,7 +2,7 @@ import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { buildProjection } from "@/lib/projection-server";
-import { listBills, listExtras, listPaychecks, listStatementsForUser } from "@/lib/repos";
+import { listBills, listExtras, listPaychecks, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance } from "@/lib/repos";
 import { isStatementOpen, statementCashDueCents } from "@/lib/credit-cards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CardSubTag, PageHead } from "@/components/ui/page-head";
@@ -18,6 +18,7 @@ import { addDaysIso, todayIso } from "@/lib/dates";
 import { findWorstDay } from "@/lib/projection";
 import { cn } from "@/lib/cn";
 import { Plus, Download, AlertTriangle } from "lucide-react";
+import { BudgetUtilization } from "@/components/budget-utilization";
 
 export const dynamic = "force-dynamic";
 
@@ -44,11 +45,14 @@ export default async function DashboardPage() {
   const totalPromoDriftCents = Object.values(promoDriftByCard).reduce((s, n) => s + n, 0);
   const driftedCardCount = Object.keys(promoDriftByCard).length;
 
-  const [bills, extras, paychecks, ccStatements] = await Promise.all([
+  const currentMonth = todayIso().slice(0, 7);
+  const [bills, extras, paychecks, ccStatements, budgetUtilization, liveBalance] = await Promise.all([
     listBills(userId, false),
     listExtras(userId),
     listPaychecks(userId),
     listStatementsForUser(userId),
+    computeCategoryUtilization(userId, currentMonth),
+    getPrimaryLinkedBalance(userId),
   ]);
 
   // Credit card "due to avoid interest" totals
@@ -102,6 +106,13 @@ export default async function DashboardPage() {
   const worstIsRisk = worst && worst.balanceCents < 50000;
 
   // Sparkline preview: first ~30 days of the daily projected balance.
+  // Balance vs projection delta: compare live Plaid balance to today's projected balance
+  const todayRow = rows.find((r) => r.date === today);
+  const projectedTodayCents = todayRow?.balanceCents ?? projection.startingBalanceCents;
+  const balanceDeltaCents = liveBalance != null ? liveBalance - projectedTodayCents : null;
+  const balanceDeltaSignificant =
+    balanceDeltaCents != null && Math.abs(balanceDeltaCents) > 50_00; // > $50 drift
+
   const heroSparkPoints = rows.slice(0, 30).map((r) => r.balanceCents);
   const heroEndCents = heroSparkPoints[heroSparkPoints.length - 1] ?? projection.startingBalanceCents;
   const heroDeltaCents = heroEndCents - projection.startingBalanceCents;
@@ -290,6 +301,23 @@ export default async function DashboardPage() {
         </AlertBar>
       ) : null}
 
+      {balanceDeltaSignificant && balanceDeltaCents != null ? (
+        <AlertBar
+          tag="DELTA"
+          variant={balanceDeltaCents < 0 ? "red" : "mint"}
+        >
+          Live balance is{" "}
+          <strong className={balanceDeltaCents < 0 ? "text-[var(--red)]" : "text-[var(--mint)]"}>
+            {balanceDeltaCents > 0 ? "+" : "−"}
+            <Money cents={Math.abs(balanceDeltaCents)} />
+          </strong>{" "}
+          vs today{"'"}s projected balance of <Money cents={projectedTodayCents} />.{" "}
+          {balanceDeltaCents < 0
+            ? "Actual spending may be higher than projected."
+            : "Unexpected income or lower spending than projected."}
+        </AlertBar>
+      ) : null}
+
       {worst && worstIsRisk ? (
         <div
           className="grid items-center gap-4 rounded-sm border p-4"
@@ -445,6 +473,23 @@ export default async function DashboardPage() {
           </div>
         </Card>
       </div>
+
+      {budgetUtilization.length > 0 && (
+        <Card>
+          <CardHeader>
+            <div>
+              <CardSubTag>BUDGET_01</CardSubTag>
+              <CardTitle className="mt-0.5">CATEGORY BUDGETS</CardTitle>
+            </div>
+            <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
+              {currentMonth}
+            </div>
+          </CardHeader>
+          <CardContent>
+            <BudgetUtilization rows={budgetUtilization} />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

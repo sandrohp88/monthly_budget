@@ -148,6 +148,27 @@
       "when": 1779190000000,
       "tag": "0020_starting_balance_as_of",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1779270000000,
+      "tag": "0021_add_category_budget",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1779350000000,
+      "tag": "0022_soft_delete_extras_paychecks",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1779430000000,
+      "tag": "0023_add_assets",
+      "breakpoints": true
     }
   ]
 }

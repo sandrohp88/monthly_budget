@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0a0a0f" rx="64"/>
+  <rect x="32" y="32" width="448" height="448" fill="none" stroke="#0ff" stroke-width="4" rx="48"/>
+  <text x="256" y="300" text-anchor="middle" font-family="monospace" font-weight="900" font-size="280" fill="#0ff">$</text>
+  <text x="256" y="420" text-anchor="middle" font-family="monospace" font-weight="700" font-size="60" fill="#666" letter-spacing="12">FIN_OS</text>
+</svg>

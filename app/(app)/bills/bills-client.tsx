@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Calculator, Plus, Download } from "lucide-react";
+import { Calculator, Plus, Download, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -85,19 +85,30 @@ function intervalLabel(months: number): string {
 
 export type BillCardOption = { id: string; name: string; isActive: boolean };
 
+type OverrideItem = {
+  id: string;
+  billId: string;
+  dueDate: string;
+  amountCents: number;
+  notes: string | null;
+};
+
 export function BillsClient({
   initialBills,
   initialVariableBills,
   categories,
   cards,
+  initialOverrides = [],
 }: {
   initialBills: BillRow[];
   initialVariableBills: VariableBill[];
   categories: ReadonlyArray<string>;
   cards: ReadonlyArray<BillCardOption>;
+  initialOverrides?: OverrideItem[];
 }) {
   const [bills, setBills] = React.useState<BillRow[]>(initialBills);
   const [variableBills, setVariableBills] = React.useState<VariableBill[]>(initialVariableBills);
+  const [overrides, setOverrides] = React.useState<OverrideItem[]>(initialOverrides);
   const [categoriesState, setCategoriesState] = React.useState<string[]>(() => [...categories]);
   const [showArchived, setShowArchived] = React.useState(false);
   const [filter, setFilter] = React.useState("");
@@ -560,6 +571,16 @@ export function BillsClient({
                   submitting={submitting}
                   hideActions
                 />
+                <OverrideSection
+                  billId={editing.id}
+                  overrides={overrides.filter((o) => o.billId === editing.id)}
+                  onOverridesChange={(updated) =>
+                    setOverrides((prev) => [
+                      ...prev.filter((o) => o.billId !== editing.id),
+                      ...updated,
+                    ])
+                  }
+                />
               </SheetBody>
               <SheetFooter>
                 {editing.isActive ? (
@@ -633,6 +654,177 @@ export function BillsClient({
           ) : null}
         </SheetContent>
       </Sheet>
+    </div>
+  );
+}
+
+function OverrideSection({
+  billId,
+  overrides,
+  onOverridesChange,
+}: {
+  billId: string;
+  overrides: OverrideItem[];
+  onOverridesChange: (updated: OverrideItem[]) => void;
+}) {
+  const [addOpen, setAddOpen] = React.useState(false);
+  const [newDate, setNewDate] = React.useState(todayIso());
+  const [newAmount, setNewAmount] = React.useState(0);
+  const [newNotes, setNewNotes] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+
+  const addOverride = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/bills/${billId}/payment-overrides`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          dueDate: newDate,
+          amountCents: newAmount,
+          notes: newNotes.trim() || undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "save failed");
+      const created = json.override as OverrideItem;
+      onOverridesChange([
+        ...overrides.filter((o) => o.dueDate !== created.dueDate),
+        created,
+      ]);
+      setAddOpen(false);
+      setNewDate(todayIso());
+      setNewAmount(0);
+      setNewNotes("");
+      toast.success("Override saved");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeOverride = async (dueDate: string) => {
+    try {
+      const res = await fetch(
+        `/api/bills/${billId}/payment-overrides?dueDate=${dueDate}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) throw new Error("delete failed");
+      onOverridesChange(overrides.filter((o) => o.dueDate !== dueDate));
+      toast.success("Override removed");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const sorted = [...overrides].sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+
+  return (
+    <div className="mt-6 border-t border-[var(--border-raw)] pt-4">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
+            {"// OVERRIDES"}
+          </div>
+          <div className="text-[11px] uppercase tracking-[0.1em] font-semibold text-[var(--text-0)]">
+            PAYMENT ADJUSTMENTS
+          </div>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => setAddOpen(!addOpen)}
+        >
+          <Plus className="h-3 w-3" /> ADD
+        </Button>
+      </div>
+
+      {addOpen && (
+        <div className="mb-4 space-y-3 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="override-date">DUE DATE</Label>
+              <Input
+                id="override-date"
+                type="date"
+                value={newDate}
+                onChange={(e) => setNewDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>AMOUNT</Label>
+              <MoneyInput valueCents={newAmount} onChangeCents={setNewAmount} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="override-notes">NOTES</Label>
+            <Input
+              id="override-notes"
+              value={newNotes}
+              onChange={(e) => setNewNotes(e.target.value)}
+              placeholder="Optional note"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setAddOpen(false)}
+            >
+              CANCEL
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="primary"
+              onClick={addOverride}
+              disabled={saving || !newDate}
+            >
+              {saving ? "SAVING…" : "SAVE OVERRIDE"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {sorted.length === 0 ? (
+        <div className="py-3 text-center text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+          NO OVERRIDES — USING DEFAULT AMOUNTS
+        </div>
+      ) : (
+        <div className="divide-y divide-[var(--border-raw)] rounded-sm border border-[var(--border-raw)]">
+          {sorted.map((o) => (
+            <div
+              key={o.dueDate}
+              className="flex items-center justify-between px-3 py-2"
+            >
+              <div className="min-w-0">
+                <div className="text-[11px] tabular text-[var(--text-0)]">
+                  <DateLabel iso={o.dueDate} format="short" />
+                  <span className="ml-2 font-bold text-[var(--cyan)]">
+                    <Money cents={o.amountCents} />
+                  </span>
+                </div>
+                {o.notes ? (
+                  <div className="mt-0.5 truncate text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                    {o.notes}
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => removeOverride(o.dueDate)}
+                className="ml-2 text-[var(--text-3)] hover:text-[var(--red)] transition-colors cursor-pointer"
+                title="Remove override"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

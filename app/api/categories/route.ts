@@ -24,6 +24,7 @@ export async function POST(req: Request) {
     name,
     color: data.color,
     kind: data.kind ?? "expense",
+    budgetAmountCents: data.budgetAmountCents,
   });
   return NextResponse.json({ category }, { status: 201 });
 }

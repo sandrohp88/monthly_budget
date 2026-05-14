@@ -2,7 +2,9 @@
 
 import * as React from "react";
 import { usePathname } from "next/navigation";
+import { Menu } from "lucide-react";
 import { Sidebar, type SidebarSummary } from "@/components/sidebar";
+import { MobileNav } from "@/components/mobile-nav";
 import { Toaster } from "sonner";
 import { CurrencyProvider } from "@/components/currency-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -17,6 +19,8 @@ const ROUTE_TO_CRUMB: Record<string, string> = {
   "/paychecks": "PAYCHECKS",
   "/extras": "ONE-TIME",
   "/projection": "PROJECTION",
+  "/assets": "ASSETS",
+  "/reports": "REPORTS",
   "/settings": "SETTINGS",
 };
 
@@ -37,6 +41,7 @@ export function AppShell({
 }) {
   const pathname = usePathname() ?? "/";
   const crumb = ROUTE_TO_CRUMB[pathname] ?? "ROOT";
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
 
   return (
     <CurrencyProvider currency={currency}>
@@ -45,12 +50,21 @@ export function AppShell({
         className="flex h-screen w-screen overflow-hidden bg-[var(--bg-0)] text-[var(--text-0)]"
       >
         <Sidebar displayName={displayName} role={role} summary={sidebarSummary ?? null} />
+        <MobileNav open={mobileNavOpen} onOpenChange={setMobileNavOpen} summary={sidebarSummary ?? null} />
         <div className="flex min-w-0 flex-1 flex-col">
           <header
-            className="sticky top-0 z-10 flex h-[60px] shrink-0 items-center justify-between border-b border-[var(--border-raw)] px-9 backdrop-blur-md"
+            className="sticky top-0 z-10 flex h-[60px] shrink-0 items-center justify-between border-b border-[var(--border-raw)] px-4 md:px-9 backdrop-blur-md"
             style={{ background: "var(--header-glass)" }}
           >
             <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-[var(--text-2)]">
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(true)}
+                className="mr-1 md:hidden text-[var(--mint)] hover:text-[var(--text-0)] transition-colors"
+                aria-label="Open navigation"
+              >
+                <Menu className="h-5 w-5" />
+              </button>
               <span>
                 <span className="text-[var(--text-3)]">{"// "}</span>
                 <span className="text-[var(--mint)]">{crumb}</span>
@@ -68,7 +82,7 @@ export function AppShell({
               <ThemeToggle />
             </div>
           </header>
-          <main className="min-h-0 flex-1 overflow-auto px-9 pb-16 pt-7">{children}</main>
+          <main className="min-h-0 flex-1 overflow-auto px-4 md:px-9 pb-16 pt-7">{children}</main>
         </div>
       </div>
       <Toaster

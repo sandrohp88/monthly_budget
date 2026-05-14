@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, lt, lte } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
+  assets,
   bills,
   billPaymentOverrides,
   categories,
@@ -18,6 +19,7 @@ import {
   users,
   variableBillCards,
   variableBills,
+  type AssetRow,
   type BillRow,
   type BillPaymentOverrideRow,
   type CategoryRow,
@@ -689,12 +691,14 @@ export async function deleteCreditCardPaymentOverride(
     .run();
 }
 
-export async function listPaychecks(userId: string): Promise<PaycheckRow[]> {
+export async function listPaychecks(userId: string, includeArchived = false): Promise<PaycheckRow[]> {
   const db = getDb();
+  const conditions = [eq(paychecks.userId, userId)];
+  if (!includeArchived) conditions.push(eq(paychecks.isActive, true));
   return db
     .select()
     .from(paychecks)
-    .where(eq(paychecks.userId, userId))
+    .where(and(...conditions))
     .orderBy(asc(paychecks.payDate))
     .all();
 }
@@ -735,17 +739,20 @@ export async function updatePaycheck(
 export async function deletePaycheck(userId: string, id: string): Promise<void> {
   const db = getDb();
   await db
-    .delete(paychecks)
+    .update(paychecks)
+    .set({ isActive: false })
     .where(and(eq(paychecks.userId, userId), eq(paychecks.id, id)))
     .run();
 }
 
-export async function listExtras(userId: string): Promise<OneTimeExpenseRow[]> {
+export async function listExtras(userId: string, includeArchived = false): Promise<OneTimeExpenseRow[]> {
   const db = getDb();
+  const conditions = [eq(oneTimeExpenses.userId, userId)];
+  if (!includeArchived) conditions.push(eq(oneTimeExpenses.isActive, true));
   return db
     .select()
     .from(oneTimeExpenses)
-    .where(eq(oneTimeExpenses.userId, userId))
+    .where(and(...conditions))
     .orderBy(asc(oneTimeExpenses.date))
     .all();
 }
@@ -786,7 +793,8 @@ export async function updateExtra(
 export async function deleteExtra(userId: string, id: string): Promise<void> {
   const db = getDb();
   await db
-    .delete(oneTimeExpenses)
+    .update(oneTimeExpenses)
+    .set({ isActive: false })
     .where(and(eq(oneTimeExpenses.userId, userId), eq(oneTimeExpenses.id, id)))
     .run();
 }
@@ -815,13 +823,20 @@ export async function findCategoryByName(
 
 export async function createCategory(
   userId: string,
-  input: { name: string; color: string; kind: "expense" | "income" },
+  input: { name: string; color: string; kind: "expense" | "income"; budgetAmountCents?: number },
 ): Promise<CategoryRow> {
   const db = getDb();
   const id = newId();
   await db
     .insert(categories)
-    .values({ id, userId, name: input.name.trim(), color: input.color, kind: input.kind })
+    .values({
+      id,
+      userId,
+      name: input.name.trim(),
+      color: input.color,
+      kind: input.kind,
+      budgetAmountCents: input.budgetAmountCents ?? 0,
+    })
     .run();
   return (await db
     .select()
@@ -838,6 +853,122 @@ export async function deleteCategory(userId: string, id: string): Promise<void> 
     .run();
 }
 
+export async function updateCategory(
+  userId: string,
+  id: string,
+  data: { name?: string; color?: string; kind?: "expense" | "income"; budgetAmountCents?: number },
+): Promise<CategoryRow | undefined> {
+  const db = getDb();
+  const set: Record<string, unknown> = {};
+  if (data.name !== undefined) set.name = data.name;
+  if (data.color !== undefined) set.color = data.color;
+  if (data.kind !== undefined) set.kind = data.kind;
+  if (data.budgetAmountCents !== undefined) set.budgetAmountCents = data.budgetAmountCents;
+  if (Object.keys(set).length === 0) return undefined;
+  await db
+    .update(categories)
+    .set(set)
+    .where(and(eq(categories.userId, userId), eq(categories.id, id)))
+    .run();
+  return db
+    .select()
+    .from(categories)
+    .where(and(eq(categories.userId, userId), eq(categories.id, id)))
+    .get();
+}
+
+export type CategoryUtilization = {
+  category: string;
+  color: string;
+  budgetCents: number;
+  spentCents: number;
+};
+
+export async function computeCategoryUtilization(
+  userId: string,
+  month: string,
+): Promise<CategoryUtilization[]> {
+  const db = getDb();
+  const cats = await db
+    .select()
+    .from(categories)
+    .where(and(eq(categories.userId, userId), eq(categories.kind, "expense")))
+    .all();
+
+  const budgetedCats = cats.filter((c) => c.budgetAmountCents > 0);
+  if (budgetedCats.length === 0) return [];
+
+  const monthStart = `${month}-01`;
+  const parts = month.split("-").map(Number);
+  const y = parts[0]!;
+  const m = parts[1]!;
+  const nextMonth = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+  const monthEnd = `${nextMonth}-01`;
+
+  const userBills = await db
+    .select()
+    .from(bills)
+    .where(and(eq(bills.userId, userId), eq(bills.isActive, true)))
+    .all();
+
+  const extras = await db
+    .select()
+    .from(oneTimeExpenses)
+    .where(
+      and(
+        eq(oneTimeExpenses.userId, userId),
+        gte(oneTimeExpenses.date, monthStart),
+        lt(oneTimeExpenses.date, monthEnd),
+      ),
+    )
+    .all();
+
+  const drafts = await db
+    .select()
+    .from(plaidTransactionDrafts)
+    .where(
+      and(
+        eq(plaidTransactionDrafts.userId, userId),
+        eq(plaidTransactionDrafts.status, "approved"),
+        eq(plaidTransactionDrafts.kind, "expense"),
+        gte(plaidTransactionDrafts.date, monthStart),
+        lt(plaidTransactionDrafts.date, monthEnd),
+      ),
+    )
+    .all();
+
+  const spendByCategory = new Map<string, number>();
+
+  for (const b of userBills) {
+    if (b.intervalMonths === 1) {
+      spendByCategory.set(b.category, (spendByCategory.get(b.category) ?? 0) + b.amountCents);
+    } else {
+      const monthly = Math.round(b.amountCents / b.intervalMonths);
+      spendByCategory.set(b.category, (spendByCategory.get(b.category) ?? 0) + monthly);
+    }
+  }
+
+  for (const e of extras) {
+    spendByCategory.set(e.category, (spendByCategory.get(e.category) ?? 0) + e.amountCents);
+  }
+
+  for (const d of drafts) {
+    const matched = budgetedCats.find(
+      (c) => c.name.toLowerCase() === (d.plaidCategory ?? "").toLowerCase(),
+    );
+    if (matched) {
+      spendByCategory.set(matched.name, (spendByCategory.get(matched.name) ?? 0) + d.amountCents);
+    }
+  }
+
+  return budgetedCats.map((c) => ({
+    category: c.name,
+    color: c.color,
+    budgetCents: c.budgetAmountCents,
+    spentCents: spendByCategory.get(c.name) ?? 0,
+  }));
+}
+
 export async function categoryUsageCount(userId: string, name: string): Promise<number> {
   const db = getDb();
   const billCount = await db
@@ -851,6 +982,99 @@ export async function categoryUsageCount(userId: string, name: string): Promise<
     .where(and(eq(oneTimeExpenses.userId, userId), eq(oneTimeExpenses.category, name)))
     .all();
   return billCount.length + extraCount.length;
+}
+
+// ── assets ───────────────────────────────────────────────────────────────────
+
+export async function listAssets(userId: string, includeArchived = false): Promise<AssetRow[]> {
+  const db = getDb();
+  const conditions = [eq(assets.userId, userId)];
+  if (!includeArchived) conditions.push(eq(assets.isActive, true));
+  return db
+    .select()
+    .from(assets)
+    .where(and(...conditions))
+    .orderBy(desc(assets.valueCents))
+    .all();
+}
+
+export async function getAsset(userId: string, id: string): Promise<AssetRow | undefined> {
+  const db = getDb();
+  return db
+    .select()
+    .from(assets)
+    .where(and(eq(assets.userId, userId), eq(assets.id, id)))
+    .get();
+}
+
+export async function createAsset(
+  userId: string,
+  data: {
+    name: string;
+    valueCents: number;
+    category?: string;
+    notes?: string | null;
+    asOfDate: string;
+  },
+): Promise<AssetRow> {
+  const db = getDb();
+  const id = newId();
+  await db
+    .insert(assets)
+    .values({
+      id,
+      userId,
+      name: data.name,
+      valueCents: data.valueCents,
+      category: data.category ?? "other",
+      notes: data.notes ?? null,
+      asOfDate: data.asOfDate,
+    })
+    .run();
+  return db
+    .select()
+    .from(assets)
+    .where(eq(assets.id, id))
+    .get() as AssetRow;
+}
+
+export async function updateAsset(
+  userId: string,
+  id: string,
+  data: {
+    name?: string;
+    valueCents?: number;
+    category?: string;
+    notes?: string | null;
+    asOfDate?: string;
+    isActive?: boolean;
+  },
+): Promise<AssetRow | undefined> {
+  const db = getDb();
+  const existing = await getAsset(userId, id);
+  if (!existing) return undefined;
+  const patch: Record<string, unknown> = { updatedAt: Date.now() };
+  if (data.name !== undefined) patch.name = data.name;
+  if (data.valueCents !== undefined) patch.valueCents = data.valueCents;
+  if (data.category !== undefined) patch.category = data.category;
+  if (data.notes !== undefined) patch.notes = data.notes;
+  if (data.asOfDate !== undefined) patch.asOfDate = data.asOfDate;
+  if (data.isActive !== undefined) patch.isActive = data.isActive;
+  await db
+    .update(assets)
+    .set(patch)
+    .where(and(eq(assets.userId, userId), eq(assets.id, id)))
+    .run();
+  return getAsset(userId, id);
+}
+
+export async function archiveAsset(userId: string, id: string): Promise<void> {
+  const db = getDb();
+  await db
+    .update(assets)
+    .set({ isActive: false, updatedAt: Date.now() })
+    .where(and(eq(assets.userId, userId), eq(assets.id, id)))
+    .run();
 }
 
 // ── credit cards ──────────────────────────────────────────────────────────────
@@ -943,6 +1167,49 @@ export async function listStatementsForUser(
     for (const r of rows) all.push({ ...r, cardName: cardById.get(r.cardId)!.name });
   }
   return all;
+}
+
+/**
+ * Find an unpaid statement on a user's linked credit cards where the balance
+ * is within 10% of `amountCents` and the statement date is within `dateRange`
+ * days of `aroundDate`. Used for auto-matching LOAN_PAYMENTS to card statements.
+ */
+export async function findMatchingOpenStatement(
+  userId: string,
+  amountCents: number,
+  aroundDate: string,
+  dateRangeDays = 35,
+): Promise<(CreditCardStatementRow & { cardId: string }) | null> {
+  const db = getDb();
+  const cards = await listCreditCards(userId, false);
+  if (cards.length === 0) return null;
+
+  for (const card of cards) {
+    const stmts = await db
+      .select()
+      .from(creditCardStatements)
+      .where(eq(creditCardStatements.cardId, card.id))
+      .orderBy(desc(creditCardStatements.statementDate))
+      .all();
+
+    for (const s of stmts) {
+      // Already paid — skip
+      if (s.paidAmountCents != null && s.paidAmountCents > 0) continue;
+
+      // Check date proximity
+      const stmtTime = new Date(s.statementDate).getTime();
+      const targetTime = new Date(aroundDate).getTime();
+      const dayDiff = Math.abs(stmtTime - targetTime) / (1000 * 60 * 60 * 24);
+      if (dayDiff > dateRangeDays) continue;
+
+      // Check amount proximity (within 10%)
+      const threshold = Math.max(amountCents * 0.1, 100); // at least $1 tolerance
+      if (Math.abs(s.statementBalanceCents - amountCents) <= threshold) {
+        return { ...s, cardId: card.id };
+      }
+    }
+  }
+  return null;
 }
 
 export async function getStatement(
@@ -1792,6 +2059,63 @@ export async function getPrimaryLinkedBalance(userId: string): Promise<number | 
   return rows.reduce((sum, r) => sum + (r.balanceCents ?? 0), 0);
 }
 
+// ── net worth ────────────────────────────────────────────────────────────────
+
+export type NetWorthComponents = {
+  assetsCents: number;
+  depositoryBalanceCents: number;
+  creditCardDebtCents: number;
+  promoDebtCents: number;
+  netWorthCents: number;
+};
+
+export async function getNetWorthComponents(userId: string): Promise<NetWorthComponents> {
+  const db = getDb();
+
+  // Sum active assets
+  const assetRows = await db
+    .select({ valueCents: assets.valueCents })
+    .from(assets)
+    .where(and(eq(assets.userId, userId), eq(assets.isActive, true)))
+    .all();
+  const assetsCents = assetRows.reduce((s, r) => s + r.valueCents, 0);
+
+  // Sum Plaid depository balances
+  const allAccounts = await db
+    .select({ type: plaidAccounts.type, balanceCents: plaidAccounts.balanceCents })
+    .from(plaidAccounts)
+    .where(and(eq(plaidAccounts.userId, userId), eq(plaidAccounts.syncEnabled, true)))
+    .all();
+  const depositoryBalanceCents = allAccounts
+    .filter((a) => a.type === "depository")
+    .reduce((s, a) => s + (a.balanceCents ?? 0), 0);
+
+  // Sum credit card currentBalanceCents
+  const cards = await listCreditCards(userId, false);
+  const creditCardDebtCents = cards.reduce(
+    (s, c) => s + (c.currentBalanceCents ?? 0),
+    0,
+  );
+
+  // Sum active promo remaining
+  const promos = await listPromos(userId, false);
+  const promoDebtCents = promos.reduce(
+    (s, p) => s + p.remainingAmountCents,
+    0,
+  );
+
+  const netWorthCents =
+    assetsCents + depositoryBalanceCents - creditCardDebtCents - promoDebtCents;
+
+  return {
+    assetsCents,
+    depositoryBalanceCents,
+    creditCardDebtCents,
+    promoDebtCents,
+    netWorthCents,
+  };
+}
+
 // ── export/import ─────────────────────────────────────────────────────────────
 
 /**
@@ -1801,6 +2125,7 @@ export async function getPrimaryLinkedBalance(userId: string): Promise<number | 
  *       paychecks, extras, categories, creditCards, creditCardStatements
  *   v4: + creditCardPromos, creditCardPromoPayments
  *   v5: + variableBills, variableBillCards
+ *   v6: + categories.budgetAmountCents
  *
  * Plaid items / accounts / drafts are intentionally NOT exported — the
  * access tokens are encrypted with a per-deployment PLAID_ENCRYPTION_KEY,
@@ -1809,7 +2134,7 @@ export async function getPrimaryLinkedBalance(userId: string): Promise<number | 
  */
 export async function exportAll(userId: string) {
   const db = getDb();
-  const [s, b, bo, vb, vbc, cpo, p, e, c, cc, ccs, ccp, ccpp] = await Promise.all([
+  const [s, b, bo, vb, vbc, cpo, p, e, c, cc, ccs, ccp, ccpp, a] = await Promise.all([
     getSettings(userId),
     db.select().from(bills).where(eq(bills.userId, userId)).all(),
     db.select().from(billPaymentOverrides).where(eq(billPaymentOverrides.userId, userId)).all(),
@@ -1827,10 +2152,11 @@ export async function exportAll(userId: string) {
     listStatementsForUser(userId),
     db.select().from(creditCardPromos).where(eq(creditCardPromos.userId, userId)).all(),
     db.select().from(creditCardPromoPayments).where(eq(creditCardPromoPayments.userId, userId)).all(),
+    db.select().from(assets).where(eq(assets.userId, userId)).all(),
   ]);
   return {
     exportedAt: new Date().toISOString(),
-    schemaVersion: 5,
+    schemaVersion: 7,
     settings: s,
     bills: b,
     billPaymentOverrides: bo,
@@ -1844,6 +2170,7 @@ export async function exportAll(userId: string) {
     creditCardStatements: ccs,
     creditCardPromos: ccp,
     creditCardPromoPayments: ccpp,
+    assets: a,
   };
 }
 
@@ -1945,6 +2272,28 @@ async function validateImportGraph(
  *     IDs in a backup would let one user's import overwrite another's
  *     Plaid linkage.
  */
+/**
+ * Detect bills in an import payload that match existing bills by composite key
+ * (name + anchorDate + amountCents). Returns a list of human-readable warnings.
+ */
+export function detectDuplicateBills(
+  existingBills: BillRow[],
+  incomingBills: BackupImportInput["bills"],
+): string[] {
+  if (!incomingBills?.length) return [];
+  const existingKeys = new Set(
+    existingBills.map((b) => `${b.name}|${b.anchorDate}|${b.amountCents}`),
+  );
+  const warnings: string[] = [];
+  for (const b of incomingBills) {
+    const key = `${b.name}|${b.anchorDate}|${b.amountCents}`;
+    if (existingKeys.has(key)) {
+      warnings.push(`Duplicate bill: "${b.name}" on ${b.anchorDate} for ${b.amountCents} cents`);
+    }
+  }
+  return warnings;
+}
+
 export async function importAll(userId: string, payload: BackupImportInput): Promise<void> {
   const db = getDb();
   await validateImportGraph(userId, payload);
@@ -1966,6 +2315,7 @@ export async function importAll(userId: string, payload: BackupImportInput): Pro
     tx.delete(bills).where(eq(bills.userId, userId)).run();
     tx.delete(paychecks).where(eq(paychecks.userId, userId)).run();
     tx.delete(oneTimeExpenses).where(eq(oneTimeExpenses.userId, userId)).run();
+    tx.delete(assets).where(eq(assets.userId, userId)).run();
 
     importInsideTransaction(tx, userId, payload);
   });
@@ -1991,6 +2341,7 @@ function importInsideTransaction(
         name: c.name,
         color: c.color,
         kind: c.kind,
+        budgetAmountCents: c.budgetAmountCents ?? 0,
       }).run();
     }
   }
@@ -2149,6 +2500,7 @@ function importInsideTransaction(
       note: p.note ?? null,
       actualReceived: p.actualReceived ?? false,
       actualAmountCents: p.actualAmountCents ?? null,
+      isActive: p.isActive ?? true,
     }).run();
   }
   for (const e of payload.extras ?? []) {
@@ -2161,6 +2513,20 @@ function importInsideTransaction(
       category: e.category ?? "Other",
       paidViaCardId: e.paidViaCardId ?? null,
       notes: e.notes ?? null,
+      isActive: e.isActive ?? true,
+    }).run();
+  }
+
+  for (const a of payload.assets ?? []) {
+    tx.insert(assets).values({
+      id: a.id ?? newId(),
+      userId,
+      name: a.name,
+      valueCents: a.valueCents,
+      category: a.category ?? "other",
+      notes: a.notes ?? null,
+      asOfDate: a.asOfDate,
+      isActive: a.isActive ?? true,
     }).run();
   }
 }

@@ -20,6 +20,7 @@ import {
   updatePlaidDraftStatus,
   updateCardCycleDays,
   upsertCreditCardStatementByDate,
+  findMatchingOpenStatement,
 } from "./repos";
 import { todayIso } from "./dates";
 import { dueDateFromStatement } from "./credit-cards";
@@ -344,6 +345,22 @@ export async function syncPlaidTransactions(
             kind,
             promoTexts: plaidTransactionPromoTexts(txn),
           });
+
+          // Auto-match LOAN_PAYMENTS on credit accounts to open card statements
+          if (
+            kind === "card_payment" &&
+            (txn.personal_finance_category?.primary ?? "").toUpperCase() === "LOAN_PAYMENTS" &&
+            amountCents > 0
+          ) {
+            const match = await findMatchingOpenStatement(userId, amountCents, txn.date);
+            if (match) {
+              log.info(
+                `plaid-sync: auto-matched card_payment ${txn.transaction_id} ($${(amountCents / 100).toFixed(2)}) ` +
+                `to statement ${match.id} on card ${match.cardId}`,
+              );
+            }
+          }
+
           added++;
         }
 

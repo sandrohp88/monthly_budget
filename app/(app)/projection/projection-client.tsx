@@ -174,12 +174,14 @@ export function ProjectionClient({
   endDate,
   today,
   promoSummariesByCard,
+  variableBillCategories = {},
 }: {
   rows: ProjectionRow[];
   startDate: string;
   endDate: string;
   today: string;
   promoSummariesByCard: Record<string, PromoPaymentSummary[]>;
+  variableBillCategories?: Record<string, string[]>;
 }) {
   const router = useRouter();
   const [filter, setFilter] = React.useState<FilterKey>("ALL");
@@ -442,6 +444,7 @@ export function ProjectionClient({
                                     event={event}
                                     eventIndex={eventIndex}
                                     promoSummariesByCard={promoSummariesByCard}
+                                    variableBillCategories={variableBillCategories}
                                     onAdjustPayment={setAdjustingPayment}
                                   />
                                 </div>
@@ -523,12 +526,14 @@ function ProjectionEventItem({
   event,
   eventIndex,
   promoSummariesByCard,
+  variableBillCategories = {},
   onAdjustPayment,
 }: {
   row: ProjectionRow;
   event: ProjectionEvent;
   eventIndex: number;
   promoSummariesByCard: Record<string, PromoPaymentSummary[]>;
+  variableBillCategories?: Record<string, string[]>;
   onAdjustPayment: (adjustment: PaymentAdjustment) => void;
 }) {
   const targetType =
@@ -609,6 +614,19 @@ function ProjectionEventItem({
           ) : null}
         </span>
       ) : null}
+      {(() => {
+        const catKey = event.sourceId ? `${event.sourceId}:${row.date}` : "";
+        const cats = catKey ? variableBillCategories[catKey] : undefined;
+        if (!cats || cats.length === 0) return null;
+        return cats.map((cat) => (
+          <span
+            key={cat}
+            className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-1.5 py-0.5 text-[8px] uppercase tracking-[0.12em] text-[var(--text-2)]"
+          >
+            {cat}
+          </span>
+        ));
+      })()}
     </span>
   );
 }
