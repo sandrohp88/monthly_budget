@@ -11,6 +11,7 @@ export type VariableBillCardCharge = {
   variableBillId: string;
   cardId: string;
   name: string;
+  category: string;
   date: string;
   dueDate: string;
   amountCents: number;
@@ -71,6 +72,7 @@ export function projectVariableBillCardCharges(opts: {
           variableBillId: entry.bill.id,
           cardId: card.id,
           name: entry.bill.name,
+          category: entry.bill.category,
           date: row.date,
           dueDate: dueDateFromStatement(statementDate, card.dueDay),
           amountCents,

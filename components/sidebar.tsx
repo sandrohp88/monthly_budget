@@ -4,9 +4,11 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  BarChart3,
   ChartLine,
   CircleDollarSign,
   CreditCard,
+  Gem,
   LayoutDashboard,
   Landmark,
   PartyPopper,
@@ -24,7 +26,7 @@ export type SidebarSummary = {
   deltaCents: number;
 };
 
-const NAV: ReadonlyArray<{
+export const NAV: ReadonlyArray<{
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
@@ -39,6 +41,8 @@ const NAV: ReadonlyArray<{
   { href: "/paychecks", label: "Paychecks", icon: CircleDollarSign, shortcut: "p", section: 1 },
   { href: "/extras", label: "One-Time", icon: PartyPopper, shortcut: "e", section: 1 },
   { href: "/projection", label: "Projection", icon: ChartLine, shortcut: "x", section: 1 },
+  { href: "/assets", label: "Assets", icon: Gem, shortcut: "w", section: 1 },
+  { href: "/reports", label: "Reports", icon: BarChart3, shortcut: "r", section: 1 },
   { href: "/settings", label: "Settings", icon: Settings, shortcut: "s", section: 2 },
 ];
 
@@ -160,7 +164,7 @@ export function Sidebar({
 
       {armed ? (
         <div className="mx-3 mb-2 rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-2)] px-3 py-1.5 text-[9px] uppercase tracking-[0.15em] text-[var(--mint)]">
-      press: d b a t c p e x s
+      press: d b a t c p e x w r s
         </div>
       ) : null}
 

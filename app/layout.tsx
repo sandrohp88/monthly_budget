@@ -31,6 +31,12 @@ const ui = Rajdhani({
 export const metadata: Metadata = {
   title: "FINANCE_OS",
   description: "Personal budget tracker",
+  manifest: "/manifest.json",
+  other: {
+    "mobile-web-app-capable": "yes",
+    "apple-mobile-web-app-capable": "yes",
+    "apple-mobile-web-app-status-bar-style": "black-translucent",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -40,8 +46,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       className={`${mono.variable} ${display.variable} ${ui.variable}`}
       suppressHydrationWarning
     >
+      <head>
+        <meta name="theme-color" content="#0ff" />
+        <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+        <link rel="apple-touch-icon" href="/icons/icon.svg" />
+      </head>
       <body className="min-h-screen antialiased">
         <ThemeProvider>{children}</ThemeProvider>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js")}`,
+          }}
+        />
       </body>
     </html>
   );

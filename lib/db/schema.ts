@@ -60,6 +60,7 @@ export const paychecks = sqliteTable(
     note: text("note"),
     actualReceived: integer("actual_received", { mode: "boolean" }).notNull().default(false),
     actualAmountCents: integer("actual_amount_cents"),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
@@ -178,6 +179,7 @@ export const oneTimeExpenses = sqliteTable(
     category: text("category").notNull(),
     paidViaCardId: text("paid_via_card_id"),
     notes: text("notes"),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
@@ -405,6 +407,7 @@ export const categories = sqliteTable("categories", {
   name: text("name").notNull(),
   color: text("color").notNull(),
   kind: text("kind", { enum: ["expense", "income"] }).notNull(),
+  budgetAmountCents: integer("budget_amount_cents").notNull().default(0),
 });
 
 export type UserRow = typeof users.$inferSelect;
@@ -547,9 +550,34 @@ export const plaidTransactionDrafts = sqliteTable(
   }),
 );
 
+// ── Assets (net-worth tracking) ───────────────────────────────────────────────
+
+export const assets = sqliteTable(
+  "assets",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    valueCents: integer("value_cents").notNull(),
+    category: text("category").notNull().default("other"),
+    notes: text("notes"),
+    asOfDate: text("as_of_date").notNull(),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    userIdx: index("assets_user_idx").on(t.userId),
+  }),
+);
+
 export type PlaidItemRow = typeof plaidItems.$inferSelect;
 export type PlaidAccountRow = typeof plaidAccounts.$inferSelect;
 export type PlaidTransactionDraftRow = typeof plaidTransactionDrafts.$inferSelect;
+export type AssetRow = typeof assets.$inferSelect;
+export type NewAsset = typeof assets.$inferInsert;
 export type NewPlaidItem = typeof plaidItems.$inferInsert;
 export type NewPlaidAccount = typeof plaidAccounts.$inferInsert;
 export type NewPlaidTransactionDraft = typeof plaidTransactionDrafts.$inferInsert;

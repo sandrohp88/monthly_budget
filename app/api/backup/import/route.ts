@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError, readJson } from "@/lib/api";
-import { importAll } from "@/lib/repos";
+import { detectDuplicateBills, importAll, listBills } from "@/lib/repos";
 import { backupImportSchema } from "@/lib/validation";
 
 export async function POST(req: Request) {
@@ -11,8 +11,13 @@ export async function POST(req: Request) {
   if (data instanceof NextResponse) return data;
 
   try {
+    // Check for duplicate bills before import (import replaces all data,
+    // so this is informational — the user can decide whether to proceed)
+    const existingBills = await listBills(auth.userId, true);
+    const warnings = detectDuplicateBills(existingBills, data.bills);
+
     await importAll(auth.userId, data);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, warnings });
   } catch (e) {
     // `importAll` throws with stable, payload-shape messages
     // ("X references unknown cardId Y", "duplicate creditCard id Z").

@@ -1,22 +1,12 @@
 import { test, expect } from "@playwright/test";
+import { ensureAuth } from "./auth";
 
 // All UI copy is uppercase + letter-spaced per the Home Apps design system.
 // Locators use case-insensitive regex so a future copy tweak (or a casing
 // change in the design system) doesn't silently break the suite.
 
 test("setup -> add a bill -> add an extra -> see them in projection", async ({ page }) => {
-  await page.goto("/setup");
-  await expect(page.getByText(/CREATE OWNER ACCOUNT/i)).toBeVisible();
-
-  await page.getByLabel(/display name/i).fill("Tester");
-  await page.getByLabel(/^email$/i).fill("test@example.com");
-  await page.getByLabel(/password \(min 8 chars\)/i).fill("supersecret1");
-  await page.getByLabel(/^starting balance$/i).fill("1000");
-  await page.getByLabel(/default paycheck/i).fill("2000");
-
-  await page.getByRole("button", { name: /create account/i }).click();
-  await page.waitForURL("/");
-  await expect(page.getByText(/STARTING BALANCE/i).first()).toBeVisible();
+  await ensureAuth(page);
 
   await page.goto("/bills");
   await page.getByRole("button", { name: /^ADD BILL$/i }).click();

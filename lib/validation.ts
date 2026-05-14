@@ -130,6 +130,43 @@ export const categoryCreateSchema = z.object({
   name: z.string().min(1).max(50),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color must be hex like #4ade80"),
   kind: z.enum(["expense", "income"]).default("expense"),
+  budgetAmountCents: cents.optional(),
+});
+
+export const categoryUpdateSchema = z.object({
+  name: z.string().min(1).max(50).optional(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color must be hex like #4ade80").optional(),
+  kind: z.enum(["expense", "income"]).optional(),
+  budgetAmountCents: cents.optional(),
+});
+
+// ── Assets ────────────────────────────────────────────────────────────────────
+
+const assetCategory = z.enum([
+  "real_estate",
+  "vehicle",
+  "investment",
+  "savings",
+  "retirement",
+  "crypto",
+  "other",
+]);
+
+export const assetCreateSchema = z.object({
+  name: z.string().min(1).max(80),
+  valueCents: cents,
+  category: assetCategory.default("other"),
+  notes: z.string().max(500).nullable().optional(),
+  asOfDate: isoDate,
+});
+
+export const assetUpdateSchema = z.object({
+  name: z.string().min(1).max(80).optional(),
+  valueCents: cents.optional(),
+  category: assetCategory.optional(),
+  notes: z.string().max(500).nullable().optional(),
+  asOfDate: isoDate.optional(),
+  isActive: z.boolean().optional(),
 });
 
 const creditCardBaseSchema = z.object({
@@ -439,6 +476,7 @@ const importPaycheckSchema = z.object({
   note: z.string().max(120).nullable().optional(),
   actualReceived: z.boolean().optional(),
   actualAmountCents: cents.nullable().optional(),
+  isActive: z.boolean().optional(),
 });
 
 const importExtraSchema = z.object({
@@ -449,6 +487,7 @@ const importExtraSchema = z.object({
   category: z.string().min(1).max(50).optional(),
   paidViaCardId: id.nullable().optional(),
   notes: optionalNotes,
+  isActive: z.boolean().optional(),
 });
 
 const importCategorySchema = z.object({
@@ -456,6 +495,7 @@ const importCategorySchema = z.object({
   name: z.string().min(1).max(50),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color must be hex"),
   kind: z.enum(["expense", "income"]),
+  budgetAmountCents: cents.optional(),
 });
 
 const importCreditCardSchema = z.object({
@@ -506,6 +546,16 @@ const importCreditCardPromoPaymentSchema = z.object({
   note: z.string().max(500).nullable().optional(),
 });
 
+const importAssetSchema = z.object({
+  id: id.optional(),
+  name: z.string().min(1).max(80),
+  valueCents: cents,
+  category: z.string().min(1).max(50).optional(),
+  notes: z.string().max(500).nullable().optional(),
+  asOfDate: isoDate,
+  isActive: z.boolean().optional(),
+});
+
 /**
  * Top-level shape of a backup payload. Every collection is bounded so a
  * pathological backup can't OOM the server. Ordering of inserts is enforced
@@ -527,6 +577,7 @@ export const backupImportSchema = z.object({
   creditCardStatements: z.array(importCreditCardStatementSchema).max(20000).optional(),
   creditCardPromos: z.array(importCreditCardPromoSchema).max(2000).optional(),
   creditCardPromoPayments: z.array(importCreditCardPromoPaymentSchema).max(20000).optional(),
+  assets: z.array(importAssetSchema).max(1000).optional(),
 });
 
 export type BackupImportInput = z.infer<typeof backupImportSchema>;
