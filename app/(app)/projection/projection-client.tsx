@@ -6,9 +6,18 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   CalendarDays,
+  CalendarClock,
   CreditCard,
+  Gauge,
+  Layers,
+  ListChecks,
+  PiggyBank,
   ReceiptText,
+  ShieldAlert,
+  TrendingDown,
+  TrendingUp,
   Wallet,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -27,6 +36,10 @@ import { Money } from "@/components/money";
 import { MoneyInput } from "@/components/money-input";
 import { DateLabel } from "@/components/date-label";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
+import {
+  buildProjectionInsights,
+  type ProjectionInsights,
+} from "@/lib/projection-insights";
 import { addDaysIso, startOfMonthIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 
@@ -279,6 +292,7 @@ export function ProjectionClient({
     () => buildLedgerSummary(windowRows, eventRows, today),
     [windowRows, eventRows, today],
   );
+  const insights = React.useMemo(() => buildProjectionInsights(rows, today), [rows, today]);
 
   const overridePath = (adjustment: PaymentAdjustment) =>
     adjustment.targetType === "bill"
@@ -478,6 +492,9 @@ export function ProjectionClient({
           </aside>
         </div>
       </section>
+
+      <ProjectionInsightsPanel insights={insights} />
+      <ProjectionAnalyticsPanel insights={insights} />
 
       <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-3 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
         <div className="flex flex-wrap items-center gap-2">
@@ -704,6 +721,354 @@ function LedgerMetric({
         {value}
       </div>
       <div className="mt-3 text-[13px] text-[var(--text-2)]">{detail}</div>
+    </div>
+  );
+}
+
+function ProjectionInsightsPanel({ insights }: { insights: ProjectionInsights }) {
+  const monthRunway = insights.monthRunway;
+  const shortfall = insights.firstShortfall;
+  const safeTone = insights.safeToSpendCents > 0 ? "good" : "warn";
+  const runwayTone =
+    (monthRunway?.leftAfterScheduledCents ?? 0) < 0
+      ? "danger"
+      : (monthRunway?.perDayCents ?? 0) < 2500
+        ? "warn"
+        : "good";
+
+  return (
+    <section className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(300px,0.42fr)]">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <InsightMetric
+          icon={Gauge}
+          label="Spendable buffer"
+          value={<Money cents={insights.safeToSpendCents} />}
+          tone={safeTone}
+          detail={
+            insights.safeToSpendThroughDate ? (
+              <>
+                Through <DateLabel iso={insights.safeToSpendThroughDate} format="short" />
+                {insights.nextIncomeDate ? (
+                  <>
+                    {" "}
+                    before <Money cents={insights.nextIncomeCents} /> income
+                  </>
+                ) : null}
+              </>
+            ) : (
+              "No future rows"
+            )
+          }
+        />
+        <InsightMetric
+          icon={ShieldAlert}
+          label="First shortfall"
+          value={shortfall ? <Money cents={shortfall.neededCents} /> : "CLEAR"}
+          tone={shortfall ? "danger" : "good"}
+          detail={
+            shortfall ? (
+              <>
+                Needed by <DateLabel iso={shortfall.date} format="short" />
+              </>
+            ) : (
+              "No negative day in projection"
+            )
+          }
+        />
+        <InsightMetric
+          icon={CalendarClock}
+          label="Month runway"
+          value={
+            monthRunway ? (
+              <Money cents={monthRunway.leftAfterScheduledCents} />
+            ) : (
+              "NO DATA"
+            )
+          }
+          tone={runwayTone}
+          detail={
+            monthRunway ? (
+              <>
+                <Money cents={monthRunway.perDayCents} /> per day after scheduled items
+              </>
+            ) : (
+              "Current month outside projection"
+            )
+          }
+        />
+        <InsightMetric
+          icon={ListChecks}
+          label="Remaining outflow"
+          value={
+            monthRunway ? <Money cents={monthRunway.expenseRemainingCents} /> : "NO DATA"
+          }
+          tone="warn"
+          detail={
+            monthRunway ? (
+              <>
+                Offset by <Money cents={monthRunway.incomeRemainingCents} /> income this month
+              </>
+            ) : (
+              "No current-month rows"
+            )
+          }
+        />
+      </div>
+      <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[12px] font-medium tracking-[0.12em] text-[var(--text-3)] uppercase">
+              Cash pressure
+            </div>
+            <div className="mt-1 text-[15px] font-semibold text-[var(--text-0)]">
+              Heaviest upcoming days
+            </div>
+          </div>
+          <SoftPill tone={shortfall ? "danger" : "neutral"}>
+            {shortfall ? "watch" : "clear"}
+          </SoftPill>
+        </div>
+        <div className="divide-y divide-[var(--border-raw)]">
+          {insights.upcomingHeavyDays.length > 0 ? (
+            insights.upcomingHeavyDays.map((day) => (
+              <div key={day.date} className="grid gap-2 py-3 sm:grid-cols-[auto_1fr_auto]">
+                <div className="tabular text-[12px] font-semibold text-[var(--text-2)]">
+                  <DateLabel iso={day.date} format="short" />
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-[14px] font-medium text-[var(--text-0)]">
+                    {day.labels.length > 0 ? day.labels.join(" + ") : "Scheduled outflow"}
+                  </div>
+                  <div className={cn("mt-0.5 text-[12px]", balanceClass(day.balanceCents))}>
+                    Balance after: <Money cents={day.balanceCents} />
+                  </div>
+                </div>
+                <div className="tabular text-right text-[14px] font-semibold text-[var(--red)]">
+                  -<Money cents={day.expenseCents} />
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="py-6 text-[13px] text-[var(--text-3)]">
+              No scheduled cash outflow remains in the projection.
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProjectionAnalyticsPanel({ insights }: { insights: ProjectionInsights }) {
+  const { paycheckCycles, savingsRate, recurringCommitmentRatio, expenseClusters, balanceTrajectory } = insights;
+  const savingsPct = Math.round(savingsRate * 100);
+  const commitPct = Math.round(recurringCommitmentRatio * 100);
+  const TrajectoryIcon = balanceTrajectory?.direction === "declining" ? TrendingDown : TrendingUp;
+  const trajectoryTone: "good" | "warn" | "danger" =
+    balanceTrajectory?.direction === "improving"
+      ? "good"
+      : balanceTrajectory?.direction === "stable"
+        ? "warn"
+        : "danger";
+
+  return (
+    <section className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <InsightMetric
+          icon={PiggyBank}
+          label="Savings rate"
+          value={`${savingsPct}%`}
+          tone={savingsPct >= 20 ? "good" : savingsPct >= 10 ? "warn" : "danger"}
+          detail={
+            savingsPct >= 20
+              ? "Healthy — over 20% of income retained"
+              : savingsPct >= 10
+                ? "Moderate — aim for 20%+ retained"
+                : "Low — most income consumed by obligations"
+          }
+        />
+        <InsightMetric
+          icon={Layers}
+          label="Commitment ratio"
+          value={`${commitPct}%`}
+          tone={commitPct <= 70 ? "good" : commitPct <= 90 ? "warn" : "danger"}
+          detail={
+            commitPct <= 70
+              ? "Within margin — committed outflow under 70%"
+              : commitPct <= 90
+                ? "Tight — little discretionary room"
+                : "Overcommitted — expenses exceed income"
+          }
+        />
+        <InsightMetric
+          icon={TrajectoryIcon}
+          label="Balance trajectory"
+          value={
+            balanceTrajectory
+              ? balanceTrajectory.direction.charAt(0).toUpperCase() + balanceTrajectory.direction.slice(1)
+              : "N/A"
+          }
+          tone={trajectoryTone}
+          detail={
+            balanceTrajectory ? (
+              <>
+                Net {balanceTrajectory.deltaCents >= 0 ? "+" : ""}
+                <Money cents={balanceTrajectory.deltaCents} /> over projection window
+              </>
+            ) : (
+              "Insufficient data"
+            )
+          }
+        />
+        <InsightMetric
+          icon={Zap}
+          label="Expense clusters"
+          value={`${expenseClusters.length}`}
+          tone={expenseClusters.length === 0 ? "good" : expenseClusters.length <= 2 ? "warn" : "danger"}
+          detail={
+            expenseClusters.length > 0
+              ? `${expenseClusters.length} day${expenseClusters.length > 1 ? "s" : ""} with ≥30% of cycle income in a single hit`
+              : "No dangerous single-day expense concentrations"
+          }
+        />
+      </div>
+
+      {paycheckCycles.length > 1 ? (
+        <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+          <div className="mb-3">
+            <div className="text-[12px] font-medium tracking-[0.12em] text-[var(--text-3)] uppercase">
+              Paycheck cycle analysis
+            </div>
+            <div className="mt-1 text-[15px] font-semibold text-[var(--text-0)]">
+              Income vs expenses per cycle
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="tabular w-full text-[13px]">
+              <thead>
+                <tr className="border-b border-[var(--border-raw)]">
+                  {["Cycle", "Income", "Expenses", "Net", "Savings", "Low point"].map((h, i) => (
+                    <th
+                      key={h}
+                      className={cn(
+                        "px-3 py-2 text-[11px] font-medium tracking-[0.12em] text-[var(--text-3)] uppercase",
+                        i >= 1 ? "text-right" : "text-left",
+                      )}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {paycheckCycles.map((cycle) => {
+                  const netTone = cycle.netCents >= 0 ? "text-[var(--phosphor)]" : "text-[var(--red)]";
+                  const lowTone = cycle.lowBalanceCents < 0 ? "text-[var(--red)]" : cycle.lowBalanceCents < 500_00 ? "text-[var(--amber)]" : "text-[var(--text-1)]";
+                  return (
+                    <tr key={cycle.startDate} className="border-b border-[var(--border-raw)]/40">
+                      <td className="px-3 py-2.5 text-[var(--text-1)]">
+                        <DateLabel iso={cycle.startDate} format="short" />
+                        {" – "}
+                        <DateLabel iso={cycle.endDate} format="short" />
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-medium text-[var(--phosphor)]">
+                        +<Money cents={cycle.incomeCents} />
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-medium text-[var(--red)]">
+                        −<Money cents={cycle.expenseCents} />
+                      </td>
+                      <td className={cn("px-3 py-2.5 text-right font-semibold", netTone)}>
+                        {cycle.netCents >= 0 ? "+" : ""}
+                        <Money cents={cycle.netCents} />
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-[var(--text-2)]">
+                        {Math.round(cycle.savingsRate * 100)}%
+                      </td>
+                      <td className={cn("px-3 py-2.5 text-right font-medium", lowTone)}>
+                        <Money cents={cycle.lowBalanceCents} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {expenseClusters.length > 0 ? (
+        <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[12px] font-medium tracking-[0.12em] text-[var(--text-3)] uppercase">
+                Expense clustering
+              </div>
+              <div className="mt-1 text-[15px] font-semibold text-[var(--text-0)]">
+                High-concentration days
+              </div>
+            </div>
+            <SoftPill tone="warning">overdraft risk</SoftPill>
+          </div>
+          <div className="divide-y divide-[var(--border-raw)]">
+            {expenseClusters.map((cluster) => (
+              <div key={cluster.date} className="grid gap-2 py-3 sm:grid-cols-[auto_1fr_auto_auto]">
+                <div className="tabular text-[12px] font-semibold text-[var(--text-2)]">
+                  <DateLabel iso={cluster.date} format="short" />
+                </div>
+                <div className="min-w-0 truncate text-[14px] font-medium text-[var(--text-0)]">
+                  {cluster.labels.length > 0 ? cluster.labels.join(" + ") : "Scheduled outflow"}
+                </div>
+                <div className="tabular text-right text-[14px] font-semibold text-[var(--red)]">
+                  −<Money cents={cluster.expenseCents} />
+                </div>
+                <div className="tabular text-right text-[12px] text-[var(--amber)]">
+                  {Math.round(cluster.pctOfIncome * 100)}% of cycle
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function InsightMetric({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: React.ReactNode;
+  detail: React.ReactNode;
+  tone: "good" | "warn" | "danger";
+}) {
+  const toneClass =
+    tone === "danger"
+      ? "text-[var(--red)]"
+      : tone === "warn"
+        ? "text-[var(--amber)]"
+        : "text-[var(--phosphor)]";
+
+  return (
+    <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="text-[12px] font-medium tracking-[0.12em] text-[var(--text-3)] uppercase">
+          {label}
+        </div>
+        <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-[var(--bg-2)] text-[var(--text-2)]">
+          <Icon className="h-4 w-4" strokeWidth={2} />
+        </span>
+      </div>
+      <div className={cn("tabular text-[22px] leading-none font-semibold", toneClass)}>
+        {value}
+      </div>
+      <div className="mt-3 min-h-[2rem] text-[12px] leading-snug text-[var(--text-2)]">
+        {detail}
+      </div>
     </div>
   );
 }
