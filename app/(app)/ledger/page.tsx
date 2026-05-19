@@ -2,11 +2,11 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { buildProjection } from "@/lib/projection-server";
 import { DateLabel } from "@/components/date-label";
-import { ProjectionClient } from "./projection-client";
+import { ProjectionClient } from "../projection/projection-client";
 
 export const dynamic = "force-dynamic";
 
-export default async function ProjectionPage() {
+export default async function LedgerPage() {
   const session = await auth();
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
@@ -26,16 +26,16 @@ export default async function ProjectionPage() {
             aria-level={1}
             className="text-[34px] leading-none font-semibold tracking-normal text-[var(--text-0)]"
           >
-            Projection
+            Ledger
           </div>
           <p className="mt-2 text-[14px] text-[var(--text-2)]">
-            Filtered ledger from <DateLabel iso={startDate} format="short" /> to{" "}
-            <DateLabel iso={endDate} format="short" />
+            Daily cash-flow from <DateLabel iso={startDate} format="short" /> to{" "}
+            <DateLabel iso={endDate} format="short" /> · {rows.length} days
           </p>
         </div>
       </div>
       <ProjectionClient
-        mode="table"
+        mode="full"
         rows={rows}
         startDate={startDate}
         endDate={endDate}
