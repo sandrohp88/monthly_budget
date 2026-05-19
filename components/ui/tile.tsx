@@ -7,6 +7,7 @@ export function Tile({
   delta,
   badge,
   variant = "default",
+  compact = false,
   className,
 }: {
   label: React.ReactNode;
@@ -14,6 +15,7 @@ export function Tile({
   delta?: React.ReactNode;
   badge?: React.ReactNode;
   variant?: "default" | "mint" | "red" | "amber";
+  compact?: boolean;
   className?: string;
 }) {
   const valueColor = {
@@ -26,20 +28,38 @@ export function Tile({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-[14px] border border-[var(--border-raw)] bg-[var(--bg-card)] " +
-          "px-5 py-4 shadow-[var(--shadow-sm)] transition-colors hover:border-[var(--border-2)]",
+        "relative overflow-hidden rounded-[12px] border border-[var(--border-raw)] bg-[var(--bg-card)] shadow-[var(--shadow-sm)] transition-colors hover:border-[var(--border-2)]",
+        compact ? "px-3.5 py-3" : "px-5 py-4",
         className,
       )}
     >
-      <div className="mb-3 flex items-center justify-between text-[12px] font-medium text-[var(--text-2)]">
+      <div
+        className={cn(
+          "flex items-center justify-between font-medium text-[var(--text-2)]",
+          compact ? "mb-1.5 text-[11px]" : "mb-3 text-[12px]",
+        )}
+      >
         <span>{label}</span>
         {badge}
       </div>
-      <div className={cn("mb-1 text-[26px] font-bold leading-none tracking-tight tabular", valueColor)}>
+      <div
+        className={cn(
+          "font-bold leading-none tracking-tight tabular",
+          compact ? "mb-0.5 text-[20px]" : "mb-1 text-[26px]",
+          valueColor,
+        )}
+      >
         {value}
       </div>
       {delta != null ? (
-        <div className="text-[12px] leading-relaxed text-[var(--text-2)]">{delta}</div>
+        <div
+          className={cn(
+            "text-[var(--text-2)]",
+            compact ? "text-[11px] leading-snug" : "text-[12px] leading-relaxed",
+          )}
+        >
+          {delta}
+        </div>
       ) : null}
     </div>
   );
@@ -61,6 +81,6 @@ export function TileGrid({
         ? "grid-cols-3"
         : cols === 4
           ? "grid-cols-2 lg:grid-cols-4"
-          : "grid-cols-[repeat(auto-fit,minmax(220px,1fr))]";
-  return <div className={cn("grid gap-3.5", colsClass, className)}>{children}</div>;
+          : "grid-cols-[repeat(auto-fit,minmax(180px,1fr))]";
+  return <div className={cn("grid gap-2.5", colsClass, className)}>{children}</div>;
 }

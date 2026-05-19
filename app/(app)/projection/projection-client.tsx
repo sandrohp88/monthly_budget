@@ -241,6 +241,7 @@ function buildLedgerSummary(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function ProjectionClient({
+  mode = "full",
   rows,
   startDate,
   endDate,
@@ -248,6 +249,7 @@ export function ProjectionClient({
   promoSummariesByCard,
   variableBillCategories = {},
 }: {
+  mode?: "full" | "table";
   rows: ProjectionRow[];
   startDate: string;
   endDate: string;
@@ -292,7 +294,10 @@ export function ProjectionClient({
     () => buildLedgerSummary(windowRows, eventRows, today),
     [windowRows, eventRows, today],
   );
-  const insights = React.useMemo(() => buildProjectionInsights(rows, today), [rows, today]);
+  const insights = React.useMemo(
+    () => (mode === "full" ? buildProjectionInsights(rows, today) : null),
+    [mode, rows, today],
+  );
 
   const overridePath = (adjustment: PaymentAdjustment) =>
     adjustment.targetType === "bill"
@@ -390,6 +395,8 @@ export function ProjectionClient({
 
   return (
     <div className="space-y-4 font-sans">
+      {mode === "full" && insights ? (
+        <>
       <section className="overflow-hidden rounded-[18px] border border-[var(--border-raw)] bg-[var(--bg-card)] shadow-[0_10px_30px_rgba(0,0,0,0.10)]">
         <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.38fr)]">
           <div className="grid gap-px bg-[var(--border-raw)] sm:grid-cols-2 xl:grid-cols-4">
@@ -495,6 +502,8 @@ export function ProjectionClient({
 
       <ProjectionInsightsPanel insights={insights} />
       <ProjectionAnalyticsPanel insights={insights} />
+        </>
+      ) : null}
 
       <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-3 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
         <div className="flex flex-wrap items-center gap-2">

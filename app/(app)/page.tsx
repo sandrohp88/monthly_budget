@@ -13,11 +13,10 @@ import { AlertBar } from "@/components/ui/alert-bar";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { ProjectionChart } from "@/components/projection-chart";
-import { Sparkline } from "@/components/ui/sparkline";
 import { addDaysIso, todayIso } from "@/lib/dates";
 import { findWorstDay } from "@/lib/projection";
 import { cn } from "@/lib/cn";
-import { Plus, Download, AlertTriangle } from "lucide-react";
+import { Plus, Download } from "lucide-react";
 import { BudgetUtilization } from "@/components/budget-utilization";
 
 export const dynamic = "force-dynamic";
@@ -105,7 +104,6 @@ export default async function DashboardPage() {
   const worst = findWorstDay(rows);
   const worstIsRisk = worst && worst.balanceCents < 50000;
 
-  // Sparkline preview: first ~30 days of the daily projected balance.
   // Balance vs projection delta: compare live Plaid balance to today's projected balance
   const todayRow = rows.find((r) => r.date === today);
   const projectedTodayCents = todayRow?.balanceCents ?? projection.startingBalanceCents;
@@ -113,17 +111,13 @@ export default async function DashboardPage() {
   const balanceDeltaSignificant =
     balanceDeltaCents != null && Math.abs(balanceDeltaCents) > 50_00; // > $50 drift
 
-  const heroSparkPoints = rows.slice(0, 30).map((r) => r.balanceCents);
-  const heroEndCents = heroSparkPoints[heroSparkPoints.length - 1] ?? projection.startingBalanceCents;
-  const heroDeltaCents = heroEndCents - projection.startingBalanceCents;
-
   // Build "upcoming events" list — next 6 income/expense rows
   const upcomingEvents = rows
     .filter((r) => r.date >= today && (r.events.length > 0))
     .slice(0, 5);
 
   return (
-    <div className="space-y-7 fade-in">
+    <div className="fade-in space-y-4">
       <PageHead
         module="MODULE_01"
         title="OVERVIEW"
@@ -144,85 +138,34 @@ export default async function DashboardPage() {
         }
       />
 
-      <div
-        className="has-brackets relative overflow-hidden rounded-sm border border-[var(--border-raw)] bg-[var(--bg-card)] p-6"
-        style={{ borderTop: "2px solid var(--mint)" }}
-      >
-        <div className="grid items-start gap-6 lg:grid-cols-[1.4fr_1fr]">
-          <div>
-            <div className="mb-3 font-display text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-3)]">
-              NET POSITION — STARTING BALANCE
-            </div>
-            <div className="tabular text-[44px] font-bold leading-none tracking-tight text-[var(--text-0)]">
-              <Money cents={projection.startingBalanceCents} />
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1.5 border px-2 py-[3px] text-[10px] font-semibold uppercase tracking-[0.12em] tabular",
-                  heroDeltaCents > 0
-                    ? "border-[var(--mint-dim)]/60 bg-[var(--mint-glow)] text-[var(--mint)]"
-                    : heroDeltaCents < 0
-                      ? "border-[var(--red)]/40 bg-[var(--red-glow)] text-[var(--red)]"
-                      : "border-[var(--border-raw)] text-[var(--text-2)]",
-                )}
-                style={{ borderRadius: 2 }}
-              >
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 rounded-full blink",
-                    heroDeltaCents > 0
-                      ? "bg-[var(--mint)]"
-                      : heroDeltaCents < 0
-                        ? "bg-[var(--red)]"
-                        : "bg-[var(--text-3)]",
-                  )}
-                />
-                {heroDeltaCents > 0 ? "+" : heroDeltaCents < 0 ? "−" : ""}
-                <Money cents={Math.abs(heroDeltaCents)} /> · NEXT 30D
-              </span>
-              <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
-                projection through{" "}
-                <span className="text-[var(--text-1)]">
-                  <DateLabel iso={projection.endDate} format="short" />
-                </span>{" "}
-                · {projectionMonths} mo
-              </span>
-            </div>
-          </div>
-          <div className="flex flex-col gap-2">
-            <Sparkline data={heroSparkPoints} height={70} stroke="var(--mint)" />
-            <div className="flex items-center justify-between font-mono text-[9px] tracking-[0.15em] text-[var(--text-3)]">
-              <span>TODAY</span>
-              <span>T+30D</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <TileGrid>
+      <TileGrid cols={4}>
         <Tile
+          compact
           label="MONTHLY BILLS"
           value={<Money cents={totalMonthlyBills} />}
           delta={`amortized across all cycles`}
         />
         <Tile
+          compact
           label="NON-MONTHLY (ANNUALIZED)"
           value={<Money cents={totalAnnualBills} />}
           delta={`${nonMonthlyBills.length} tracked`}
         />
         <Tile
+          compact
           label="ONE-TIME (90D)"
           value={<Money cents={upcomingExtras} />}
           delta={`${upcomingExtraCount} planned`}
         />
         <Tile
+          compact
           label="AVG MONTHLY INCOME"
           value={<Money cents={avgMonthlyIncome} />}
           variant="mint"
           delta={`net: ${avgMonthlyIncome - totalMonthlyBills > 0 ? "+" : ""}${formatDelta(avgMonthlyIncome - totalMonthlyBills)}`}
         />
         <Tile
+          compact
           label="NEXT PAYDAY"
           value={
             nextPayday ? (
@@ -240,6 +183,7 @@ export default async function DashboardPage() {
           }
         />
         <Tile
+          compact
           label="CREDIT DUE"
           badge={
             ccOverdueCount > 0 ? (
@@ -270,6 +214,7 @@ export default async function DashboardPage() {
           }
         />
         <Tile
+          compact
           label="PROJECTED LOW"
           badge={worstIsRisk ? <Badge variant="destructive">RISK</Badge> : null}
           value={
@@ -319,59 +264,36 @@ export default async function DashboardPage() {
       ) : null}
 
       {worst && worstIsRisk ? (
-        <div
-          className="grid items-center gap-4 rounded-sm border p-4"
-          style={{
-            background:
-              "linear-gradient(135deg, color-mix(in oklch, var(--red) 8%, transparent), transparent 60%)",
-            borderColor: "color-mix(in oklch, var(--red) 25%, transparent)",
-            gridTemplateColumns: "auto 1fr auto",
-          }}
-        >
-          <div
-            className="grid h-11 w-11 place-items-center rounded-sm border text-[var(--red)]"
-            style={{ background: "var(--bg-3)", borderColor: "var(--red)" }}
-          >
-            <AlertTriangle className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="mb-1 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
-              {"// WORST_DAY_DETECTED"}
-            </div>
-            <div className="text-[22px] font-bold leading-none tracking-tight text-[var(--red)]">
-              <Money cents={worst.balanceCents} />
-            </div>
-            <div className="mt-1.5 text-[10px] uppercase tracking-[0.1em] text-[var(--text-2)]">
-              <DateLabel iso={worst.date} format="long" />
-            </div>
-          </div>
-          <Button variant="outline" asChild>
-            <Link href={`/projection#d-${worst.date}`}>JUMP TO DAY →</Link>
-          </Button>
-        </div>
+        <AlertBar tag="RISK" variant="red">
+          Projected low of <Money cents={worst.balanceCents} /> on{" "}
+          <DateLabel iso={worst.date} format="long" />.{" "}
+          <Link href={`/projection#d-${worst.date}`} className="text-[var(--mint)] hover:underline">
+            Jump to day →
+          </Link>
+        </AlertBar>
       ) : null}
 
       <Card>
-        <CardHeader>
+        <CardHeader className="px-4 py-3">
           <div>
             <CardSubTag>CHART_01</CardSubTag>
-            <CardTitle className="mt-0.5">DAILY BALANCE PROJECTION</CardTitle>
+            <CardTitle className="mt-0.5 text-[14px]">DAILY BALANCE PROJECTION</CardTitle>
           </div>
           <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
             NEXT {projectionMonths} MONTHS
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-3 pt-0">
           <ProjectionChart data={rows.map((r) => ({ date: r.date, balanceCents: r.balanceCents }))} />
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+      <div className="grid gap-3 lg:grid-cols-[1.4fr_1fr]">
         <Card>
-          <CardHeader>
+          <CardHeader className="px-4 py-3">
             <div>
               <CardSubTag>TABLE_01</CardSubTag>
-              <CardTitle className="mt-0.5">MONTHLY SUMMARY</CardTitle>
+              <CardTitle className="mt-0.5 text-[14px]">MONTHLY SUMMARY</CardTitle>
             </div>
             <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
               PROJECTION_MONTHS = {projectionMonths}
@@ -381,19 +303,19 @@ export default async function DashboardPage() {
             <table className="w-full text-[11px] font-mono tabular">
               <thead>
                 <tr className="border-b border-[var(--border-raw)] bg-[var(--bg-1)] text-left">
-                  <th className="px-4 py-3 text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  <th className="px-3 py-2 text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
                     MONTH
                   </th>
-                  <th className="px-4 py-3 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
                     INCOME
                   </th>
-                  <th className="px-4 py-3 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
                     BILLS
                   </th>
-                  <th className="px-4 py-3 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
                     NET
                   </th>
-                  <th className="px-4 py-3 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
                     END BAL
                   </th>
                 </tr>
@@ -403,17 +325,17 @@ export default async function DashboardPage() {
                   const net = m.income - m.expense;
                   return (
                     <tr key={m.key} className="border-b border-[var(--border-raw)] last:border-0 hover:bg-[var(--bg-2)]">
-                      <td className="px-4 py-3 font-semibold text-[var(--text-0)] uppercase">{m.key}</td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-3 py-2 font-semibold text-[var(--text-0)] uppercase">{m.key}</td>
+                      <td className="px-3 py-2 text-right">
                         <Money cents={m.income} />
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-3 py-2 text-right">
                         <Money cents={m.expense} />
                       </td>
-                      <td className={cn("px-4 py-3 text-right font-bold", netClass(net))}>
+                      <td className={cn("px-3 py-2 text-right font-bold", netClass(net))}>
                         <Money cents={net} signed />
                       </td>
-                      <td className={cn("px-4 py-3 text-right font-bold", balanceClass(m.ending))}>
+                      <td className={cn("px-3 py-2 text-right font-bold", balanceClass(m.ending))}>
                         <Money cents={m.ending} />
                       </td>
                     </tr>
@@ -425,10 +347,10 @@ export default async function DashboardPage() {
         </Card>
 
         <Card>
-          <CardHeader>
+          <CardHeader className="px-4 py-3">
             <div>
               <CardSubTag>LOG_01</CardSubTag>
-              <CardTitle className="mt-0.5">UPCOMING EVENTS</CardTitle>
+              <CardTitle className="mt-0.5 text-[14px]">UPCOMING EVENTS</CardTitle>
             </div>
             <Link
               href="/projection"
@@ -446,7 +368,7 @@ export default async function DashboardPage() {
               upcomingEvents.map((row) => (
                 <div
                   key={row.date}
-                  className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-[var(--border-raw)] px-3 py-3 last:border-0 hover:bg-[var(--bg-2)] cursor-pointer"
+                  className="grid cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-[var(--border-raw)] px-3 py-2 last:border-0 hover:bg-[var(--bg-2)]"
                 >
                   <div className="min-w-0">
                     <div className="truncate text-[11px] font-medium text-[var(--text-0)]">
@@ -476,16 +398,16 @@ export default async function DashboardPage() {
 
       {budgetUtilization.length > 0 && (
         <Card>
-          <CardHeader>
+          <CardHeader className="px-4 py-3">
             <div>
               <CardSubTag>BUDGET_01</CardSubTag>
-              <CardTitle className="mt-0.5">CATEGORY BUDGETS</CardTitle>
+              <CardTitle className="mt-0.5 text-[14px]">CATEGORY BUDGETS</CardTitle>
             </div>
             <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
               {currentMonth}
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-4 pt-0">
             <BudgetUtilization rows={budgetUtilization} />
           </CardContent>
         </Card>
