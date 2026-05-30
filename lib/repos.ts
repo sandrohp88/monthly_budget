@@ -1350,7 +1350,12 @@ export async function updatePromo(
 }
 
 export async function archivePromo(userId: string, id: string): Promise<void> {
-  await updatePromo(userId, id, { isActive: false });
+  // Zero remaining on archive. An inactive promo is already excluded from the
+  // projection (which filters `isActive && remaining > 0`), so a lingering
+  // `remainingAmountCents` changes no projection behavior — it only pollutes
+  // promo totals and the card UI (the "phantom remaining" bug). Clearing it
+  // keeps stored state honest.
+  await updatePromo(userId, id, { isActive: false, remainingAmountCents: 0 });
 }
 
 /**
@@ -1365,7 +1370,9 @@ export async function archiveExpiredPromos(userId: string, todayIso: string): Pr
   const db = getDb();
   const result = await db
     .update(creditCardPromos)
-    .set({ isActive: false, updatedAt: Date.now() })
+    // Zero remaining alongside archiving (see archivePromo): an expired promo
+    // sitting at full remaining is a phantom lump the projection never owed.
+    .set({ isActive: false, remainingAmountCents: 0, updatedAt: Date.now() })
     .where(
       and(
         eq(creditCardPromos.userId, userId),

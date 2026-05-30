@@ -31,6 +31,7 @@ import {
   getCreditCard,
   listCreditCards,
   listPromos,
+  archivePromo,
   archiveExpiredPromos,
   // plaid items / accounts
   createPlaidItem,
@@ -594,8 +595,43 @@ describe("repos / archiveExpiredPromos", () => {
     expect(await archiveExpiredPromos(user.id, "2026-05-04")).toBe(1);
 
     const promos = await listPromos(user.id, true);
-    expect(promos.find((promo) => promo.id === expired.id)?.isActive).toBe(false);
-    expect(promos.find((promo) => promo.id === current.id)?.isActive).toBe(true);
+    const archivedExpired = promos.find((promo) => promo.id === expired.id);
+    expect(archivedExpired?.isActive).toBe(false);
+    // Archiving must also zero remaining so it stops polluting promo totals.
+    expect(archivedExpired?.remainingAmountCents).toBe(0);
+    const stillCurrent = promos.find((promo) => promo.id === current.id);
+    expect(stillCurrent?.isActive).toBe(true);
+    expect(stillCurrent?.remainingAmountCents).toBe(300_00);
+  });
+});
+
+describe("repos / archivePromo", () => {
+  it("zeroes remaining when a promo is manually archived", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Promo Card",
+      statementDay: 15,
+      dueDay: 5,
+      autoPay: false,
+      isActive: true,
+    });
+    const promo = await createPromo(user.id, card.id, {
+      description: "Has balance",
+      originalAmountCents: 500_00,
+      remainingAmountCents: 420_00,
+      startDate: "2026-01-01",
+      endDate: "2026-12-31",
+      monthlyPaymentCents: null,
+      notes: null,
+      isActive: true,
+    });
+
+    await archivePromo(user.id, promo.id);
+
+    const promos = await listPromos(user.id, true);
+    const archived = promos.find((p) => p.id === promo.id);
+    expect(archived?.isActive).toBe(false);
+    expect(archived?.remainingAmountCents).toBe(0);
   });
 });
 
