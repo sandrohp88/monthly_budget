@@ -2163,7 +2163,7 @@ export async function exportAll(userId: string) {
   ]);
   return {
     exportedAt: new Date().toISOString(),
-    schemaVersion: 7,
+    schemaVersion: 8,
     settings: s,
     bills: b,
     billPaymentOverrides: bo,
@@ -2440,38 +2440,15 @@ function importInsideTransaction(
     }).run();
   }
 
-  // Bills: support legacy frequency/dueDay/dueMonth backups (pre-0006) by
-  // converting to the new (intervalMonths, anchorDate) shape. New backups
-  // already supply both fields.
-  const monthDays = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   for (const b of payload.bills ?? []) {
-    let intervalMonths: number;
-    let anchorDate: string;
-    if (typeof b.intervalMonths === "number" && typeof b.anchorDate === "string") {
-      intervalMonths = b.intervalMonths;
-      anchorDate = b.anchorDate;
-    } else if (b.frequency === "monthly" && typeof b.dueDay === "number") {
-      intervalMonths = 1;
-      anchorDate = `2024-01-${String(b.dueDay).padStart(2, "0")}`;
-    } else if (
-      b.frequency === "annual" &&
-      typeof b.dueDay === "number" &&
-      typeof b.dueMonth === "number"
-    ) {
-      intervalMonths = 12;
-      const day = Math.min(b.dueDay, monthDays[b.dueMonth - 1] ?? 28);
-      anchorDate = `2024-${String(b.dueMonth).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    } else {
-      continue;
-    }
     tx.insert(bills).values({
       id: b.id ?? newId(),
       userId,
       name: b.name,
       category: b.category ?? "Other",
       amountCents: b.amountCents,
-      intervalMonths,
-      anchorDate,
+      intervalMonths: b.intervalMonths,
+      anchorDate: b.anchorDate,
       autoPay: b.autoPay ?? false,
       paidViaCardId: b.paidViaCardId ?? null,
       notes: b.notes ?? null,
