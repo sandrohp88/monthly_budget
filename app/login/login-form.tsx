@@ -19,18 +19,20 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
   return (
     <div className="w-full max-w-sm">
       <div className="mb-6 flex items-center gap-3">
-        <div
-          className="grid h-10 w-10 place-items-center rounded-full bg-[var(--mint)] text-[18px] font-extrabold text-[var(--button-primary-fg)]"
-          style={{ boxShadow: "var(--shadow-sm)" }}
-        >
-          $
-        </div>
+        <span
+          className="block h-10 w-10 rounded-[8px] bg-cover bg-center"
+          style={{
+            backgroundImage: "url('/icons/bluefalls-mark.svg')",
+            boxShadow: "0 10px 24px rgba(80, 214, 201, 0.2)",
+          }}
+          aria-hidden="true"
+        />
         <div>
           <div className="text-[22px] font-extrabold tracking-normal text-[var(--text-0)]">
-            Ledger
+            Monthly Budget
           </div>
           <div className="text-[13px] text-[var(--text-3)]">
-            Personal budget
+            Bluefalls finance
           </div>
         </div>
       </div>

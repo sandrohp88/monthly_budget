@@ -39,15 +39,17 @@ export function MobileNav({
 
         {/* brand */}
         <div className="flex items-center gap-3 border-b border-[var(--border-raw)] px-5 py-4">
-          <div
-            className="grid h-9 w-9 place-items-center rounded-full bg-[var(--mint)] text-[16px] font-extrabold tracking-tight text-[var(--button-primary-fg)]"
-            style={{ boxShadow: "var(--shadow-sm)" }}
-          >
-            $
-          </div>
+          <span
+            className="block h-9 w-9 rounded-[8px] bg-cover bg-center"
+            style={{
+              backgroundImage: "url('/icons/bluefalls-mark.svg')",
+              boxShadow: "0 10px 24px rgba(80, 214, 201, 0.2)",
+            }}
+            aria-hidden="true"
+          />
           <div>
-            <div className="text-[18px] font-extrabold tracking-normal">Ledger</div>
-            <div className="mt-0.5 text-[12px] text-[var(--text-3)]">Personal budget</div>
+            <div className="text-[18px] font-extrabold tracking-normal">Monthly Budget</div>
+            <div className="mt-0.5 text-[12px] text-[var(--text-3)]">Bluefalls finance</div>
           </div>
         </div>
 

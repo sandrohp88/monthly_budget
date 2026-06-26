@@ -18,8 +18,8 @@ const ui = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Ledger",
-  description: "Personal budget tracker",
+  title: "Monthly Budget",
+  description: "Bluefalls personal budget tracker",
   manifest: "/manifest.json",
   other: {
     "mobile-web-app-capable": "yes",
@@ -36,9 +36,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       suppressHydrationWarning
     >
       <head>
-        <meta name="theme-color" content="#F7F6F2" />
-        <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
-        <link rel="apple-touch-icon" href="/icons/icon.svg" />
+        <meta name="theme-color" content="#101316" />
+        <link rel="icon" href="/icons/bluefalls-mark.svg" type="image/svg+xml" />
+        <link rel="apple-touch-icon" href="/icons/bluefalls-mark.svg" />
       </head>
       <body className="min-h-screen antialiased">
         <ThemeProvider>{children}</ThemeProvider>

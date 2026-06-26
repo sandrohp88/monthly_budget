@@ -1,14 +1,14 @@
 {
-  "name": "FINANCE_OS",
-  "short_name": "FIN_OS",
-  "description": "Personal budget tracker — projections, bills, paychecks, credit cards",
+  "name": "Bluefalls Monthly Budget",
+  "short_name": "Budget",
+  "description": "Bluefalls personal budget tracker: projections, bills, paychecks, credit cards",
   "start_url": "/",
   "display": "standalone",
-  "theme_color": "#0ff",
-  "background_color": "#0a0a0f",
+  "theme_color": "#101316",
+  "background_color": "#101316",
   "icons": [
     {
-      "src": "/icons/icon.svg",
+      "src": "/icons/bluefalls-mark.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
