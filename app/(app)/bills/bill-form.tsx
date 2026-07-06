@@ -56,6 +56,7 @@ export function BillForm({
   submitting,
   hideActions,
   onCategoryAdded,
+  defaultAnchorDate,
 }: {
   initial?: BillRow;
   categories: ReadonlyArray<string>;
@@ -65,6 +66,8 @@ export function BillForm({
   submitting?: boolean;
   hideActions?: boolean;
   onCategoryAdded?: (name: string) => void;
+  /** Prefill for the next-due-date field when creating (e.g. calendar day click). */
+  defaultAnchorDate?: string;
 }) {
   const [name, setName] = React.useState(initial?.name ?? "");
   const [category, setCategory] = React.useState(initial?.category ?? categories[0] ?? "Other");
@@ -76,7 +79,7 @@ export function BillForm({
   );
   const today = todayIso();
   const [anchorDate, setAnchorDate] = React.useState<string>(
-    initial ? nextBillOccurrence(initial, today) : today,
+    initial ? nextBillOccurrence(initial, today) : (defaultAnchorDate ?? today),
   );
   const [autoPay, setAutoPay] = React.useState<boolean>(initial?.autoPay ?? false);
   const [paidViaCardId, setPaidViaCardId] = React.useState<string>(
