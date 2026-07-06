@@ -130,6 +130,8 @@ export function detectPromoPayoffDate(texts: ReadonlyArray<string | null | undef
   return null;
 }
 
+import { PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS } from "./paypal-special-financing";
+
 function includesAny(value: string | null | undefined, needles: string[]): boolean {
   const haystack = value?.toLowerCase() ?? "";
   return needles.some((needle) => haystack.includes(needle));
@@ -174,8 +176,10 @@ export function isSpecialFinancingCandidate(txn: PromoCandidateInput): boolean {
   ].some((text) => includesAny(text, ["paypal credit"]));
 
   // PayPal's real transaction feed uses the wallet account for purchases and
-  // the credit account for payments. Treat purchases over $150 as review
-  // candidates when a paired PayPal Credit card exists; sync reconciles these
-  // rows idempotently with FIFO payment allocation.
-  return isPayPalCredit && txn.amountCents > 150_00;
+  // the credit account for payments. Treat purchases over the account's
+  // special-financing minimum as review candidates when a paired PayPal
+  // Credit card exists; sync reconciles these rows idempotently with FIFO
+  // payment allocation. The threshold constant is shared with the sync-side
+  // auto-seeding in lib/paypal-special-financing.ts.
+  return isPayPalCredit && txn.amountCents > PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS;
 }
