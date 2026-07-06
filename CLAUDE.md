@@ -7,13 +7,24 @@ Operational guide for AI coding agents (and any new contributor) working on
 > Update it whenever you discover a non-obvious convention or learn a
 > hard-won lesson — that's how it stays useful.
 
+> **External knowledge base:** this project is also documented in a persistent LLM-wiki at
+> `Z:\llm-wiki` — see `Z:\llm-wiki\wiki\projects\monthly-budget\index.md` (links README /
+> ARCHITECTURE / DATA_MODEL / CHANGELOG / log.md and the **`proxmox-cluster`** host entity). It
+> tracks the *committed* repo, so verify anything load-bearing against current code / the live host
+> (since 2026-06-23 the budget app runs in **LXC 125** on the proxmox cluster, tunnel-only at
+> `https://budget.sherrera.dev`). After a meaningful change, append a dated entry to the wiki's
+> `monthly-budget/log.md` and `Z:\llm-wiki\logs\session_log.md`. (This file, `CLAUDE.md`, remains
+> the primary in-repo agent guide.)
+
 ---
 
 ## 1. What this is
 
 A Next.js 15 app that projects daily cash-flow from paychecks, recurring bills,
 one-time expenses, and credit card statements. SQLite-backed, single-binary
-deployable. Lives at https://budget.bluefalls.home behind Caddy on a home LAN.
+deployable. Served tunnel-only at https://budget.sherrera.dev (Cloudflare
+Tunnel → loopback app in LXC 125 on the proxmox cluster; the old
+`budget.bluefalls.home` LAN vhost was dropped by design on 2026-06-23).
 
 **Mental model:**
 - **Bills** = fixed recurring (rent, insurance, subscriptions) — same amount each cycle
@@ -76,13 +87,18 @@ app/
   (app)/                   ← authenticated pages, share AppShell layout
     layout.tsx             ← runs migrations, gates auth, wraps with AppShell
     page.tsx               ← dashboard
-    accounts/              ← linked-bank accounts (Plaid) + draft transaction review
-    bills/
-    credit-cards/
+    accounts/              ← linked-bank accounts (Plaid) + link-card chooser
+    assets/                ← manual net-worth line items
+    bills/                 ← recurring + variable bills, payment overrides
+    calendar/              ← month-grid of projection events; day click adds a bill
+    credit-cards/          ← cards, statements, promos, what-if sheets
     extras/
+    ledger/                ← KPIs + projection insights + ledger table
     paychecks/
-    projection/
+    projection/            ← filterable projection event table
+    reports/               ← category / spend analytics
     settings/
+    transactions/          ← Plaid draft review (approve / dismiss / promo)
   api/                     ← REST endpoints, all server-only
     {entity}/route.ts      ← list (GET) + create (POST)
     {entity}/[id]/route.ts ← read/update/delete
@@ -95,7 +111,7 @@ app/
 components/
   ui/                      ← shadcn-style primitives (button, card, input, dialog, sheet, …)
   app-shell.tsx            ← topbar + sidebar wrapper
-  sidebar.tsx              ← nav with `g d/b/a/c/p/e/x/s` shortcuts
+  sidebar.tsx              ← nav with `g` + `d/b/a/t/c/p/e/l/j/x/w/r/s` shortcuts (hint auto-generated from NAV)
   projection-chart.tsx     ← Recharts area chart
   money.tsx, date-label.tsx, money-input.tsx
   category-dialog.tsx      ← shared "add new category" dialog (used in 2 places)
@@ -294,7 +310,22 @@ weird gets emitted before merging.
 - `0005_link_card_to_plaid` — `credit_cards.plaid_account_id` (nullable, unique) + unique index on `(card_id, statement_date)` for idempotent statement upsert
 - `0006_flexible_bill_intervals` — replaces `bills.frequency` / `due_day` / `due_month` with `interval_months` (any positive int: 1=monthly, 3=quarterly, 12=annual, etc.) + `anchor_date` (one ISO occurrence; the projection engine generates the rest from there). Table-rebuild migration; backfills monthly→`(1, '2024-01-DD')` and annual→`(12, '2024-MM-DD')` with day clamped to month length.
 - `0007_add_credit_card_promos` — `credit_card_promos` table for 0% APR promotional financing on credit cards (description, original/remaining cents, start/end dates, optional monthly payment override). See §17a.
+- `0008_credit_card_statement_cycles` — `statement_cycle_mode` (`calendar_day | interval_days`) + anchor date + interval days on `credit_cards` for rolling statement cycles.
+- `0009_bill_payment_overrides` — `bill_payment_overrides` table, unique `(bill_id, due_date)`: per-occurrence planned amounts.
+- `0010_credit_card_payment_overrides` — `credit_card_payment_overrides` table, unique `(card_id, due_date)`.
+- `0011_manual_card_balances_and_extra_links` — `credit_cards.current_balance_cents` + `one_time_expenses.paid_via_card_id`.
+- `0012_link_plaid_drafts_to_promos` — `plaid_transaction_drafts.linked_promo_id`.
+- `0013_auto_approve_plaid_transactions` — synced drafts land `approved` instead of `pending_review`.
+- `0014_add_promo_payment_schedule` — `credit_card_promo_payments` table (manual promo schedule; overrides auto-spread in the projection).
+- `0015_classify_draft_kind` — `plaid_transaction_drafts.kind` (`expense | card_payment`).
+- `0016_archive_expired_promos` — data fix: archive promos past their end date.
+- `0017_statement_minimum_payment` — `credit_card_statements.minimum_payment_cents` (PayPal $0-balance statements with a required minimum).
 - `0018_authoritative_promo_source` — adds `authoritative_source` (nullable enum: `paypal_promo_list | manual_reconciliation`) to `credit_card_promos`. Replaces the legacy `"PayPal authoritative promo data"` magic string in `notes` with a typed column the sync logic checks. Backfills existing rows from the sentinel substring.
+- `0019_add_variable_bills` — `variable_bills` + `variable_bill_cards` (forecast spend landed on card due dates).
+- `0020_starting_balance_as_of` — `settings.starting_balance_as_of` (projection anchor; backfilled from `first_payday_date`).
+- `0021_add_category_budget` — `categories.budget_amount_cents`.
+- `0022_soft_delete_extras_paychecks` — `is_active` on `paychecks` + `one_time_expenses`.
+- `0023_add_assets` — `assets` table (manual net-worth lines; not part of the cash projection).
 
 ---
 
@@ -389,26 +420,28 @@ If anything matches that isn't intentional (`.env.example` placeholders are OK),
 
 ## 11. Deployment
 
-### Where it lives
-- **Server**: `plex.bluefalls.home` (10.10.88.6 on the LAN), Ubuntu 24.04
-- **Server user**: `sandrohp88` (UID 1000 — must match container `node` user)
+### Where it lives (since the 2026-06-23 cluster consolidation)
+- **Server**: **LXC 125 `budget`** (`10.10.88.25`) on the proxmox cluster (pve-7050) — migrated off `plex`
 - **Deploy directory**: `/opt/budget`
-- **Domain**: `budget.bluefalls.home` (resolved by UDM at 10.10.88.1)
-- **TLS**: Caddy `tls internal` → root CA at `/opt/budget/caddy-root.crt`
-- **Containers**: `budget-app`, `budget-caddy`, `budget-backup` (on the same Compose project)
+- **Public URL**: **`https://budget.sherrera.dev`** via the cluster **Cloudflare Tunnel** (`cloudflared` in LXC 125 → `http://127.0.0.1:3000`). **Tunnel-only**: the loopback app rejects other Host headers, so the old `budget.bluefalls.home` LAN vhost was dropped by design.
+- **Containers**: `budget-app` (loopback `:3000`, healthcheck `/api/health`) + `budget-backup` (VACUUM cron). The LXC-125 Caddy at `/opt/budget/Caddyfile` is a shared front door for *other* `*.bluefalls.home` vhosts — budget itself is served by the tunnel.
+- Full host detail: `Z:\llm-wiki\wiki\entities\proxmox-cluster.md`
 
 ### How to deploy
-The deploy script is `scripts/redeploy.py` (gitignored, contains the SSH password).
-It uploads changed source files via SFTP and runs `docker compose up --build -d`
-on the server. **Always `npm run check` first** so you don't ship broken code.
+The deploy script is `scripts/redeploy.py` (gitignored, contains SSH credentials).
+It uploads changed source files via SFTP to `/opt/budget` and runs
+`docker compose up --build -d app` on the server. **Always `npm run check`
+first** so you don't ship broken code. Verify the target host in the script
+matches LXC 125 before running — it predates the migration off `plex`.
 
 ```bash
 # from a Windows shell with python+paramiko available
 python scripts/redeploy.py
 ```
 
-The script also chowns `/opt/budget/data` to UID 1000 each run because of an
-old quirk we hit early on.
+After deploying, confirm `https://budget.sherrera.dev/api/health` returns 200.
+(A plain `127.0.0.1:3000` check on the host returns the host-guard response —
+use the public hostname.)
 
 ### Container UID mismatch (the lesson)
 The container runs as the `node` user (UID 1000) so it can read/write the
@@ -419,14 +452,16 @@ If you switch base images, verify the user UID still matches the host owner.
 ### Backups
 The `budget-backup` container runs `scripts/backup.sh` via crond at 03:00
 local time. It does `VACUUM INTO` to `/backups/budget-YYYYMMDD-HHMM.db` and
-prunes anything older than 14 days. To pull a backup off the server:
-```bash
-scp sandrohp88@plex.bluefalls.home:/opt/budget/backups/budget-*.db .
-```
+prunes anything older than 14 days. Pull a backup off LXC 125 with `scp`
+from `/opt/budget/backups/`. Note: the backup container is read-only —
+one-off prod data fixes go through the `budget-app` container's node +
+better-sqlite3 instead.
 
-### Trust the local CA on a new device
-1. Get the cert: `scp sandrohp88@plex.bluefalls.home:/opt/budget/caddy-root.crt .`
-2. Install to the OS trust store (per-OS instructions in the README)
+### TLS / trust
+Budget is served through the Cloudflare Tunnel with a public cert — no local
+CA trust is needed for `budget.sherrera.dev`. (The old `tls internal` +
+`caddy-root.crt` flow only applies to the remaining `*.bluefalls.home`
+vhosts on the shared LXC-125 Caddy.)
 
 ---
 
@@ -503,7 +538,7 @@ These bit us before. Don't repeat:
 18. **Promo auto-decrement only fires on unpaid→paid edge** — `applyPromoChunksForPaidStatement` is idempotency-by-edge: the route checks `wasUnpaid && isNowPaid` before calling it. Re-saving an already-paid statement won't double-decrement. Don't move the call into the repo or strip the guard. See §17a.
 19. **Promo chunks never get added to a cycle that has a recorded statement** — the statement balance entered by the user is assumed to already include any promo principal billed in that cycle. `projectPromoSchedule` takes a `skipDueDates` set fed from `recordedDueDatesByCard` in `projection-server.ts`. Skip the skip-set and you double-count.
 20. **Plaid promo detection needs raw transaction text at sync time** — drafts only persist a small subset of Plaid's transaction payload. If you need issuer-specific promo clues, inspect nested fields from the live Transaction object (`payment_meta`, `counterparties`, category, location, etc.) before storing the draft; don't infer a promo from generic PayPal `LOAN_PAYMENTS` rows.
-21. **PayPal Credit special financing is split across two Plaid accounts** — qualifying purchases appear on the PayPal wallet account (`depository/paypal`), while payments appear on the linked PayPal Credit account (`credit/paypal`) as `LOAN_PAYMENTS`. Purchases over $150 can seed promo rows, but Plaid payment rows do not expose PayPal's targeted promo allocation.
+21. **PayPal Credit special financing is split across two Plaid accounts** — qualifying purchases appear on the PayPal wallet account (`depository/paypal`), while payments appear on the linked PayPal Credit account (`credit/paypal`) as `LOAN_PAYMENTS`. Purchases strictly above `PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS` (`lib/paypal-special-financing.ts`, currently $170 per this account's PayPal Credit terms — PayPal's published standard is $149+) can seed promo rows, but Plaid payment rows do not expose PayPal's targeted promo allocation.
 22. **PayPal's promo list beats transaction FIFO** — PayPal's issuer UI exposes actual promotional balances, payoff dates, and targeted paid-off promos that Plaid transaction history does not. When a promo row's `authoritativeSource` column is non-null (introduced in migration `0018`), do not overwrite its amount/date from transaction FIFO; an inactive zero-balance PayPal promo must also stay paid off on later syncs. Legacy rows used a sentinel string `"PayPal authoritative promo data"` in `notes` — `0018` backfills the typed column from that and the sync logic now reads only `authoritativeSource`.
 23. **Playwright must use a host allowed by `AUTH_URL`** — middleware rejects unknown `Host` headers with 421. The E2E config builds and serves on `localhost:3000` to match local `.env`; changing the test port/host also requires updating the auth URL used at build time.
 
