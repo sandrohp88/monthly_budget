@@ -42,6 +42,14 @@ import {
 } from "./repos";
 import { encryptToken } from "./plaid-crypto";
 import { syncCreditCardLiabilitiesForItem, syncPlaidTransactions } from "./plaid-sync";
+import { addDaysIso, todayIso } from "./dates";
+import { addMonthsClampedIso } from "./paypal-special-financing";
+
+// Fixture dates are computed relative to today so the tests don't rot as real
+// time passes: `archiveExpiredPromos` runs on every sync and zeroes any active
+// promo whose endDate (purchase + 6 months) is behind the real clock, which
+// silently broke the original hard-coded 2026 dates.
+const TODAY = todayIso();
 
 let dbDir: string;
 
@@ -110,6 +118,10 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_paypal_credit");
 
+    // Purchase anchor ~1 month back; promos end 6 months later (still active).
+    const temuDate = addDaysIso(TODAY, -30);
+    const lightEleganceDate = addDaysIso(temuDate, 11);
+
     __plaidMock.transactionsSync.mockResolvedValue({
       data: {
         next_cursor: "cursor_1",
@@ -120,7 +132,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
             transaction_id: "payment_before",
             account_id: "acct_paypal_credit",
             pending: false,
-            date: "2026-02-09",
+            date: addDaysIso(temuDate, -5),
             name: "PayPal Credit Card",
             original_description: "PayPal Credit Card",
             amount: 354.66,
@@ -131,7 +143,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
             transaction_id: "purchase_1",
             account_id: "acct_paypal_wallet",
             pending: false,
-            date: "2026-02-14",
+            date: temuDate,
             name: "Payment to Temu.com",
             original_description: "Payment to Temu.com",
             amount: 250.92,
@@ -142,7 +154,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
             transaction_id: "small_purchase",
             account_id: "acct_paypal_wallet",
             pending: false,
-            date: "2026-02-13",
+            date: addDaysIso(temuDate, -1),
             name: "Payment to Coffee Shop",
             original_description: "Payment to Coffee Shop",
             amount: 50,
@@ -153,7 +165,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
             transaction_id: "purchase_2",
             account_id: "acct_paypal_wallet",
             pending: false,
-            date: "2026-02-25",
+            date: lightEleganceDate,
             name: "Payment to Light Elegance",
             original_description: "Payment to Light Elegance",
             amount: 275.46,
@@ -164,7 +176,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
             transaction_id: "payment_after",
             account_id: "acct_paypal_credit",
             pending: false,
-            date: "2026-03-04",
+            date: addDaysIso(temuDate, 18),
             name: "PayPal Credit Card",
             original_description: "PayPal Credit Card",
             amount: 188.47,
@@ -185,7 +197,10 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     expect(promos).toHaveLength(2);
     expect(promos.map((promo) => promo.description)).toEqual(["Temu", "Light Elegance"]);
     expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([112_45, 275_46]);
-    expect(promos.map((promo) => promo.endDate)).toEqual(["2026-08-14", "2026-08-25"]);
+    expect(promos.map((promo) => promo.endDate)).toEqual([
+      addMonthsClampedIso(temuDate, 6),
+      addMonthsClampedIso(lightEleganceDate, 6),
+    ]);
   });
 
   it("preserves PayPal promo rows reconciled from the issuer promo list", async () => {
@@ -232,6 +247,13 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_paypal_credit");
 
+    // Recent purchases so the auto-created 6-month promos are still active
+    // when the sweep runs; the authoritative endDates below are then set
+    // relative to today (one future, one already past + paid off).
+    const storeOneDate = addDaysIso(TODAY, -30);
+    const storeOneEnd = addDaysIso(TODAY, 20);
+    const storeTwoEnd = addDaysIso(TODAY, -10);
+
     __plaidMock.transactionsSync.mockResolvedValue({
       data: {
         next_cursor: "cursor_1",
@@ -242,7 +264,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
             transaction_id: "purchase_1",
             account_id: "acct_paypal_wallet",
             pending: false,
-            date: "2026-01-01",
+            date: storeOneDate,
             name: "Payment to Store One",
             original_description: "Payment to Store One",
             amount: 200.00,
@@ -253,7 +275,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
             transaction_id: "purchase_2",
             account_id: "acct_paypal_wallet",
             pending: false,
-            date: "2026-01-02",
+            date: addDaysIso(storeOneDate, 1),
             name: "Payment to Store Two",
             original_description: "Payment to Store Two",
             amount: 200.00,
@@ -264,7 +286,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
             transaction_id: "payment_1",
             account_id: "acct_paypal_credit",
             pending: false,
-            date: "2026-01-03",
+            date: addDaysIso(storeOneDate, 2),
             name: "PayPal Credit Card",
             original_description: "PayPal Credit Card",
             amount: 50.00,
@@ -286,14 +308,14 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     const storeTwo = promos.find((promo) => promo.description === "Store Two")!;
     await updatePromo(user.id, storeOne.id, {
       remainingAmountCents: 200_00,
-      endDate: "2026-07-26",
+      endDate: storeOneEnd,
       notes: "Copied from PayPal promo list",
       authoritativeSource: "paypal_promo_list",
       isActive: true,
     });
     await updatePromo(user.id, storeTwo.id, {
       remainingAmountCents: 0,
-      endDate: "2026-06-26",
+      endDate: storeTwoEnd,
       notes: "Paid off per PayPal promo list",
       authoritativeSource: "paypal_promo_list",
       isActive: false,
@@ -304,7 +326,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     promos = await listPromosForCard(user.id, card.id, true);
     expect(promos.map((promo) => promo.description)).toEqual(["Store Two", "Store One"]);
     expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([0, 200_00]);
-    expect(promos.map((promo) => promo.endDate)).toEqual(["2026-06-26", "2026-07-26"]);
+    expect(promos.map((promo) => promo.endDate)).toEqual([storeTwoEnd, storeOneEnd]);
     expect(promos.map((promo) => promo.isActive)).toEqual([false, true]);
   });
 });
