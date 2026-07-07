@@ -22,6 +22,7 @@ export function LedgerTabs({
 
   const button = (id: LedgerTab, label: string) => (
     <button
+      key={id}
       type="button"
       onClick={() => setTab(id)}
       className={cn(
