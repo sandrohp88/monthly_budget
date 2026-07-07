@@ -293,6 +293,22 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
     for (let k = kStart; k <= kEnd; k++) {
       const occ = addMonthsClamped(anchorY, anchorM, anchorD, k * b.intervalMonths);
       const date = `${String(occ.year).padStart(4, "0")}-${String(occ.month).padStart(2, "0")}-${String(occ.day).padStart(2, "0")}`;
+      const override = overrides.get(date);
+      // A reconciled payment beats the generic settled-before hiding: the
+      // occurrence renders as an explicit paid marker showing the amount
+      // that actually posted, even when it falls before the settle pivot.
+      if (paidByDate.has(date)) {
+        addEvent(date, {
+          kind: "bill",
+          label: b.name,
+          amountCents: 0,
+          sourceId: b.id,
+          sourceType: "bill",
+          originalAmountCents: paidByDate.get(date) ?? override ?? b.amountCents,
+          isPaid: true,
+        });
+        continue;
+      }
       if (b.settledBeforeDate && date < b.settledBeforeDate) {
         if (!b.showSettledBeforeDate) continue;
         addEvent(date, {
@@ -302,19 +318,6 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
           sourceId: b.id,
           sourceType: "bill",
           originalAmountCents: b.amountCents,
-          isPaid: true,
-        });
-        continue;
-      }
-      const override = overrides.get(date);
-      if (paidByDate.has(date)) {
-        addEvent(date, {
-          kind: "bill",
-          label: b.name,
-          amountCents: 0,
-          sourceId: b.id,
-          sourceType: "bill",
-          originalAmountCents: paidByDate.get(date) ?? override ?? b.amountCents,
           isPaid: true,
         });
         continue;

@@ -26,7 +26,7 @@ const MONTH_NAMES = [
 const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 const MAX_CHIPS_PER_DAY = 3;
 
-type EventTone = "income" | "card" | "expense" | "settled";
+type EventTone = "income" | "card" | "expense" | "settled" | "posted";
 
 function daysInMonth(year: number, month: number): number {
   // month is 1..12
@@ -41,10 +41,17 @@ function isoOf(year: number, month: number, day: number): string {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function toneOf(ev: ProjectionEvent): EventTone {
+function isCredit(ev: ProjectionEvent): boolean {
+  return ev.kind === "paycheck" || (ev.kind === "extra" && ev.amountCents < 0);
+}
+
+function toneOf(ev: ProjectionEvent, isPast: boolean): EventTone {
   if (ev.isPaid && ev.amountCents === 0) return "settled";
-  if (ev.kind === "paycheck") return "income";
-  if (ev.kind === "extra" && ev.amountCents < 0) return "income";
+  // Events on days before today are history — posted transactions from the
+  // lookback window, not upcoming obligations. Rendering them in the pending
+  // red reads as "unpaid bill", which is exactly wrong.
+  if (isPast) return "posted";
+  if (isCredit(ev)) return "income";
   if (ev.sourceType === "creditCardPayment") return "card";
   return "expense";
 }
@@ -54,6 +61,7 @@ const TONE_CLASSES: Record<EventTone, string> = {
   card: "border-[var(--amber)]/40 bg-[var(--amber)]/10 text-[var(--amber)]",
   expense: "border-[var(--red)]/40 bg-[var(--red)]/10 text-[var(--red)]",
   settled: "border-[var(--border-raw)] bg-[var(--bg-2)] text-[var(--text-3)] line-through",
+  posted: "border-[var(--border-raw)] bg-[var(--bg-2)] text-[var(--text-2)]",
 };
 
 const TONE_TEXT: Record<EventTone, string> = {
@@ -61,6 +69,7 @@ const TONE_TEXT: Record<EventTone, string> = {
   card: "text-[var(--amber)]",
   expense: "text-[var(--red)]",
   settled: "text-[var(--text-3)] line-through",
+  posted: "text-[var(--text-2)]",
 };
 
 export function CalendarClient({
@@ -239,8 +248,8 @@ export function CalendarClient({
                   </div>
                   <div className="space-y-1">
                     {events.slice(0, MAX_CHIPS_PER_DAY).map((ev, j) => {
-                      const tone = toneOf(ev);
-                      const credit = tone === "income";
+                      const tone = toneOf(ev, isPast);
+                      const credit = isCredit(ev);
                       return (
                         <div
                           key={`${iso}-${j}`}
@@ -249,7 +258,7 @@ export function CalendarClient({
                             TONE_CLASSES[tone],
                           )}
                         >
-                          <span className="truncate">{ev.label}</span>
+                          <span className="min-w-0 truncate">{ev.label}</span>
                           <span className="tabular shrink-0">
                             {credit ? "+" : "−"}
                             <Money
@@ -276,7 +285,8 @@ export function CalendarClient({
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.income)}>PAYCHECK / CREDIT</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.expense)}>BILL / EXPENSE</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.card)}>CARD PAYMENT</span>
-        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.settled)}>SETTLED</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.settled)}>PAID / SETTLED</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.posted)}>POSTED (HISTORY)</span>
       </div>
 
       {/* day detail */}
@@ -295,17 +305,23 @@ export function CalendarClient({
                   <p className="text-[13px] text-[var(--text-2)]">No scheduled events on this day.</p>
                 ) : (
                   (selectedRow?.events ?? []).map((ev, i) => {
-                    const tone = toneOf(ev);
-                    const credit = tone === "income";
+                    const isPastDay = selectedDate < today;
+                    const tone = toneOf(ev, isPastDay);
+                    const credit = isCredit(ev);
                     return (
                       <div
                         key={i}
                         className="flex items-center justify-between gap-3 border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2"
                       >
-                        <div className="min-w-0">
-                          <div className="truncate text-[13px] text-[var(--text-0)]">{ev.label}</div>
-                          <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-                            {ev.isPaid ? "settled" : ev.kind}
+                        <div className="min-w-0 flex-1">
+                          <div className="break-words text-[13px] text-[var(--text-0)]">{ev.label}</div>
+                          <div
+                            className={cn(
+                              "text-[10px] uppercase tracking-[0.12em]",
+                              ev.isPaid ? "font-semibold text-[var(--mint)]" : "text-[var(--text-3)]",
+                            )}
+                          >
+                            {ev.isPaid ? "paid" : isPastDay ? "posted" : ev.kind}
                           </div>
                         </div>
                         <span className={cn("tabular text-[13px] font-semibold", TONE_TEXT[tone])}>
