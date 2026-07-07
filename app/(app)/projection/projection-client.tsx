@@ -42,6 +42,7 @@ import {
 } from "@/lib/projection-insights";
 import { addDaysIso, startOfMonthIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
+import { balanceToneClass } from "@/lib/balance-tone";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Filter
@@ -94,11 +95,7 @@ function rangeForFilter(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function balanceClass(cents: number) {
-  if (cents < 0) return "text-[var(--red)]";
-  if (cents < 50000) return "text-[var(--amber)]";
-  return "text-[var(--phosphor)]";
-}
+const balanceClass = balanceToneClass;
 
 type LedgerSection = {
   key: string;
