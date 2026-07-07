@@ -12,21 +12,27 @@
  * hide future cash out of the projection.
  *   - name: normalized bill name must appear in the draft's description /
  *     merchant text (or vice versa), e.g. "NV Energy" ↔ "NVENERGY PAYMENTS".
- *   - date: draft within ±MATCH_WINDOW_DAYS of the occurrence.
- *   - amount: within AMOUNT_TOLERANCE of the expected amount (utility bills
- *     drift month to month; the floor keeps small bills from failing on a
- *     couple dollars of variation).
- *   - one-to-one: each draft settles at most one occurrence and each
- *     occurrence consumes at most one draft (nearest date wins).
+ *   - date: draft within ±MATCH_WINDOW_DAYS of the occurrence; each draft is
+ *     assigned to its nearest occurrence, once.
+ *   - amount: all drafts assigned to one occurrence are SUMMED (utilities
+ *     often post as several partial ACH pulls — e.g. NV Energy North + South
+ *     on the same day) and the occurrence settles when the sum reaches
+ *     SETTLE_MIN_FRACTION of the planned amount. Over-payment settles too:
+ *     planned amounts are estimates, the posted total is reality and is what
+ *     the paid marker displays.
  */
 
 import type { BillRow } from "./db/schema";
 import { daysBetween } from "./dates";
 
 export const MATCH_WINDOW_DAYS = 20;
-/** |draft − expected| must be ≤ max(35% of expected, $25). */
-const AMOUNT_TOLERANCE_PCT = 0.35;
-const AMOUNT_TOLERANCE_FLOOR_CENTS = 25_00;
+/**
+ * Posted total must reach this fraction of the planned amount to settle the
+ * occurrence. Guards against a tiny stray same-name charge marking a large
+ * bill as paid, while tolerating planned amounts set well above the actual
+ * (e.g. a $300 high-water utility estimate vs ~$180 posted).
+ */
+export const SETTLE_MIN_FRACTION = 0.35;
 
 export type ReconcilableDraft = {
   id: string;
@@ -48,8 +54,11 @@ export type PaidBillOccurrence = {
   billId: string;
   /** The generated due date this payment settles. */
   occurrenceDate: string;
-  draftId: string;
+  /** Every posted draft that contributed to the settlement. */
+  draftIds: string[];
+  /** Latest posting date among the contributing drafts. */
   paidDate: string;
+  /** Sum of the contributing drafts — the real cash that left the account. */
   paidAmountCents: number;
 };
 
@@ -101,14 +110,6 @@ export function draftNamesBill(
   return haystacks.some((h) => h.length >= 3 && (h.includes(bill) || bill.includes(h)));
 }
 
-function amountMatches(expectedCents: number, paidCents: number): boolean {
-  const tolerance = Math.max(
-    Math.round(expectedCents * AMOUNT_TOLERANCE_PCT),
-    AMOUNT_TOLERANCE_FLOOR_CENTS,
-  );
-  return Math.abs(paidCents - expectedCents) <= tolerance;
-}
-
 /**
  * Find bill occurrences settled by posted drafts. `drafts` should already be
  * limited to real money-out rows on the accounts whose balance feeds the
@@ -119,7 +120,7 @@ export function matchPaidBillOccurrences(
   drafts: ReadonlyArray<ReconcilableDraft>,
   opts: { windowDays?: number } = {},
 ): PaidBillOccurrence[] {
-  const windowDays = opts.windowDays ?? MATCH_WINDOW_DAYS;
+  const windowDays = Math.max(1, opts.windowDays ?? MATCH_WINDOW_DAYS);
   if (bills.length === 0 || drafts.length === 0) return [];
 
   const spendDrafts = drafts.filter((d) => d.amountCents > 0);
@@ -127,27 +128,33 @@ export function matchPaidBillOccurrences(
   const minDraft = spendDrafts.reduce((a, d) => (d.date < a ? d.date : a), spendDrafts[0]!.date);
   const maxDraft = spendDrafts.reduce((a, d) => (d.date > a ? d.date : a), spendDrafts[0]!.date);
 
-  type Candidate = PaidBillOccurrence & { distanceDays: number };
+  // A draft between two adjacent occurrences is a candidate for both; the
+  // nearest-first assignment below sends each draft to one occurrence only.
+  type Candidate = {
+    billId: string;
+    occurrenceDate: string;
+    expectedCents: number;
+    draftId: string;
+    paidDate: string;
+    paidAmountCents: number;
+    distanceDays: number;
+  };
   const candidates: Candidate[] = [];
 
   for (const bill of bills) {
-    // A draft between two adjacent occurrences can be a candidate for both;
-    // the nearest-first one-to-one assignment below resolves the ambiguity.
-    const window = Math.max(1, windowDays);
-
-    const occStart = addDays(minDraft, -window);
-    const occEnd = addDays(maxDraft, window);
+    const occStart = addDays(minDraft, -windowDays);
+    const occEnd = addDays(maxDraft, windowDays);
     for (const occ of enumerateBillOccurrences(bill, occStart, occEnd)) {
       const expected = bill.overridesByDate?.get(occ) ?? bill.amountCents;
       if (expected <= 0) continue; // zero-planned occurrence has nothing to settle
       for (const draft of spendDrafts) {
         const distance = Math.abs(daysBetween(occ, draft.date));
-        if (distance > window) continue;
+        if (distance > windowDays) continue;
         if (!draftNamesBill(bill.name, draft)) continue;
-        if (!amountMatches(expected, draft.amountCents)) continue;
         candidates.push({
           billId: bill.id,
           occurrenceDate: occ,
+          expectedCents: expected,
           draftId: draft.id,
           paidDate: draft.date,
           paidAmountCents: draft.amountCents,
@@ -157,7 +164,8 @@ export function matchPaidBillOccurrences(
     }
   }
 
-  // Greedy one-to-one assignment, closest date first.
+  // Assign each draft to its nearest candidate occurrence (a draft is spent
+  // once; an occurrence may accumulate several drafts — partial ACH pulls).
   candidates.sort(
     (a, b) =>
       a.distanceDays - b.distanceDays ||
@@ -165,21 +173,39 @@ export function matchPaidBillOccurrences(
       a.draftId.localeCompare(b.draftId),
   );
   const usedDrafts = new Set<string>();
-  const usedOccurrences = new Set<string>();
-  const out: PaidBillOccurrence[] = [];
+  const grouped = new Map<
+    string,
+    { billId: string; occurrenceDate: string; expectedCents: number; drafts: Candidate[] }
+  >();
   for (const c of candidates) {
-    const occKey = `${c.billId}:${c.occurrenceDate}`;
-    if (usedDrafts.has(c.draftId) || usedOccurrences.has(occKey)) continue;
+    if (usedDrafts.has(c.draftId)) continue;
     usedDrafts.add(c.draftId);
-    usedOccurrences.add(occKey);
-    out.push({
+    const key = `${c.billId}:${c.occurrenceDate}`;
+    const group = grouped.get(key) ?? {
       billId: c.billId,
       occurrenceDate: c.occurrenceDate,
-      draftId: c.draftId,
-      paidDate: c.paidDate,
-      paidAmountCents: c.paidAmountCents,
+      expectedCents: c.expectedCents,
+      drafts: [],
+    };
+    group.drafts.push(c);
+    grouped.set(key, group);
+  }
+
+  const out: PaidBillOccurrence[] = [];
+  for (const group of grouped.values()) {
+    const paidAmountCents = group.drafts.reduce((s, d) => s + d.paidAmountCents, 0);
+    if (paidAmountCents < Math.round(group.expectedCents * SETTLE_MIN_FRACTION)) continue;
+    out.push({
+      billId: group.billId,
+      occurrenceDate: group.occurrenceDate,
+      draftIds: group.drafts.map((d) => d.draftId).sort(),
+      paidDate: group.drafts.reduce((a, d) => (d.paidDate > a ? d.paidDate : a), group.drafts[0]!.paidDate),
+      paidAmountCents,
     });
   }
+  out.sort(
+    (a, b) => a.billId.localeCompare(b.billId) || a.occurrenceDate.localeCompare(b.occurrenceDate),
+  );
   return out;
 }
 

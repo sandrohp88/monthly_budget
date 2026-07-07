@@ -64,9 +64,32 @@ describe("matchPaidBillOccurrences", () => {
       {
         billId: "bill-nv",
         occurrenceDate: "2026-07-15",
-        draftId: "txn-1",
+        draftIds: ["txn-1"],
         paidDate: "2026-07-03",
         paidAmountCents: 118_37,
+      },
+    ]);
+  });
+
+  it("sums several partial pulls into one settlement (real NV Energy shape)", () => {
+    // Prod shape: bill planned $300 due the 1st; the utility posts two ACH
+    // pulls (North + South) of ~$120 + ~$61 on the 2nd. Individually each is
+    // far from $300 — together they clear the settle fraction.
+    const bill = { ...nvEnergy, amountCents: 300_00, anchorDate: "2026-07-01" };
+    const matches = matchPaidBillOccurrences(
+      [bill],
+      [
+        draft({ id: "north", date: "2026-07-02", amountCents: 120_61, description: "Withdrawal Ach Nv Energy North Type: Sppc" }),
+        draft({ id: "south", date: "2026-07-02", amountCents: 61_31, description: "NV Energy" }),
+      ],
+    );
+    expect(matches).toEqual([
+      {
+        billId: "bill-nv",
+        occurrenceDate: "2026-07-01",
+        draftIds: ["north", "south"],
+        paidDate: "2026-07-02",
+        paidAmountCents: 181_92,
       },
     ]);
   });
@@ -85,23 +108,28 @@ describe("matchPaidBillOccurrences", () => {
     expect(matchPaidBillOccurrences([quarterly], [draft({ date: "2026-06-10" })])).toEqual([]);
   });
 
-  it("rejects amounts outside tolerance", () => {
-    // tolerance = max(35% of 120, $25) = $42 → $180 paid is too far off.
-    expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: 180_00 })])).toEqual([]);
-    // $95 is within $42 of $120.
-    expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: 95_00 })])).toHaveLength(1);
+  it("does not settle when the posted total is a tiny fraction of the plan", () => {
+    // $30 posted vs $300 planned (10%) < SETTLE_MIN_FRACTION.
+    const bill = { ...nvEnergy, amountCents: 300_00 };
+    expect(matchPaidBillOccurrences([bill], [draft({ amountCents: 30_00 })])).toEqual([]);
+  });
+
+  it("over-payment settles (planned amounts are estimates)", () => {
+    expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: 180_00 })])).toEqual([
+      expect.objectContaining({ paidAmountCents: 180_00 }),
+    ]);
   });
 
   it("rejects refunds/credits (negative amounts)", () => {
     expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: -118_37 })])).toEqual([]);
   });
 
-  it("assigns one-to-one with the nearest occurrence winning", () => {
+  it("assigns each draft to its nearest occurrence only", () => {
     // A draft between two monthly occurrences settles the nearer one only.
     const midDraft = draft({ date: "2026-07-28", id: "txn-mid" }); // 13d after Jul 15, 18d before Aug 15
     const matches = matchPaidBillOccurrences([nvEnergy], [midDraft]);
     expect(matches).toEqual([
-      expect.objectContaining({ occurrenceDate: "2026-07-15", draftId: "txn-mid" }),
+      expect.objectContaining({ occurrenceDate: "2026-07-15", draftIds: ["txn-mid"] }),
     ]);
   });
 
@@ -113,21 +141,26 @@ describe("matchPaidBillOccurrences", () => {
         draft({ id: "aug", date: "2026-08-16" }),
       ],
     );
-    expect(matches.map((m) => [m.draftId, m.occurrenceDate])).toEqual([
-      ["jul", "2026-07-15"],
-      ["aug", "2026-08-15"],
+    expect(matches.map((m) => [m.draftIds, m.occurrenceDate])).toEqual([
+      [["jul"], "2026-07-15"],
+      [["aug"], "2026-08-15"],
     ]);
   });
 
-  it("uses the per-occurrence override amount when present", () => {
+  it("uses the per-occurrence override amount for the settle threshold", () => {
     const withOverride = {
       ...nvEnergy,
-      overridesByDate: new Map([["2026-07-15", 250_00]]),
+      amountCents: 300_00,
+      overridesByDate: new Map([["2026-07-15", 130_00]]),
     };
-    // $240 paid vs $250 planned matches; vs the base $120 it would not.
-    expect(
-      matchPaidBillOccurrences([withOverride], [draft({ amountCents: 240_00 })]),
-    ).toHaveLength(1);
-    expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: 240_00 })])).toEqual([]);
+    // $118.37 ≥ 35% of the $130 override → settles; vs the base $300 plan
+    // (threshold $105) it would settle too, but vs a $400 override it must not.
+    expect(matchPaidBillOccurrences([withOverride], [draft()])).toHaveLength(1);
+    const highOverride = {
+      ...nvEnergy,
+      amountCents: 300_00,
+      overridesByDate: new Map([["2026-07-15", 400_00]]),
+    };
+    expect(matchPaidBillOccurrences([highOverride], [draft({ amountCents: 30_00 })])).toEqual([]);
   });
 });
