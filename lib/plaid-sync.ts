@@ -21,11 +21,12 @@ import {
   upsertCreditCardStatementByDate,
   updateStatement,
   findMatchingOpenStatement,
+  setPlaidDraftKind,
 } from "./repos";
 import { todayIso } from "./dates";
 import { dueDateFromStatement } from "./credit-cards";
 import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
-import { classifyDraftKind } from "./plaid-transaction-kind";
+import { classifyDraftKind, looksLikeCardPayment } from "./plaid-transaction-kind";
 import {
   isPayPalCreditAccount,
   isPayPalWalletAccount,
@@ -108,16 +109,23 @@ async function autoCreatePromoFromTransaction(input: {
 }
 
 /**
- * Reconcile a posted card payment (LOAN_PAYMENTS on a credit account) against
- * the open statement it settled: mark that statement paid and fire the
- * unpaid→paid promo decrement edge (same contract as the statements PATCH
- * route and the Liabilities sync). Without this, a statement the user has
- * already paid keeps projecting as a pending cash debit on its due date.
+ * Reconcile a posted card payment against the open statement it settled: mark
+ * that statement paid and fire the unpaid→paid promo decrement edge (same
+ * contract as the statements PATCH route and the Liabilities sync). Without
+ * this, a statement the user has already paid keeps projecting as a pending
+ * cash debit on its due date.
+ *
+ * The payment posts on the CREDIT account, reducing the balance — a NEGATIVE
+ * amount for most issuers, positive for PayPal — so we reconcile on the
+ * MAGNITUDE. Only payments on a credit account linked to one of the user's
+ * cards reconcile (the card's own side of the payment); the depository-side
+ * transfer is the same money and is left alone. `findMatchingOpenStatement`
+ * still requires the magnitude to be within ~10% of the statement balance, so
+ * a partial payment on a revolving card does NOT clear the statement.
  *
  * Idempotent: `findMatchingOpenStatement` only returns statements with no
- * recorded payment, so a re-synced draft finds nothing to settle and the
- * promo decrement never double-fires. Prefers the card linked to the
- * payment's own Plaid account before scanning the user's other cards.
+ * recorded payment, so a re-synced (or backfilled) draft finds nothing to
+ * settle and the promo decrement never double-fires.
  *
  * Returns true when it settled a statement.
  */
@@ -128,20 +136,21 @@ async function reconcileCardPaymentDraft(input: {
   amountCents: number;
   date: string;
   kind: "expense" | "card_payment";
-  primaryCategory: string | null;
 }): Promise<boolean> {
   if (input.kind !== "card_payment") return false;
-  if ((input.primaryCategory ?? "").toUpperCase() !== "LOAN_PAYMENTS") return false;
-  if (input.amountCents <= 0) return false;
+  const paymentCents = Math.abs(input.amountCents);
+  if (paymentCents <= 0) return false;
 
+  // Only reconcile from the credit account linked to a card.
   const linkedCard = await getCreditCardByPlaidAccountId(input.userId, input.accountId);
-  const match = await findMatchingOpenStatement(input.userId, input.amountCents, input.date, {
-    cardId: linkedCard?.id,
+  if (!linkedCard) return false;
+  const match = await findMatchingOpenStatement(input.userId, paymentCents, input.date, {
+    cardId: linkedCard.id,
   });
   if (!match) return false;
 
   await updateStatement(match.id, {
-    paidAmountCents: input.amountCents,
+    paidAmountCents: paymentCents,
     paidDate: input.date,
   });
   // findMatchingOpenStatement only returns unpaid statements, so this is always
@@ -149,9 +158,57 @@ async function reconcileCardPaymentDraft(input: {
   await applyPromoChunksForPaidStatement(input.userId, match.cardId, match.statementDate);
   log.info(
     `plaid-sync: reconciled card_payment ${input.transactionId} ` +
-      `($${(input.amountCents / 100).toFixed(2)}) → statement ${match.id} on card ${match.cardId} (marked paid)`,
+      `($${(paymentCents / 100).toFixed(2)}) → statement ${match.id} on card ${match.cardId} (marked paid)`,
   );
   return true;
+}
+
+/**
+ * Catch-up pass over already-synced approved drafts on this item's linked
+ * credit accounts. Payments synced before card-payment detection existed were
+ * stored as `expense` and never reconciled; a fresh cursor sync won't revisit
+ * them. This re-evaluates each stored draft (using its persisted primary
+ * category + description), fixes a mislabeled `kind`, and reconciles it. Safe
+ * to run every sync — reconciliation is idempotent (a settled statement won't
+ * re-match). Returns the number of statements newly settled.
+ */
+async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string): Promise<number> {
+  const accounts = await listPlaidAccountsByItem(itemId);
+  const creditAccountIds = new Set(accounts.filter((a) => a.type === "credit").map((a) => a.id));
+  if (creditAccountIds.size === 0) return 0;
+
+  const linkedAccountIds = new Set<string>();
+  for (const id of creditAccountIds) {
+    const card = await getCreditCardByPlaidAccountId(userId, id);
+    if (card) linkedAccountIds.add(id);
+  }
+  if (linkedAccountIds.size === 0) return 0;
+
+  const drafts = (await listPlaidDrafts(userId, "approved")).filter((d) =>
+    linkedAccountIds.has(d.accountId),
+  );
+
+  let reconciled = 0;
+  for (const draft of drafts) {
+    // Stored drafts keep only the PRIMARY category — looksLikeCardPayment works
+    // off that + the description.
+    if (!looksLikeCardPayment({ primaryCategory: draft.plaidCategory, description: draft.description })) {
+      continue;
+    }
+    if (draft.kind !== "card_payment") {
+      await setPlaidDraftKind(userId, draft.id, "card_payment");
+    }
+    const settled = await reconcileCardPaymentDraft({
+      userId,
+      transactionId: draft.id,
+      accountId: draft.accountId,
+      amountCents: draft.amountCents,
+      date: draft.date,
+      kind: "card_payment",
+    });
+    if (settled) reconciled++;
+  }
+  return reconciled;
 }
 
 async function autoCreatePromosFromExistingDrafts(userId: string, itemId: string): Promise<void> {
@@ -367,7 +424,6 @@ export async function syncPlaidTransactions(
               amountCents,
               date: txn.date,
               kind,
-              primaryCategory: txn.personal_finance_category?.primary ?? null,
             })
           ) {
             totalStatementsReconciled++;
@@ -430,7 +486,6 @@ export async function syncPlaidTransactions(
               amountCents,
               date: txn.date,
               kind,
-              primaryCategory: txn.personal_finance_category?.primary ?? null,
             }))
           ) {
             totalStatementsReconciled++;
@@ -445,6 +500,8 @@ export async function syncPlaidTransactions(
       await updatePlaidItemCursor(item.id, cursor ?? "", Date.now());
       await autoCreatePromosFromExistingDrafts(userId, item.id);
       await seedPayPalSpecialFinancingPromos(userId, item.id);
+      // Catch up payments synced before card-payment detection existed.
+      totalStatementsReconciled += await reconcileExistingCardPaymentDrafts(userId, item.id);
 
       totalAdded += added;
       totalModified += modified;

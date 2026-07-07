@@ -36,7 +36,9 @@ import {
   createPromo,
   createStatement,
   getPromo,
+  getPlaidDraft,
   upsertPlaidAccount,
+  upsertPlaidDraft,
   setCreditCardPlaidLink,
   getCreditCard,
   listPromosForCard,
@@ -509,6 +511,162 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
     expect(result.statementsReconciled).toBe(0);
     const stmts = await listStatements(card.id);
     expect(stmts[0]!.paidAmountCents).toBeNull();
+  });
+
+  it("backfills a NEGATIVE 'Payment Thank You' draft synced before detection existed", async () => {
+    // The real ****9873 shape: the payment posted on the credit account as a
+    // negative LOAN_DISBURSEMENTS "Payment Thank You", was stored as `expense`
+    // by the old classifier, and never reconciled. A later sync (empty delta)
+    // must catch it up via the backfill.
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_boa",
+      institutionName: "BofA",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: "old-cursor",
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_visa",
+      itemId: item.id,
+      userId: user.id,
+      name: "CREDIT CARD",
+      mask: "9873",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 505_10,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "CREDIT CARD ****9873",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: true,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_visa");
+    const today = todayIso();
+    const statement = await createStatement(card.id, {
+      statementDate: addDaysIso(today, -26),
+      dueDate: today,
+      statementBalanceCents: 380_75,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    // Pre-existing approved draft, misclassified as expense, negative amount.
+    await upsertPlaidDraft({
+      id: "pay_neg",
+      userId: user.id,
+      accountId: "acct_visa",
+      date: today,
+      description: "Payment Thank You - Web",
+      originalDescription: "Payment Thank You - Web",
+      amountCents: -380_75,
+      plaidCategory: "LOAN_DISBURSEMENTS",
+      merchantName: null,
+      pending: false,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: { next_cursor: "old-cursor", has_more: false, accounts: [], added: [], modified: [], removed: [] },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.statementsReconciled).toBe(1);
+
+    const settled = (await listStatements(card.id)).find((s) => s.id === statement.id)!;
+    expect(settled.paidAmountCents).toBe(380_75); // magnitude of the negative payment
+    expect(settled.paidDate).toBe(today);
+    // Draft kind corrected so it stops counting as spend.
+    expect((await getPlaidDraft(user.id, "pay_neg"))!.kind).toBe("card_payment");
+
+    // Idempotent: a second sync settles nothing more.
+    const again = await syncPlaidTransactions(user.id, item.id);
+    expect(again.statementsReconciled).toBe(0);
+  });
+
+  it("does not backfill-settle a partial payment on a revolving card", async () => {
+    // ****9873 reality: a $219 payment against a $505 statement is partial —
+    // it must NOT clear the statement (the balance is still owed).
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_boa",
+      institutionName: "BofA",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: "c",
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_rev",
+      itemId: item.id,
+      userId: user.id,
+      name: "CREDIT CARD",
+      mask: "9873",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 1204_76,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "CREDIT CARD ****9873",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: false,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_rev");
+    const today = todayIso();
+    await createStatement(card.id, {
+      statementDate: addDaysIso(today, -26),
+      dueDate: today,
+      statementBalanceCents: 505_10,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    await upsertPlaidDraft({
+      id: "pay_partial",
+      userId: user.id,
+      accountId: "acct_rev",
+      date: today,
+      description: "Payment Thank You - Web",
+      originalDescription: "Payment Thank You - Web",
+      amountCents: -219_41,
+      plaidCategory: "LOAN_DISBURSEMENTS",
+      merchantName: null,
+      pending: false,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: { next_cursor: "c", has_more: false, accounts: [], added: [], modified: [], removed: [] },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.statementsReconciled).toBe(0);
+    expect((await listStatements(card.id))[0]!.paidAmountCents).toBeNull();
+    // But the draft is still reclassified so it stops looking like spend.
+    expect((await getPlaidDraft(user.id, "pay_partial"))!.kind).toBe("card_payment");
   });
 });
 
