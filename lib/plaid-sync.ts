@@ -3,6 +3,7 @@ import { CountryCode, Products } from "plaid";
 import { getPlaidClient } from "./plaid-client";
 import { decryptToken } from "./plaid-crypto";
 import {
+  applyPromoChunksForPaidStatement,
   archiveExpiredPromos,
   getSettings,
   listCreditCards,
@@ -15,8 +16,6 @@ import {
   updatePlaidItemCursor,
   getCreditCardByPlaidAccountId,
   createPromo,
-  listPromosForCard,
-  updatePromo,
   updatePlaidDraftStatus,
   updateCardCycleDays,
   upsertCreditCardStatementByDate,
@@ -27,9 +26,7 @@ import { dueDateFromStatement } from "./credit-cards";
 import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
 import { classifyDraftKind } from "./plaid-transaction-kind";
 import {
-  allocatePayPalPaymentsFifo,
   isPayPalCreditAccount,
-  isPayPalCreditPayment,
   isPayPalWalletAccount,
   isPayPalWalletPurchase,
   toPayPalFinancingPurchase,
@@ -129,7 +126,18 @@ async function autoCreatePromosFromExistingDrafts(userId: string, itemId: string
   }
 }
 
-async function reconcilePayPalSpecialFinancing(userId: string, itemId: string): Promise<void> {
+/**
+ * Seed promo rows for new PayPal special-financing purchases (wallet-account
+ * purchases above the account's financing minimum). SEED-ONLY by design:
+ * existing promo rows are NEVER rewritten from transaction history. Plaid
+ * payment rows don't expose PayPal's targeted promo allocation, so any
+ * amount reconciliation from transactions (the old FIFO heuristic) was
+ * systematically wrong — every promo-drift incident traced back to it.
+ * Amount/date corrections come from the paste-the-PayPal-promo-list
+ * reconcile flow (`authoritativeSource = paypal_promo_list`) or the
+ * unpaid→paid statement decrement edge.
+ */
+async function seedPayPalSpecialFinancingPromos(userId: string, itemId: string): Promise<void> {
   const accounts = await listPlaidAccountsByItem(itemId);
   const paypalCreditAccount = accounts.find(isPayPalCreditAccount);
   if (!paypalCreditAccount) return;
@@ -141,75 +149,27 @@ async function reconcilePayPalSpecialFinancing(userId: string, itemId: string): 
   if (walletAccountIds.size === 0) return;
 
   const drafts = (await listPlaidDrafts(userId, "approved")).filter((draft) =>
-    accounts.some((account) => account.id === draft.accountId),
+    walletAccountIds.has(draft.accountId),
   );
   const latestDraftDate = drafts.reduce(
     (latest, draft) => (draft.date > latest ? draft.date : latest),
     "",
   );
 
-  const walletPurchases = drafts
-    .filter((draft) => walletAccountIds.has(draft.accountId))
+  const purchases = drafts
     .filter(isPayPalWalletPurchase)
-    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
-
-  const purchases = walletPurchases
     .map(toPayPalFinancingPurchase)
     .filter((purchase): purchase is NonNullable<typeof purchase> => purchase !== null)
     .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
 
-  if (purchases.length === 0) return;
-
-  const payments = drafts
-    .filter((draft) => draft.accountId === paypalCreditAccount.id && isPayPalCreditPayment(draft))
-    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
-
-  const remainingByDraftId = allocatePayPalPaymentsFifo(
-    walletPurchases.map((purchase) => ({
-      id: purchase.id,
-      date: purchase.date,
-      originalAmountCents: purchase.amountCents,
-    })),
-    payments.map((payment) => ({
-      date: payment.date,
-      amountCents: payment.amountCents,
-    })),
-  );
-
-  const existingPromos = await listPromosForCard(userId, card.id, true);
-  const promoById = new Map(existingPromos.map((promo) => [promo.id, promo]));
-
   for (const purchase of purchases) {
-    const remainingAmountCents = remainingByDraftId.get(purchase.id) ?? purchase.amountCents;
-    const isStillPromotional = purchase.endDate >= latestDraftDate;
-    if (purchase.linkedPromoId) {
-      const promo = promoById.get(purchase.linkedPromoId);
-      if (!promo) continue;
-      // PayPal's live promo list is more authoritative than transaction FIFO:
-      // it includes issuer-specific payoff dates and targeted payment
-      // allocation that Plaid transactions do not expose. When a promo row has
-      // been reconciled from that list (or manually locked), never rewrite it
-      // from the heuristic.
-      if (promo.authoritativeSource !== null) continue;
-      // A paid-off PayPal promo should stay paid off. Transaction history alone
-      // is not enough to resurrect it on the next sync.
-      if (!promo.isActive && promo.remainingAmountCents <= 0) continue;
-      await updatePromo(userId, promo.id, {
-        originalAmountCents: purchase.amountCents,
-        remainingAmountCents,
-        startDate: purchase.date,
-        endDate: purchase.endDate,
-        isActive: remainingAmountCents > 0 && isStillPromotional,
-      });
-      continue;
-    }
-
-    if (remainingAmountCents <= 0 || !isStillPromotional) continue;
+    if (purchase.linkedPromoId) continue; // already seeded — never rewrite
+    if (purchase.endDate < latestDraftDate) continue; // promo window already over
 
     const promo = await createPromo(userId, card.id, {
       description: purchase.merchantName ?? purchase.description,
       originalAmountCents: purchase.amountCents,
-      remainingAmountCents,
+      remainingAmountCents: purchase.amountCents,
       startDate: purchase.date,
       endDate: purchase.endDate,
       monthlyPaymentCents: null,
@@ -415,7 +375,7 @@ export async function syncPlaidTransactions(
       // Persist the advanced cursor.
       await updatePlaidItemCursor(item.id, cursor ?? "", Date.now());
       await autoCreatePromosFromExistingDrafts(userId, item.id);
-      await reconcilePayPalSpecialFinancing(userId, item.id);
+      await seedPayPalSpecialFinancingPromos(userId, item.id);
 
       totalAdded += added;
       totalModified += modified;
@@ -545,7 +505,7 @@ export async function syncCreditCardLiabilitiesForItem(
           minimumPaymentCents,
         });
 
-        const statementChanged = await upsertCreditCardStatementByDate(card.id, {
+        const upsertResult = await upsertCreditCardStatementByDate(card.id, {
           statementDate: stmtDate,
           dueDate: resolvedDue,
           statementBalanceCents: stmtBalCents,
@@ -554,7 +514,13 @@ export async function syncCreditCardLiabilitiesForItem(
           paidDate: looksPaid ? lastPayDate : null,
           liveBalanceCents: liveBalanceByAccountId.get(plaidAccountId) ?? card.currentBalanceCents,
         });
-        if (statementChanged) statementsCreated++;
+        if (upsertResult.changed) statementsCreated++;
+        // Same unpaid→paid edge contract as the statements PATCH route
+        // (§17a): a statement Plaid observed transitioning to paid carries
+        // each active promo's chunk for that cycle.
+        if (upsertResult.becamePaid) {
+          await applyPromoChunksForPaidStatement(userId, card.id, stmtDate);
+        }
       }
     }
   } catch (err) {

@@ -282,6 +282,27 @@ export type StatementUpdateInput = z.infer<typeof statementUpdateSchema>;
 export type PromoCreateInput = z.infer<typeof promoCreateSchema>;
 export type PromoUpdateInput = z.infer<typeof promoUpdateSchema>;
 
+/**
+ * Body for POST /api/credit-cards/[id]/promos/reconcile — rows parsed from a
+ * pasted PayPal promo list. Applying sets `authoritativeSource` so sync never
+ * rewrites the reconciled values.
+ */
+export const promoReconcileSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        description: z.string().min(1).max(120),
+        remainingCents: cents.refine((n) => n >= 0, "Remaining cannot be negative"),
+        endDate: isoDate,
+      }),
+    )
+    .min(1)
+    .max(100),
+  /** Archive active promos that are absent from the pasted list. */
+  archiveMissing: z.boolean().default(true),
+});
+export type PromoReconcileInput = z.infer<typeof promoReconcileSchema>;
+
 export const promoPaymentBaseSchema = z.object({
   dueDate: isoDate,
   amountCents: cents.refine((n) => n > 0, "Amount must be positive"),

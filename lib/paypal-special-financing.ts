@@ -32,14 +32,6 @@ export type PayPalFinancingPurchase = PayPalFinancingDraft & {
   endDate: string;
 };
 
-export type PayPalFinancingPayment = PayPalFinancingDraft;
-
-export type PayPalPromoBalanceInput = {
-  id: string;
-  date: string;
-  originalAmountCents: number;
-};
-
 export function addMonthsClampedIso(iso: string, months: number): string {
   const parts = iso.split("-").map(Number);
   const year = parts[0] ?? 1970;
@@ -53,13 +45,10 @@ export function addMonthsClampedIso(iso: string, months: number): string {
   return target.toISOString().slice(0, 10);
 }
 
+import { isPaymentLikeCategory } from "./plaid-helpers";
+
 function hasText(value: string | null | undefined, needle: string): boolean {
   return (value ?? "").toLowerCase().includes(needle);
-}
-
-function isPaymentLikeCategory(category: string | null | undefined): boolean {
-  const value = category?.toLowerCase() ?? "";
-  return value.includes("loan_payments") || value.includes("payment") || value.includes("transfer");
 }
 
 export function isPayPalWalletAccount(input: {
@@ -101,16 +90,6 @@ export function isPayPalWalletPurchase(
   return draft.amountCents > 0 && !isPaymentLikeCategory(draft.plaidCategory);
 }
 
-export function isPayPalCreditPayment(
-  draft: Pick<PayPalFinancingDraft, "amountCents" | "plaidCategory" | "description">,
-): boolean {
-  return (
-    draft.amountCents > 0 &&
-    isPaymentLikeCategory(draft.plaidCategory) &&
-    hasText(draft.description, "paypal credit")
-  );
-}
-
 export function toPayPalFinancingPurchase(
   draft: PayPalFinancingDraft,
 ): PayPalFinancingPurchase | null {
@@ -121,52 +100,8 @@ export function toPayPalFinancingPurchase(
   };
 }
 
-export function allocatePayPalPaymentsFifo(
-  purchases: ReadonlyArray<PayPalPromoBalanceInput>,
-  payments: ReadonlyArray<{ date: string; amountCents: number }>,
-): Map<string, number> {
-  const remaining = new Map<string, number>();
-  const openQueue: string[] = [];
-  const purchaseById = new Map<string, PayPalPromoBalanceInput>();
-
-  const events = [
-    ...purchases.map((purchase) => ({ type: "purchase" as const, date: purchase.date, purchase })),
-    ...payments.map((payment) => ({ type: "payment" as const, date: payment.date, payment })),
-  ].sort((a, b) => {
-    const byDate = a.date.localeCompare(b.date);
-    if (byDate !== 0) return byDate;
-    if (a.type === b.type) return 0;
-    return a.type === "purchase" ? -1 : 1;
-  });
-
-  for (const event of events) {
-    if (event.type === "purchase") {
-      purchaseById.set(event.purchase.id, event.purchase);
-      remaining.set(event.purchase.id, event.purchase.originalAmountCents);
-      openQueue.push(event.purchase.id);
-      continue;
-    }
-
-    let unapplied = event.payment.amountCents;
-    while (unapplied > 0 && openQueue.length > 0) {
-      const id = openQueue[0]!;
-      const current = remaining.get(id) ?? 0;
-      if (current <= 0) {
-        openQueue.shift();
-        continue;
-      }
-      const applied = Math.min(current, unapplied);
-      const next = current - applied;
-      remaining.set(id, next);
-      unapplied -= applied;
-      if (next === 0) openQueue.shift();
-    }
-  }
-
-  for (const purchase of purchases) {
-    if (!purchaseById.has(purchase.id)) {
-      remaining.set(purchase.id, purchase.originalAmountCents);
-    }
-  }
-  return remaining;
-}
+// NOTE: the payment-to-purchase FIFO allocator that used to live here was
+// removed on purpose. Plaid's PayPal payment rows don't expose the issuer's
+// targeted promo allocation, so FIFO-derived remaining balances were
+// systematically wrong. Promo amounts now change only via the unpaid→paid
+// statement decrement edge or the paste-the-PayPal-promo-list reconcile flow.

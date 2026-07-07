@@ -46,6 +46,6 @@ test("create card -> enter statement -> mark paid -> verify paid state", async (
   await expect(page.getByText(/on time/i).first()).toBeVisible();
 
   // Paid statements should no longer appear as future ledger events.
-  await page.goto("/projection");
+  await page.goto("/ledger");
   await expect(page.getByText(/0 ledger events/i).first()).toBeVisible();
 });

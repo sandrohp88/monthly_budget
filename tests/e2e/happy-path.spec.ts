@@ -24,7 +24,7 @@ test("setup -> add a bill -> add an extra -> see them in projection", async ({ p
   await extraDialog.getByRole("button", { name: /^save$/i }).click();
   await expect(page.getByText("Concert tickets").first()).toBeVisible();
 
-  await page.goto("/projection");
+  await page.goto("/ledger");
   await expect(page.getByText("Rent").first()).toBeVisible();
   await expect(page.getByText("Concert tickets").first()).toBeVisible();
 });

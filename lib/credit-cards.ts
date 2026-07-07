@@ -347,13 +347,12 @@ export function estimateCurrentCycle(
 
   for (const row of rows) {
     for (const ev of row.events) {
-      if (ev.kind !== "bill") continue;
-      // Find the source bill so we can preserve the row id (multiple bills
-      // may have the same display label)
-      const source = linkedBills.find((b) => b.name === ev.label) ?? linkedBills[0]!;
+      // Bill events carry the source bill's id — name matching would
+      // mis-attribute charges when two bills share a display label.
+      if (ev.kind !== "bill" || !ev.sourceId) continue;
       charges.push({
-        sourceId: source.id,
-        billId: source.id,
+        sourceId: ev.sourceId,
+        billId: ev.sourceId,
         sourceType: "bill",
         name: ev.label,
         date: row.date,

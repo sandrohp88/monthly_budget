@@ -508,8 +508,7 @@ describe("estimateCurrentCycle", () => {
     expect(out.charges[0]?.date).toBe("2025-03-05");
   });
 
-  it("preserves bill id even when names collide (first-match attribution)", () => {
-    // Documents the known limitation: same-name bills attribute to the first one.
+  it("attributes same-name bills to their own ids (sourceId, not name match)", () => {
     const out = estimateCurrentCycle(
       { statementDay: 15, dueDay: 5 },
       [
@@ -518,10 +517,12 @@ describe("estimateCurrentCycle", () => {
       ],
       "2025-03-10",
     );
-    // Both bills hit in cycle (2025-02-28 and 2025-03-01).
+    // Both bills hit in cycle (2025-02-28 and 2025-03-01), each under its own id.
     expect(out.charges).toHaveLength(2);
-    // Both attribute to "first" because the find() matches on name.
-    expect(out.charges.every((c) => c.billId === "first")).toBe(true);
+    expect(out.charges.map((c) => [c.billId, c.amountCents])).toEqual([
+      ["first", 9_99],
+      ["second", 14_99],
+    ]);
   });
 });
 

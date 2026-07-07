@@ -4,10 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  BarChart3,
   CalendarDays,
   ChartLine,
-  LineChart,
   CircleDollarSign,
   CreditCard,
   Gem,
@@ -43,10 +41,8 @@ export const NAV: ReadonlyArray<{
   { href: "/paychecks", label: "Paychecks", icon: CircleDollarSign, shortcut: "p", section: 1 },
   { href: "/extras", label: "One-Time", icon: PartyPopper, shortcut: "e", section: 1 },
   { href: "/calendar", label: "Calendar", icon: CalendarDays, shortcut: "l", section: 1 },
-  { href: "/projection", label: "Projection", icon: LineChart, shortcut: "j", section: 1 },
   { href: "/ledger", label: "Ledger", icon: ChartLine, shortcut: "x", section: 1 },
   { href: "/assets", label: "Assets", icon: Gem, shortcut: "w", section: 1 },
-  { href: "/reports", label: "Reports", icon: BarChart3, shortcut: "r", section: 1 },
   { href: "/settings", label: "Settings", icon: Settings, shortcut: "s", section: 2 },
 ];
 

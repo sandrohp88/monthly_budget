@@ -3,18 +3,30 @@ import { auth } from "@/lib/auth";
 import { buildProjection } from "@/lib/projection-server";
 import { DateLabel } from "@/components/date-label";
 import { ProjectionClient } from "../projection/projection-client";
+import { ReportsClient } from "../reports/reports-client";
+import { buildReportsData } from "../reports/reports-data";
+import { LedgerTabs } from "./ledger-tabs";
 
 export const dynamic = "force-dynamic";
 
-export default async function LedgerPage() {
+export default async function LedgerPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
   const session = await auth();
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const projection = await buildProjection(userId);
+  const [projection, reportsData, sp] = await Promise.all([
+    buildProjection(userId),
+    buildReportsData(userId),
+    searchParams,
+  ]);
   if (!projection) redirect("/setup");
   const { rows, startDate, endDate, today, promoSummariesByCard, variableBillCategoriesByKey } =
     projection;
+  const initialTab = sp.tab === "reports" ? ("reports" as const) : ("ledger" as const);
 
   return (
     <div className="fade-in space-y-5">
@@ -34,14 +46,20 @@ export default async function LedgerPage() {
           </p>
         </div>
       </div>
-      <ProjectionClient
-        mode="full"
-        rows={rows}
-        startDate={startDate}
-        endDate={endDate}
-        today={today}
-        promoSummariesByCard={promoSummariesByCard}
-        variableBillCategories={variableBillCategoriesByKey}
+      <LedgerTabs
+        initialTab={initialTab}
+        ledger={
+          <ProjectionClient
+            mode="full"
+            rows={rows}
+            startDate={startDate}
+            endDate={endDate}
+            today={today}
+            promoSummariesByCard={promoSummariesByCard}
+            variableBillCategories={variableBillCategoriesByKey}
+          />
+        }
+        reports={<ReportsClient {...reportsData} />}
       />
     </div>
   );

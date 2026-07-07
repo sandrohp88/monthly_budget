@@ -44,7 +44,7 @@ test("create card -> add 0% promo -> verify promo chunk in projection", async ({
   await expect(page.getByText("$1,200.00").first()).toBeVisible();
 
   // ── verify promo chunk appears in projection ──────────────────────────
-  await page.goto("/projection");
+  await page.goto("/ledger");
   // The promo description should show up as a projected charge
   await expect(page.getByText(/MacBook Pro/i).first()).toBeVisible();
 });

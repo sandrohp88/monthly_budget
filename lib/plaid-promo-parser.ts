@@ -131,20 +131,11 @@ export function detectPromoPayoffDate(texts: ReadonlyArray<string | null | undef
 }
 
 import { PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS } from "./paypal-special-financing";
+import { isPaymentLikeCategory } from "./plaid-helpers";
 
 function includesAny(value: string | null | undefined, needles: string[]): boolean {
   const haystack = value?.toLowerCase() ?? "";
   return needles.some((needle) => haystack.includes(needle));
-}
-
-function isPaymentLikeCategory(category: string | null | undefined): boolean {
-  const value = category?.toLowerCase() ?? "";
-  return (
-    value.includes("loan_payments") ||
-    value.includes("loan payments") ||
-    value.includes("transfer") ||
-    value.includes("payment")
-  );
 }
 
 export type PromoCandidateInput = {

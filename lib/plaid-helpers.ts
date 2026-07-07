@@ -5,6 +5,17 @@
 
 import { dollarsToCents } from "./money";
 
+/**
+ * Category strings that indicate a payment or transfer rather than a purchase
+ * (Plaid `personal_finance_category` primaries like LOAN_PAYMENTS, TRANSFER_*,
+ * and legacy category labels). Shared by the PayPal financing classifiers and
+ * the promo-candidate check — keep the single source of truth here.
+ */
+export function isPaymentLikeCategory(category: string | null | undefined): boolean {
+  const value = category?.toLowerCase() ?? "";
+  return value.includes("payment") || value.includes("transfer");
+}
+
 /** Plaid sends amounts as positive for debits and negative for credits.
  *  We store positive = expense, negative = refund — same sign convention.
  *  Plaid amounts are in dollars (floating point); routing through

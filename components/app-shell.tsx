@@ -19,10 +19,8 @@ const ROUTE_TO_CRUMB: Record<string, string> = {
   "/paychecks": "Paychecks",
   "/extras": "One-time",
   "/calendar": "Calendar",
-  "/projection": "Projection",
   "/ledger": "Ledger",
   "/assets": "Assets",
-  "/reports": "Reports",
   "/settings": "Settings",
 };
 
