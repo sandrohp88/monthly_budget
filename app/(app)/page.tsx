@@ -267,7 +267,7 @@ export default async function DashboardPage() {
         <AlertBar tag="RISK" variant="red">
           Projected low of <Money cents={worst.balanceCents} /> on{" "}
           <DateLabel iso={worst.date} format="long" />.{" "}
-          <Link href={`/projection#d-${worst.date}`} className="text-[var(--mint)] hover:underline">
+          <Link href={`/ledger#d-${worst.date}`} className="text-[var(--mint)] hover:underline">
             Jump to day →
           </Link>
         </AlertBar>
@@ -353,7 +353,7 @@ export default async function DashboardPage() {
               <CardTitle className="mt-0.5 text-[14px]">UPCOMING EVENTS</CardTitle>
             </div>
             <Link
-              href="/projection"
+              href="/ledger"
               className="text-[10px] uppercase tracking-[0.15em] text-[var(--mint)] hover:text-[var(--mint-bright)]"
             >
               VIEW ALL →
