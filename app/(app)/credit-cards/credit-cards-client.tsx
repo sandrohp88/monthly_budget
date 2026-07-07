@@ -6,6 +6,7 @@ import {
   Trash2,
   AlertTriangle,
   CheckCircle2,
+  ClipboardPaste,
   FileText,
   Sparkles,
   Scale,
@@ -46,6 +47,7 @@ import {
 import { MoneyInput } from "@/components/money-input";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
+import { PayPalPromoReconcileDialog } from "@/components/paypal-promo-reconcile-dialog";
 import {
   CardWithStatements,
   LinkedBillEstimate,
@@ -118,6 +120,7 @@ export function CreditCardsClient({
   const [whatIfPromo, setWhatIfPromo] = React.useState<{ card: CreditCardRow; promo: CreditCardPromoRow } | null>(null);
   const [whatIfCard, setWhatIfCard] = React.useState<{ card: CreditCardRow; promos: CreditCardPromoRow[] } | null>(null);
   const [schedulePromo, setSchedulePromo] = React.useState<{ card: CreditCardRow; promo: CreditCardPromoRow } | null>(null);
+  const [reconcileCard, setReconcileCard] = React.useState<{ card: CreditCardRow; promos: CreditCardPromoRow[] } | null>(null);
 
   const today = todayIso();
 
@@ -304,6 +307,7 @@ export function CreditCardsClient({
                 setWhatIfCard({ card, promos: promos.filter((p) => p.isActive) })
               }
               onPromoSchedule={(p) => setSchedulePromo({ card, promo: p })}
+              onReconcilePromos={() => setReconcileCard({ card, promos })}
             />
           ))}
         </div>
@@ -417,6 +421,19 @@ export function CreditCardsClient({
           }}
         />
       ) : null}
+
+      {/* Reconcile promos from a pasted PayPal promo list */}
+      {reconcileCard ? (
+        <PayPalPromoReconcileDialog
+          card={{ id: reconcileCard.card.id, name: reconcileCard.card.name }}
+          promos={reconcileCard.promos}
+          onClose={() => setReconcileCard(null)}
+          onApplied={async () => {
+            setReconcileCard(null);
+            await refresh();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -442,6 +459,7 @@ function CreditCardTile({
   onPromoWhatIf,
   onCardPromoWhatIf,
   onPromoSchedule,
+  onReconcilePromos,
 }: {
   card: CreditCardRow;
   statements: CreditCardStatementRow[];
@@ -459,6 +477,7 @@ function CreditCardTile({
   onPromoWhatIf: (p: CreditCardPromoRow) => void;
   onCardPromoWhatIf: () => void;
   onPromoSchedule: (p: CreditCardPromoRow) => void;
+  onReconcilePromos: () => void;
 }) {
   const current = currentStatementOf(statements);
   const isOpen = current ? isStatementOpen(current) : false;
@@ -710,6 +729,7 @@ function CreditCardTile({
         onWhatIf={onPromoWhatIf}
         onCardWhatIf={onCardPromoWhatIf}
         onSchedule={onPromoSchedule}
+        onReconcile={onReconcilePromos}
       />
 
       {/* recent statement history */}
@@ -1384,6 +1404,7 @@ function PromosSection({
   onWhatIf,
   onCardWhatIf,
   onSchedule,
+  onReconcile,
 }: {
   card: CreditCardRow;
   promos: CreditCardPromoRow[];
@@ -1394,6 +1415,7 @@ function PromosSection({
   onWhatIf: (p: CreditCardPromoRow) => void;
   onCardWhatIf: () => void;
   onSchedule: (p: CreditCardPromoRow) => void;
+  onReconcile: () => void;
 }) {
   const active = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);
   const totalRemaining = active.reduce((s, p) => s + p.remainingAmountCents, 0);
@@ -1405,9 +1427,14 @@ function PromosSection({
           <Sparkles className="h-3 w-3 text-[var(--cyan)]" />
           {`// 0% PROMOS (${active.length})`}
         </span>
-        <Button size="sm" variant="ghost" onClick={onAdd}>
-          <Plus className="h-3 w-3" /> ADD
-        </Button>
+        <span className="flex items-center">
+          <Button size="sm" variant="ghost" onClick={onReconcile} title="Reconcile from a pasted PayPal promo list">
+            <ClipboardPaste className="h-3 w-3" /> RECONCILE
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onAdd}>
+            <Plus className="h-3 w-3" /> ADD
+          </Button>
+        </span>
       </div>
 
       {active.length === 0 ? (
