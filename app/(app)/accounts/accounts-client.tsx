@@ -90,6 +90,7 @@ export function AccountsClient({
         modified?: number;
         cardsUpdated?: number;
         statementsCreated?: number;
+        statementsReconciled?: number;
         error?: string;
       };
       if (!res.ok) throw new Error(json.error ?? "Sync failed");
@@ -98,7 +99,11 @@ export function AccountsClient({
         (json.cardsUpdated ?? 0) > 0 || (json.statementsCreated ?? 0) > 0
           ? ` · ${json.cardsUpdated ?? 0} card${(json.cardsUpdated ?? 0) === 1 ? "" : "s"}, ${json.statementsCreated ?? 0} statement${(json.statementsCreated ?? 0) === 1 ? "" : "s"}`
           : "";
-      toast.success(`Sync complete — ${txnPart}${cardPart}`);
+      const reconciledPart =
+        (json.statementsReconciled ?? 0) > 0
+          ? ` · ${json.statementsReconciled} payment${json.statementsReconciled === 1 ? "" : "s"} reconciled`
+          : "";
+      toast.success(`Sync complete — ${txnPart}${cardPart}${reconciledPart}`);
       await Promise.all([refreshItems(), refreshCards()]);
     } catch (err) {
       toast.error((err as Error).message);
