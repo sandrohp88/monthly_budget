@@ -4,6 +4,7 @@ import {
   isSpecialFinancingCandidate,
   plaidTransactionPromoTexts,
 } from "./plaid-promo-parser";
+import { PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS } from "./paypal-special-financing";
 
 describe("detectPromoPayoffDate", () => {
   it("detects numeric PayPal-style paid-in-full dates", () => {
@@ -51,7 +52,7 @@ describe("detectPromoPayoffDate", () => {
   it("flags PayPal Credit purchases over the current financing threshold", () => {
     expect(
       isSpecialFinancingCandidate({
-        amountCents: 150_01,
+        amountCents: PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS + 1,
         linkedCreditCardId: "card_1",
         linkedPromoId: null,
         promoPayoffDate: null,
@@ -63,10 +64,10 @@ describe("detectPromoPayoffDate", () => {
     ).toBe(true);
   });
 
-  it("does not flag exact-$150 PayPal purchases", () => {
+  it("does not flag PayPal purchases at or below the threshold", () => {
     expect(
       isSpecialFinancingCandidate({
-        amountCents: 150_00,
+        amountCents: PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS,
         linkedCreditCardId: "card_1",
         linkedPromoId: null,
         promoPayoffDate: null,

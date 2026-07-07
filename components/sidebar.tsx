@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BarChart3,
+  CalendarDays,
   ChartLine,
   LineChart,
   CircleDollarSign,
@@ -41,6 +42,7 @@ export const NAV: ReadonlyArray<{
   { href: "/credit-cards", label: "Credit Cards", icon: Wallet, shortcut: "c", section: 1 },
   { href: "/paychecks", label: "Paychecks", icon: CircleDollarSign, shortcut: "p", section: 1 },
   { href: "/extras", label: "One-Time", icon: PartyPopper, shortcut: "e", section: 1 },
+  { href: "/calendar", label: "Calendar", icon: CalendarDays, shortcut: "l", section: 1 },
   { href: "/projection", label: "Projection", icon: LineChart, shortcut: "j", section: 1 },
   { href: "/ledger", label: "Ledger", icon: ChartLine, shortcut: "x", section: 1 },
   { href: "/assets", label: "Assets", icon: Gem, shortcut: "w", section: 1 },
@@ -145,7 +147,7 @@ export function Sidebar({
 
       {armed ? (
         <div className="mx-3 mb-2 rounded-full border border-[var(--mint-dim)] bg-[var(--mint-glow)] px-3 py-1.5 text-[12px] text-[var(--mint)]">
-          press: d b a t c p e x w r s
+          press: {NAV.map((n) => n.shortcut).join(" ")}
         </div>
       ) : null}
 

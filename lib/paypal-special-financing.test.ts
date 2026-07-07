@@ -5,12 +5,14 @@ import {
   isPayPalCreditPayment,
   isPayPalSpecialFinancingPurchase,
   isPayPalWalletPurchase,
+  PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS,
 } from "./paypal-special-financing";
 
 describe("PayPal special financing helpers", () => {
-  it("uses PayPal's over-$150 threshold for special financing purchases", () => {
-    expect(isPayPalSpecialFinancingPurchase({ amountCents: 150_00, plaidCategory: "GENERAL_MERCHANDISE" })).toBe(false);
-    expect(isPayPalSpecialFinancingPurchase({ amountCents: 150_01, plaidCategory: "GENERAL_MERCHANDISE" })).toBe(true);
+  it("only flags purchases strictly above the account's financing threshold", () => {
+    const threshold = PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS;
+    expect(isPayPalSpecialFinancingPurchase({ amountCents: threshold, plaidCategory: "GENERAL_MERCHANDISE" })).toBe(false);
+    expect(isPayPalSpecialFinancingPurchase({ amountCents: threshold + 1, plaidCategory: "GENERAL_MERCHANDISE" })).toBe(true);
     expect(isPayPalSpecialFinancingPurchase({ amountCents: 506_00, plaidCategory: "LOAN_PAYMENTS" })).toBe(false);
   });
 
