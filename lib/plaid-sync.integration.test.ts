@@ -33,6 +33,9 @@ import { newId } from "./ids";
 import {
   createCreditCard,
   createPlaidItem,
+  createPromo,
+  createStatement,
+  getPromo,
   upsertPlaidAccount,
   setCreditCardPlaidLink,
   getCreditCard,
@@ -332,6 +335,180 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([0, 200_00]);
     expect(promos.map((promo) => promo.endDate)).toEqual([storeTwoEnd, storeOneEnd]);
     expect(promos.map((promo) => promo.isActive)).toEqual([false, true]);
+  });
+});
+
+describe("syncPlaidTransactions card-payment reconciliation", () => {
+  it("marks the matching open statement paid and decrements promos from a LOAN_PAYMENTS draft", async () => {
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_chase",
+      institutionName: "Chase",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_card",
+      itemId: item.id,
+      userId: user.id,
+      name: "Sapphire",
+      mask: "1111",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 300_00,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Sapphire",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: true,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_card");
+
+    const today = todayIso();
+    const statementDate = addDaysIso(today, -26);
+    const promo = await createPromo(user.id, card.id, {
+      description: "TV installment",
+      originalAmountCents: 600_00,
+      remainingAmountCents: 600_00,
+      startDate: addDaysIso(today, -60),
+      endDate: addDaysIso(today, 180),
+      monthlyPaymentCents: 100_00,
+      notes: null,
+      isActive: true,
+    });
+    const statement = await createStatement(card.id, {
+      statementDate,
+      dueDate: today,
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [
+          {
+            transaction_id: "pay_1",
+            account_id: "acct_card",
+            pending: false,
+            date: today,
+            name: "Autopay Payment Thank You",
+            original_description: "AUTOPAY PAYMENT",
+            amount: 300.0,
+            personal_finance_category: {
+              primary: "LOAN_PAYMENTS",
+              detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+            },
+            merchant_name: null,
+          },
+        ],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.statementsReconciled).toBe(1);
+
+    const settled = (await listStatements(card.id)).find((s) => s.id === statement.id)!;
+    expect(settled.paidAmountCents).toBe(300_00);
+    expect(settled.paidDate).toBe(today);
+
+    // Promo decremented once by its monthly chunk ($100), not double-counted.
+    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(500_00);
+
+    // Re-sync is idempotent: the now-paid statement won't re-match.
+    const again = await syncPlaidTransactions(user.id, item.id);
+    expect(again.statementsReconciled).toBe(0);
+    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(500_00);
+  });
+
+  it("does not reconcile a payment that matches no open statement", async () => {
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_chase",
+      institutionName: "Chase",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_card2",
+      itemId: item.id,
+      userId: user.id,
+      name: "Sapphire",
+      mask: "1111",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 300_00,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Sapphire",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: true,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_card2");
+    const today = todayIso();
+    await createStatement(card.id, {
+      statementDate: addDaysIso(today, -26),
+      dueDate: today,
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [
+          {
+            transaction_id: "pay_x",
+            account_id: "acct_card2",
+            pending: false,
+            date: today,
+            name: "Autopay Payment",
+            original_description: "AUTOPAY",
+            // $500 is not within 10% of the $300 statement → no match.
+            amount: 500.0,
+            personal_finance_category: { primary: "LOAN_PAYMENTS" },
+            merchant_name: null,
+          },
+        ],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.statementsReconciled).toBe(0);
+    const stmts = await listStatements(card.id);
+    expect(stmts[0]!.paidAmountCents).toBeNull();
   });
 });
 

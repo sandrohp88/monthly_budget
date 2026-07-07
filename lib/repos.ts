@@ -1170,20 +1170,28 @@ export async function listStatementsForUser(
 }
 
 /**
- * Find an unpaid statement on a user's linked credit cards where the balance
- * is within 10% of `amountCents` and the statement date is within `dateRange`
- * days of `aroundDate`. Used for auto-matching LOAN_PAYMENTS to card statements.
+ * Find an unpaid statement whose balance is within 10% of `amountCents` and
+ * whose DUE date is within `dateRangeDays` of `aroundDate` (a card payment
+ * posts near the due date, not the statement close). Used to auto-match a
+ * posted LOAN_PAYMENTS transaction to the statement it settled.
+ *
+ * When `cardId` is supplied (the card linked to the payment's Plaid account),
+ * only that card's statements are considered — otherwise all of the user's
+ * cards are scanned. The most recent matching statement wins.
  */
 export async function findMatchingOpenStatement(
   userId: string,
   amountCents: number,
   aroundDate: string,
-  dateRangeDays = 35,
+  opts: { dateRangeDays?: number; cardId?: string } = {},
 ): Promise<(CreditCardStatementRow & { cardId: string }) | null> {
+  const dateRangeDays = opts.dateRangeDays ?? 35;
   const db = getDb();
-  const cards = await listCreditCards(userId, false);
+  const allCards = await listCreditCards(userId, false);
+  const cards = opts.cardId ? allCards.filter((c) => c.id === opts.cardId) : allCards;
   if (cards.length === 0) return null;
 
+  const targetTime = new Date(aroundDate).getTime();
   for (const card of cards) {
     const stmts = await db
       .select()
@@ -1193,17 +1201,16 @@ export async function findMatchingOpenStatement(
       .all();
 
     for (const s of stmts) {
-      // Already paid — skip
-      if (s.paidAmountCents != null && s.paidAmountCents > 0) continue;
+      // Already paid (any recorded payment) — skip.
+      if (s.paidAmountCents != null) continue;
 
-      // Check date proximity
-      const stmtTime = new Date(s.statementDate).getTime();
-      const targetTime = new Date(aroundDate).getTime();
-      const dayDiff = Math.abs(stmtTime - targetTime) / (1000 * 60 * 60 * 24);
+      // Proximity to the DUE date (when a payment actually posts).
+      const dueTime = new Date(s.dueDate).getTime();
+      const dayDiff = Math.abs(dueTime - targetTime) / (1000 * 60 * 60 * 24);
       if (dayDiff > dateRangeDays) continue;
 
-      // Check amount proximity (within 10%)
-      const threshold = Math.max(amountCents * 0.1, 100); // at least $1 tolerance
+      // Amount proximity (within 10%, at least $1 tolerance).
+      const threshold = Math.max(amountCents * 0.1, 100);
       if (Math.abs(s.statementBalanceCents - amountCents) <= threshold) {
         return { ...s, cardId: card.id };
       }

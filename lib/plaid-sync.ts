@@ -19,6 +19,7 @@ import {
   updatePlaidDraftStatus,
   updateCardCycleDays,
   upsertCreditCardStatementByDate,
+  updateStatement,
   findMatchingOpenStatement,
 } from "./repos";
 import { todayIso } from "./dates";
@@ -47,6 +48,8 @@ export interface SyncResult {
   removed: number;
   cardsUpdated: number;
   statementsCreated: number;
+  /** Open statements auto-marked paid from a matching LOAN_PAYMENTS draft. */
+  statementsReconciled: number;
 }
 
 type PlaidTransactionWithOriginalDescription = {
@@ -102,6 +105,53 @@ async function autoCreatePromoFromTransaction(input: {
     status: "approved",
     linkedPromoId: promo.id,
   });
+}
+
+/**
+ * Reconcile a posted card payment (LOAN_PAYMENTS on a credit account) against
+ * the open statement it settled: mark that statement paid and fire the
+ * unpaid→paid promo decrement edge (same contract as the statements PATCH
+ * route and the Liabilities sync). Without this, a statement the user has
+ * already paid keeps projecting as a pending cash debit on its due date.
+ *
+ * Idempotent: `findMatchingOpenStatement` only returns statements with no
+ * recorded payment, so a re-synced draft finds nothing to settle and the
+ * promo decrement never double-fires. Prefers the card linked to the
+ * payment's own Plaid account before scanning the user's other cards.
+ *
+ * Returns true when it settled a statement.
+ */
+async function reconcileCardPaymentDraft(input: {
+  userId: string;
+  transactionId: string;
+  accountId: string;
+  amountCents: number;
+  date: string;
+  kind: "expense" | "card_payment";
+  primaryCategory: string | null;
+}): Promise<boolean> {
+  if (input.kind !== "card_payment") return false;
+  if ((input.primaryCategory ?? "").toUpperCase() !== "LOAN_PAYMENTS") return false;
+  if (input.amountCents <= 0) return false;
+
+  const linkedCard = await getCreditCardByPlaidAccountId(input.userId, input.accountId);
+  const match = await findMatchingOpenStatement(input.userId, input.amountCents, input.date, {
+    cardId: linkedCard?.id,
+  });
+  if (!match) return false;
+
+  await updateStatement(match.id, {
+    paidAmountCents: input.amountCents,
+    paidDate: input.date,
+  });
+  // findMatchingOpenStatement only returns unpaid statements, so this is always
+  // the unpaid→paid edge — decrement promos exactly once.
+  await applyPromoChunksForPaidStatement(input.userId, match.cardId, match.statementDate);
+  log.info(
+    `plaid-sync: reconciled card_payment ${input.transactionId} ` +
+      `($${(input.amountCents / 100).toFixed(2)}) → statement ${match.id} on card ${match.cardId} (marked paid)`,
+  );
+  return true;
 }
 
 async function autoCreatePromosFromExistingDrafts(userId: string, itemId: string): Promise<void> {
@@ -200,6 +250,7 @@ export async function syncPlaidTransactions(
   let totalRemoved = 0;
   let totalCardsUpdated = 0;
   let totalStatementsCreated = 0;
+  let totalStatementsReconciled = 0;
 
   const plaid = getPlaidClient();
 
@@ -306,19 +357,20 @@ export async function syncPlaidTransactions(
             promoTexts: plaidTransactionPromoTexts(txn),
           });
 
-          // Auto-match LOAN_PAYMENTS on credit accounts to open card statements
+          // Auto-reconcile a posted card payment against the open statement it
+          // settled — marks that statement paid + decrements promos.
           if (
-            kind === "card_payment" &&
-            (txn.personal_finance_category?.primary ?? "").toUpperCase() === "LOAN_PAYMENTS" &&
-            amountCents > 0
+            await reconcileCardPaymentDraft({
+              userId,
+              transactionId: txn.transaction_id,
+              accountId: txn.account_id,
+              amountCents,
+              date: txn.date,
+              kind,
+              primaryCategory: txn.personal_finance_category?.primary ?? null,
+            })
           ) {
-            const match = await findMatchingOpenStatement(userId, amountCents, txn.date);
-            if (match) {
-              log.info(
-                `plaid-sync: auto-matched card_payment ${txn.transaction_id} ($${(amountCents / 100).toFixed(2)}) ` +
-                `to statement ${match.id} on card ${match.cardId}`,
-              );
-            }
+            totalStatementsReconciled++;
           }
 
           added++;
@@ -366,6 +418,23 @@ export async function syncPlaidTransactions(
             kind,
             promoTexts: plaidTransactionPromoTexts(txn),
           });
+          // A payment that first posted as pending can arrive here (modified)
+          // once it clears; reconcile it too. Idempotent — a settled statement
+          // won't re-match.
+          if (
+            !txn.pending &&
+            (await reconcileCardPaymentDraft({
+              userId,
+              transactionId: txn.transaction_id,
+              accountId: txn.account_id,
+              amountCents,
+              date: txn.date,
+              kind,
+              primaryCategory: txn.personal_finance_category?.primary ?? null,
+            }))
+          ) {
+            totalStatementsReconciled++;
+          }
           modified++;
         }
 
@@ -405,6 +474,7 @@ export async function syncPlaidTransactions(
     removed: totalRemoved,
     cardsUpdated: totalCardsUpdated,
     statementsCreated: totalStatementsCreated,
+    statementsReconciled: totalStatementsReconciled,
   };
 }
 
