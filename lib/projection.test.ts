@@ -595,3 +595,61 @@ describe("projection engine", () => {
     });
   });
 });
+
+describe("paid occurrences (bank-draft reconciliation)", () => {
+  it("renders a paid occurrence as a zero-impact marker with the posted amount", () => {
+    const rows = computeProjection({
+      startingBalanceCents: 100_00,
+      startDate: "2026-07-01",
+      endDate: "2026-07-31",
+      paychecks: [],
+      extras: [],
+      bills: [
+        {
+          id: "b1",
+          name: "NV Energy",
+          amountCents: 120_00,
+          intervalMonths: 1,
+          anchorDate: "2026-07-15",
+          paidOccurrences: [{ date: "2026-07-15", paidAmountCents: 118_37 }],
+        },
+      ],
+    });
+    const day = rows.find((r) => r.date === "2026-07-15")!;
+    expect(day.expenseCents).toBe(0);
+    expect(day.events).toEqual([
+      expect.objectContaining({
+        kind: "bill",
+        label: "NV Energy",
+        amountCents: 0,
+        originalAmountCents: 118_37,
+        isPaid: true,
+      }),
+    ]);
+    // The running balance is untouched — the cash already left the linked balance.
+    expect(rows[rows.length - 1]!.balanceCents).toBe(100_00);
+  });
+
+  it("leaves other occurrences of the same bill pending", () => {
+    const rows = computeProjection({
+      startingBalanceCents: 0,
+      startDate: "2026-07-01",
+      endDate: "2026-08-31",
+      paychecks: [],
+      extras: [],
+      bills: [
+        {
+          id: "b1",
+          name: "NV Energy",
+          amountCents: 120_00,
+          intervalMonths: 1,
+          anchorDate: "2026-07-15",
+          paidOccurrences: [{ date: "2026-07-15" }],
+        },
+      ],
+    });
+    const aug = rows.find((r) => r.date === "2026-08-15")!;
+    expect(aug.expenseCents).toBe(120_00);
+    expect(rows[rows.length - 1]!.balanceCents).toBe(-120_00);
+  });
+});

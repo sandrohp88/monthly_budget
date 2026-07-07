@@ -31,6 +31,7 @@ import {
   type ProjectionRow,
 } from "./projection";
 import { projectVariableBillCardCharges } from "./variable-bills";
+import { matchPaidBillOccurrences } from "./bill-reconciliation";
 
 export type PromoPaymentSummary = {
   id: string;
@@ -442,6 +443,43 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   const historicalDrafts = lookback
     ? await listStartingBalanceDraftsInRange(userId, startDate, today)
     : [];
+
+  // Reconcile posted payments against generated bill occurrences so a bill
+  // that was already paid this cycle (e.g. the utility payment visible in
+  // transactions) shows as a PAID marker instead of a pending debit. Linked
+  // mode only: the live balance already reflects the posted payment, so
+  // projecting the occurrence again would double-count; in manual mode the
+  // occurrence must keep debiting the running balance.
+  const RECONCILE_LOOKBACK_DAYS = 45;
+  const paidOccurrencesByBill = new Map<
+    string,
+    Array<{ date: string; paidAmountCents?: number }>
+  >();
+  if (linked) {
+    const recentDrafts = await listStartingBalanceDraftsInRange(
+      userId,
+      addDaysIso(today, -RECONCILE_LOOKBACK_DAYS),
+      today,
+    );
+    const matches = matchPaidBillOccurrences(
+      cashBills.map((b) => ({
+        id: b.id,
+        name: b.name,
+        amountCents: b.amountCents,
+        intervalMonths: b.intervalMonths,
+        anchorDate: b.anchorDate,
+        overridesByDate: new Map(
+          (billOverridesByBill.get(b.id) ?? []).map((o) => [o.date, o.amountCents] as const),
+        ),
+      })),
+      recentDrafts,
+    );
+    for (const m of matches) {
+      const list = paidOccurrencesByBill.get(m.billId) ?? [];
+      list.push({ date: m.occurrenceDate, paidAmountCents: m.paidAmountCents });
+      paidOccurrencesByBill.set(m.billId, list);
+    }
+  }
   // Each draft on date D subtracts amountCents from the running balance
   // (positive = expense, negative = refund flows to income). To make a
   // forward walk land at liveBalance on `today`, seed the start-of-startDate
@@ -502,6 +540,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
       intervalMonths: b.intervalMonths,
       anchorDate: b.anchorDate,
       paymentOverrides: billOverridesByBill.get(b.id) ?? [],
+      paidOccurrences: paidOccurrencesByBill.get(b.id) ?? [],
       settledBeforeDate: settleBefore,
       showSettledBeforeDate: lookback || (linked && b.autoPay),
     })),

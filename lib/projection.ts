@@ -38,6 +38,13 @@ export type Bill = {
   /** Optional planned payment amounts for specific generated due dates. */
   paymentOverrides?: Array<{ date: string; amountCents: number }>;
   /**
+   * Generated due dates already settled by a real posted transaction
+   * (bank-draft reconciliation). These occurrences render as paid markers
+   * with zero cash impact — the money already left the (linked) balance.
+   * `paidAmountCents` is what actually posted, shown as the marker amount.
+   */
+  paidOccurrences?: Array<{ date: string; paidAmountCents?: number }>;
+  /**
    * When the starting balance comes from a live bank account, cash movements
    * before today are already reflected in that balance. Past bill occurrences
    * before this date should not change the running projection again.
@@ -265,6 +272,9 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
     const overrides = new Map(
       (b.paymentOverrides ?? []).map((o) => [o.date, o.amountCents] as const),
     );
+    const paidByDate = new Map(
+      (b.paidOccurrences ?? []).map((p) => [p.date, p.paidAmountCents] as const),
+    );
     const anchorTs = parseIsoDate(b.anchorDate);
     const anchorObj = new Date(anchorTs);
     const anchorY = anchorObj.getUTCFullYear();
@@ -297,6 +307,18 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
         continue;
       }
       const override = overrides.get(date);
+      if (paidByDate.has(date)) {
+        addEvent(date, {
+          kind: "bill",
+          label: b.name,
+          amountCents: 0,
+          sourceId: b.id,
+          sourceType: "bill",
+          originalAmountCents: paidByDate.get(date) ?? override ?? b.amountCents,
+          isPaid: true,
+        });
+        continue;
+      }
       addEvent(date, {
         kind: "bill",
         label: b.name,
