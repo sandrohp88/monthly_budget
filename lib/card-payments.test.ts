@@ -162,6 +162,32 @@ describe("projectCardPayments", () => {
     expect(r.extras.some((e) => e.description === "Card next payment (est)")).toBe(false);
   });
 
+  it("merges multiple sources on the same due date into one payment", () => {
+    // Card balance $500, promo $300 remaining. On the next due date (2026-06-10)
+    // the open-cycle estimate ($500 − $300 promo = $200) and the promo's first
+    // chunk ($50) both land → one merged $250 payment, not two rows.
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card({ currentBalanceCents: 500_00 })],
+      promos: [promo({ remainingAmountCents: 300_00, monthlyPaymentCents: 50_00 })],
+    });
+    // No two card events ever share a due date.
+    const dates = r.extras.map((e) => e.date);
+    expect(new Set(dates).size).toBe(dates.length);
+    const merged = r.extras.find((e) => e.date === "2026-06-10");
+    expect(merged?.amountCents).toBe(250_00);
+    expect(merged?.description).toBe("Card payment (est. spend + promo)");
+    // Summed metadata.
+    expect(merged?.paymentDueCents).toBe(250_00);
+  });
+
+  it("leaves a lone source on a date byte-identical (no merge relabeling)", () => {
+    const r = projectCardPayments({ ...EMPTY, activeCards: [card()], statements: [stmt()] });
+    const cc = r.extras.find((e) => e.date === "2026-06-10");
+    // Single source → original label, not "Card payment (statement)".
+    expect(cc?.description).toBe("Card payment");
+  });
+
   it("orders sources: statements, then open-cycle estimate, then promo", () => {
     // Statement due 2026-06-10; balance high enough that the open cycle nets a
     // positive estimate on a later, statement-free due date; a promo chunk too.
