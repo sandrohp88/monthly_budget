@@ -428,16 +428,23 @@ If anything matches that isn't intentional (`.env.example` placeholders are OK),
 - Full host detail: `Z:\llm-wiki\wiki\entities\proxmox-cluster.md`
 
 ### How to deploy
-The deploy script is `scripts/redeploy.py` (gitignored, contains SSH credentials).
-It uploads changed source files via SFTP to `/opt/budget` and runs
-`docker compose up --build -d app` on the server. **Always `npm run check`
-first** so you don't ship broken code. Verify the target host in the script
-matches LXC 125 before running — it predates the migration off `plex`.
+The deploy script is `scripts/redeploy.py` (gitignored; rewritten 2026-07-07 for
+LXC 125). It packages **committed HEAD** with `git archive`, ships it via
+`scp` to `pve7050` (root, key auth from `~/.ssh/config`), `pct push`es into
+LXC 125, extracts over `/opt/budget`, then builds and recreates the app.
+**Always `npm run check` first** so you don't ship broken code.
 
 ```bash
-# from a Windows shell with python+paramiko available
-python scripts/redeploy.py
+python scripts/redeploy.py   # no paramiko/passwords — uses the pve7050 ssh alias
 ```
+
+Two hard-won gotchas baked into the script:
+- The compose file's `app` service is `image: budget-app:latest` with **no
+  `build:` section**, so `docker compose up --build` is a **silent no-op**.
+  The image must be built explicitly: `docker build -t budget-app:latest .`
+  then `docker compose up -d app`.
+- Never rebuild/restart the `caddy` service in that compose project — it's the
+  shared front door for other `*.bluefalls.home` vhosts.
 
 After deploying, confirm `https://budget.sherrera.dev/api/health` returns 200.
 (A plain `127.0.0.1:3000` check on the host returns the host-guard response —
