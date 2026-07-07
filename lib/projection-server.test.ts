@@ -378,6 +378,55 @@ describe("buildProjection promo statement reconciliation", () => {
   });
 });
 
+describe("buildProjection open-cycle estimate", () => {
+  it("does not layer a live-balance estimate on a due date that already has a recorded statement", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Estimate Card",
+      statementDay: 15,
+      dueDay: 10,
+      currentBalanceCents: 300_00,
+      autoPay: false,
+      isActive: true,
+    });
+    // Recorded statement due 2026-06-10 — the same date the open-cycle estimate
+    // (next close 2026-05-15 → due 2026-06-10) would otherwise land on.
+    await createStatement(card.id, {
+      statementDate: "2026-05-15",
+      dueDate: "2026-06-10",
+      statementBalanceCents: 200_00,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+
+    const row = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-06-10");
+    // Statement is authoritative; no separate "(est)" event double-counting.
+    expect(row?.events.some((e) => e.label === "Estimate Card next payment (est)")).toBe(false);
+    const cardExpense = (row?.events ?? [])
+      .filter((e) => e.sourceId === card.id)
+      .reduce((sum, e) => sum + e.amountCents, 0);
+    expect(cardExpense).toBe(200_00);
+  });
+
+  it("still estimates the open cycle for a card with a balance but no recorded statement", async () => {
+    const user = await makeUser();
+    await createCreditCard(user.id, {
+      name: "No Statement Card",
+      statementDay: 15,
+      dueDay: 10,
+      currentBalanceCents: 300_00,
+      autoPay: false,
+      isActive: true,
+    });
+
+    const est = ((await buildProjection(user.id))?.rows ?? [])
+      .flatMap((r) => r.events)
+      .find((e) => e.label === "No Statement Card next payment (est)");
+    expect(est?.amountCents).toBe(300_00);
+  });
+});
+
 describe("buildProjection linked starting balance", () => {
   async function seedLinkedStartingBalance(userId: string, balanceCents: number) {
     const item = await createPlaidItem(userId, {
