@@ -53,13 +53,10 @@ export function addMonthsClampedIso(iso: string, months: number): string {
   return target.toISOString().slice(0, 10);
 }
 
+import { isPaymentLikeCategory } from "./plaid-helpers";
+
 function hasText(value: string | null | undefined, needle: string): boolean {
   return (value ?? "").toLowerCase().includes(needle);
-}
-
-function isPaymentLikeCategory(category: string | null | undefined): boolean {
-  const value = category?.toLowerCase() ?? "";
-  return value.includes("loan_payments") || value.includes("payment") || value.includes("transfer");
 }
 
 export function isPayPalWalletAccount(input: {
