@@ -74,7 +74,7 @@ afterEach(() => {
 });
 
 describe("syncPlaidTransactions PayPal special financing", () => {
-  it("creates PayPal wallet promos and recomputes remaining balances FIFO from PayPal Credit payments", async () => {
+  it("seeds PayPal wallet promos at full purchase amount and never rewrites them from payments", async () => {
     const user = await makeUser();
     const token = encryptToken("access-token");
     const item = await createPlaidItem(user.id, {
@@ -196,7 +196,10 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     const promos = await listPromosForCard(user.id, card.id, true);
     expect(promos).toHaveLength(2);
     expect(promos.map((promo) => promo.description)).toEqual(["Temu", "Light Elegance"]);
-    expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([112_45, 275_46]);
+    // Seed-only: the LOAN_PAYMENTS rows in the feed must NOT shrink these —
+    // Plaid doesn't expose PayPal's targeted allocation, so amounts only
+    // change via the statement decrement edge or the promo-list reconcile.
+    expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([250_92, 275_46]);
     expect(promos.map((promo) => promo.endDate)).toEqual([
       addMonthsClampedIso(temuDate, 6),
       addMonthsClampedIso(lightEleganceDate, 6),
@@ -302,7 +305,8 @@ describe("syncPlaidTransactions PayPal special financing", () => {
 
     await syncPlaidTransactions(user.id, item.id);
     let promos = await listPromosForCard(user.id, card.id, true);
-    expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([150_00, 200_00]);
+    // Seeded at full purchase amounts — the $50 payment row is ignored.
+    expect(promos.map((promo) => promo.remainingAmountCents)).toEqual([200_00, 200_00]);
 
     const storeOne = promos.find((promo) => promo.description === "Store One")!;
     const storeTwo = promos.find((promo) => promo.description === "Store Two")!;
