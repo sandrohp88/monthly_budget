@@ -241,6 +241,19 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     });
   }
 
+  // Due dates that already have a recorded statement. A recorded statement is
+  // authoritative for the cash due that cycle (§17a), so the live-balance
+  // open-cycle estimate and promo chunks both defer to it on that date.
+  const recordedDueDatesByCard = new Map<string, Set<string>>();
+  for (const s of statements) {
+    let set = recordedDueDatesByCard.get(s.cardId);
+    if (!set) {
+      set = new Set();
+      recordedDueDatesByCard.set(s.cardId, set);
+    }
+    set.add(s.dueDate);
+  }
+
   const openCycleExtras: ProjectionInput["extras"] = [];
   const promoDriftByCard: Record<string, number> = {};
   for (const card of activeCards) {
@@ -264,6 +277,12 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     if (openCycleCents <= 0) continue;
     const nextStatement = nextStatementDateOnOrAfter(today, card);
     const dueDate = dueDateFromStatement(nextStatement, card.dueDay);
+    // Prefer the recorded statement: if the cycle this estimate lands on
+    // already has a recorded statement, that statement's cash is authoritative
+    // for the date (it becomes a ccExtra). Layering the live-balance estimate
+    // on top would double-count. Only estimate cycles with no recorded
+    // statement — which also shrinks where the promo drift cap can fire.
+    if (recordedDueDatesByCard.get(card.id)?.has(dueDate)) continue;
     const override = cardOverridesByCard.get(card.id)?.get(dueDate);
     appliedCardOverrideKeys.add(overrideKey(card.id, dueDate));
     const amountCents = override?.amountCents ?? openCycleCents;
@@ -286,16 +305,8 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   // cycle's due date through its endDate. A recorded statement suppresses promo
   // chunks for that due date even when the statement due amount is $0: issuer
   // statements are authoritative for due balances, while optional paydowns
-  // should be modeled as explicit planned card payments.
-  const recordedDueDatesByCard = new Map<string, Set<string>>();
-  for (const s of statements) {
-    let set = recordedDueDatesByCard.get(s.cardId);
-    if (!set) {
-      set = new Set();
-      recordedDueDatesByCard.set(s.cardId, set);
-    }
-    set.add(s.dueDate);
-  }
+  // should be modeled as explicit planned card payments. Uses the
+  // recordedDueDatesByCard set built above (shared with the open-cycle skip).
   const promoChunksByCardDate = new Map<
     string,
     {
