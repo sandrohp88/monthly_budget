@@ -71,6 +71,25 @@ describe("matchPaidBillOccurrences", () => {
     ]);
   });
 
+  it("keeps two same-day bills (two houses) separate by best amount fit", () => {
+    // Two NV Energy bills, one per house, both due the 1st, estimates $130/$70.
+    // The utility posts two indistinguishable-by-name pulls ($120.61/$61.31);
+    // each must settle its own house by amount, not sum onto one.
+    const houseA = { id: "nv-a", name: "NV Energy", amountCents: 130_00, intervalMonths: 1, anchorDate: "2026-07-01" };
+    const houseB = { id: "nv-b", name: "NV Energy", amountCents: 70_00, intervalMonths: 1, anchorDate: "2026-07-01" };
+    const matches = matchPaidBillOccurrences(
+      [houseA, houseB],
+      [
+        draft({ id: "big", date: "2026-07-02", amountCents: 120_61, description: "NV Energy" }),
+        draft({ id: "small", date: "2026-07-02", amountCents: 61_31, description: "NV Energy" }),
+      ],
+    );
+    expect(matches).toEqual([
+      expect.objectContaining({ billId: "nv-a", draftIds: ["big"], paidAmountCents: 120_61 }),
+      expect.objectContaining({ billId: "nv-b", draftIds: ["small"], paidAmountCents: 61_31 }),
+    ]);
+  });
+
   it("sums several partial pulls into one settlement (real NV Energy shape)", () => {
     // Prod shape: bill planned $300 due the 1st; the utility posts two ACH
     // pulls (North + South) of ~$120 + ~$61 on the 2nd. Individually each is
