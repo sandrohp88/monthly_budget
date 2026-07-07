@@ -16,6 +16,7 @@ import {
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { cn } from "@/lib/cn";
+import { balanceToneClass, balanceSurfaceClass } from "@/lib/balance-tone";
 import { BillForm, type BillFormValues } from "../bills/bill-form";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
 
@@ -240,8 +241,15 @@ export function CalendarClient({
                     >
                       {Number(iso.slice(8, 10))}
                     </span>
-                    {row && events.length > 0 ? (
-                      <span className="tabular text-[10px] text-[var(--text-3)]">
+                    {row ? (
+                      <span
+                        className={cn(
+                          "tabular rounded-[2px] px-1 text-[10px] font-semibold",
+                          balanceToneClass(row.balanceCents),
+                          balanceSurfaceClass(row.balanceCents),
+                        )}
+                        title="Balance left after this day"
+                      >
                         <Money cents={row.balanceCents} />
                       </span>
                     ) : null}
@@ -287,6 +295,19 @@ export function CalendarClient({
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.card)}>CARD PAYMENT</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.settled)}>PAID / SETTLED</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.posted)}>POSTED (HISTORY)</span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-[var(--text-3)]">
+        <span className="text-[var(--text-2)]">BALANCE LEFT AFTER DAY:</span>
+        <span className={cn("tabular rounded-[2px] px-1.5 py-0.5", balanceToneClass(1_000_00), balanceSurfaceClass(1_000_00))}>
+          COMFORTABLE
+        </span>
+        <span className={cn("tabular rounded-[2px] px-1.5 py-0.5", balanceToneClass(100_00), balanceSurfaceClass(100_00))}>
+          LOW (&lt; $500)
+        </span>
+        <span className={cn("tabular rounded-[2px] px-1.5 py-0.5", balanceToneClass(-1), balanceSurfaceClass(-1))}>
+          NEGATIVE
+        </span>
       </div>
 
       {/* day detail */}
@@ -339,12 +360,7 @@ export function CalendarClient({
                 {selectedRow ? (
                   <div className="flex items-center justify-between border-t border-[var(--border-raw)] pt-2 text-[12px] text-[var(--text-2)]">
                     <span>END-OF-DAY BALANCE</span>
-                    <span
-                      className={cn(
-                        "tabular font-semibold",
-                        selectedRow.balanceCents >= 0 ? "text-[var(--mint)]" : "text-[var(--red)]",
-                      )}
-                    >
+                    <span className={cn("tabular font-semibold", balanceToneClass(selectedRow.balanceCents))}>
                       <Money cents={selectedRow.balanceCents} />
                     </span>
                   </div>
