@@ -382,15 +382,73 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     }
   }
 
-  return {
-    extras: [
-      ...ccExtras,
-      ...openCycleExtras,
-      ...promoExtras,
-      ...variableBillExtras,
-      ...plannedCardExtras,
-    ],
-    promoDriftByCard,
-    variableBillCategoriesByKey,
-  };
+  // Merge everything that lands on the same (card, due date) into a single
+  // payment. Several sources can target one date — a statement plus variable
+  // spend, or an open-cycle estimate plus a promo chunk. One combined row is
+  // what actually leaves checking that day and reads far cleaner than three
+  // separate "<Card> …" rows stacked on the same date. A lone source on a date
+  // is emitted UNCHANGED (byte-identical), so recorded-statement behavior and
+  // the golden projection tests are unaffected.
+  const kindByEvent = new Map<OneTimeExpense, string>();
+  for (const e of ccExtras) kindByEvent.set(e, "statement");
+  for (const e of openCycleExtras) kindByEvent.set(e, "est. spend");
+  for (const e of promoExtras) kindByEvent.set(e, "promo");
+  for (const e of variableBillExtras) kindByEvent.set(e, "variable");
+  for (const e of plannedCardExtras) kindByEvent.set(e, "planned");
+
+  const extras = mergeByDueDate(
+    [...ccExtras, ...openCycleExtras, ...promoExtras, ...variableBillExtras, ...plannedCardExtras],
+    kindByEvent,
+    cardById,
+  );
+
+  return { extras, promoDriftByCard, variableBillCategoriesByKey };
+}
+
+/**
+ * Collapse card-payment events sharing a (cardId, date) into one row: amounts,
+ * originals, and due totals sum; the shown card balance is the max; the label
+ * lists the contributing kinds (e.g. "Card payment (statement + variable)").
+ * Groups of one pass through untouched so single-source days are unchanged.
+ * First-occurrence order is preserved.
+ */
+function mergeByDueDate(
+  events: OneTimeExpense[],
+  kindByEvent: ReadonlyMap<OneTimeExpense, string>,
+  cardById: ReadonlyMap<string, CreditCardRow>,
+): OneTimeExpense[] {
+  const groups = new Map<string, OneTimeExpense[]>();
+  const order: string[] = [];
+  for (const e of events) {
+    const key = `${e.sourceId}:${e.date}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = [];
+      groups.set(key, group);
+      order.push(key);
+    }
+    group.push(e);
+  }
+
+  const out: OneTimeExpense[] = [];
+  for (const key of order) {
+    const group = groups.get(key)!;
+    const first = group[0]!;
+    if (group.length === 1) {
+      out.push(first);
+      continue;
+    }
+    const cardName = (first.sourceId ? cardById.get(first.sourceId)?.name : undefined) ?? "Card";
+    const kinds = [...new Set(group.map((e) => kindByEvent.get(e) ?? "payment"))];
+    out.push({
+      ...first,
+      description: `${cardName} payment (${kinds.join(" + ")})`,
+      amountCents: group.reduce((s, e) => s + e.amountCents, 0),
+      originalAmountCents: group.reduce((s, e) => s + (e.originalAmountCents ?? 0), 0),
+      paymentDueCents: group.reduce((s, e) => s + (e.paymentDueCents ?? 0), 0),
+      paymentBalanceCents: Math.max(...group.map((e) => e.paymentBalanceCents ?? 0)),
+      relatedDate: group.map((e) => e.relatedDate).find(Boolean),
+    });
+  }
+  return out;
 }
