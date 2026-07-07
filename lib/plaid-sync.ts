@@ -3,6 +3,7 @@ import { CountryCode, Products } from "plaid";
 import { getPlaidClient } from "./plaid-client";
 import { decryptToken } from "./plaid-crypto";
 import {
+  applyPromoChunksForPaidStatement,
   archiveExpiredPromos,
   getSettings,
   listCreditCards,
@@ -545,7 +546,7 @@ export async function syncCreditCardLiabilitiesForItem(
           minimumPaymentCents,
         });
 
-        const statementChanged = await upsertCreditCardStatementByDate(card.id, {
+        const upsertResult = await upsertCreditCardStatementByDate(card.id, {
           statementDate: stmtDate,
           dueDate: resolvedDue,
           statementBalanceCents: stmtBalCents,
@@ -554,7 +555,13 @@ export async function syncCreditCardLiabilitiesForItem(
           paidDate: looksPaid ? lastPayDate : null,
           liveBalanceCents: liveBalanceByAccountId.get(plaidAccountId) ?? card.currentBalanceCents,
         });
-        if (statementChanged) statementsCreated++;
+        if (upsertResult.changed) statementsCreated++;
+        // Same unpaid→paid edge contract as the statements PATCH route
+        // (§17a): a statement Plaid observed transitioning to paid carries
+        // each active promo's chunk for that cycle.
+        if (upsertResult.becamePaid) {
+          await applyPromoChunksForPaidStatement(userId, card.id, stmtDate);
+        }
       }
     }
   } catch (err) {

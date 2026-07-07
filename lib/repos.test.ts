@@ -50,6 +50,9 @@ import {
   updateCardCycleDays,
   upsertCreditCardStatementByDate,
   listStatements,
+  applyPromoChunksForPaidStatement,
+  replacePromoPayments,
+  getPromo,
 } from "./repos";
 
 // ── per-test SQLite fixture ────────────────────────────────────────────────
@@ -959,5 +962,116 @@ describe("repos / listPlaidAccountsByItem", () => {
     expect(aList.map((a) => a.id)).toEqual(["a1"]);
     const bList = await listPlaidAccountsByItem(itemB.id);
     expect(bList.map((a) => a.id)).toEqual(["b1"]);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Statement paid transitions + promo decrement (§17a edge contract)
+// ────────────────────────────────────────────────────────────────────────────
+describe("repos / statement paid transitions + promo decrement", () => {
+  it("upsert reports becamePaid only on an existing unpaid→paid update", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Card",
+      statementDay: 10,
+      dueDay: 5,
+      autoPay: false,
+      isActive: true,
+    });
+
+    // Insert already-paid: history, not an observed transition.
+    const inserted = await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-01-10",
+      dueDate: "2026-02-05",
+      statementBalanceCents: 100_00,
+      paidAmountCents: 100_00,
+      paidDate: "2026-02-01",
+    });
+    expect(inserted).toEqual({ changed: true, becamePaid: false });
+
+    // Insert unpaid, then update to paid: the edge fires exactly once.
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-02-10",
+      dueDate: "2026-03-05",
+      statementBalanceCents: 200_00,
+    });
+    const paidNow = await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-02-10",
+      dueDate: "2026-03-05",
+      statementBalanceCents: 200_00,
+      paidAmountCents: 200_00,
+      paidDate: "2026-03-01",
+    });
+    expect(paidNow).toEqual({ changed: true, becamePaid: true });
+
+    const resave = await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-02-10",
+      dueDate: "2026-03-05",
+      statementBalanceCents: 200_00,
+      paidAmountCents: 200_00,
+      paidDate: "2026-03-01",
+    });
+    expect(resave).toEqual({ changed: true, becamePaid: false });
+  });
+
+  it("promo decrement follows the manual payment schedule when one exists", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Card",
+      statementDay: 10,
+      dueDay: 5,
+      autoPay: false,
+      isActive: true,
+    });
+    const promo = await createPromo(user.id, card.id, {
+      description: "Sofa",
+      originalAmountCents: 600_00,
+      remainingAmountCents: 600_00,
+      startDate: "2026-01-01",
+      endDate: "2026-12-31",
+      monthlyPaymentCents: null,
+      notes: null,
+      isActive: true,
+    });
+    await replacePromoPayments(user.id, promo.id, [
+      { dueDate: "2026-03-05", amountCents: 250_00 },
+      { dueDate: "2026-04-05", amountCents: 350_00 },
+    ]);
+
+    // Statement closing 2026-02-10 → next scheduled payment (03-05) is the chunk.
+    await applyPromoChunksForPaidStatement(user.id, card.id, "2026-02-10");
+    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(350_00);
+
+    // A statement past the schedule's last payment decrements nothing — the
+    // user's explicit plan has no cash in that cycle.
+    await replacePromoPayments(user.id, promo.id, [
+      { dueDate: "2026-03-05", amountCents: 250_00 },
+    ]);
+    await applyPromoChunksForPaidStatement(user.id, card.id, "2026-05-10");
+    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(350_00);
+  });
+
+  it("promo decrement falls back to auto-spread math without a schedule", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Card",
+      statementDay: 10,
+      dueDay: 5,
+      autoPay: false,
+      isActive: true,
+    });
+    const promo = await createPromo(user.id, card.id, {
+      description: "TV",
+      originalAmountCents: 600_00,
+      remainingAmountCents: 600_00,
+      startDate: "2026-01-01",
+      endDate: "2026-12-31",
+      monthlyPaymentCents: 100_00,
+      notes: null,
+      isActive: true,
+    });
+
+    await applyPromoChunksForPaidStatement(user.id, card.id, "2026-02-10");
+    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(500_00);
   });
 });

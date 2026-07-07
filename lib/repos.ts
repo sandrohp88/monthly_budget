@@ -1479,7 +1479,18 @@ export async function applyPromoChunksForPaidStatement(
     if (promo.remainingAmountCents <= 0) continue;
     // Skip promos whose window doesn't include this statement.
     if (statementDate < promo.startDate) continue;
-    const chunk = promoMonthlyChunkAt(promo, statementDate);
+    // Manual schedule wins: the cash assumed inside this statement is the
+    // next scheduled payment on/after the close date. An exhausted schedule
+    // means the user's plan has nothing in this cycle — don't decrement by
+    // auto-spread math the user explicitly opted out of.
+    const scheduled = await listPromoPayments(userId, promo.id);
+    const chunk =
+      scheduled.length > 0
+        ? Math.min(
+            scheduled.find((p) => p.dueDate >= statementDate)?.amountCents ?? 0,
+            promo.remainingAmountCents,
+          )
+        : promoMonthlyChunkAt(promo, statementDate);
     if (chunk <= 0) continue;
     const newRemaining = Math.max(0, promo.remainingAmountCents - chunk);
     const patch: Partial<CreditCardPromoRow> = { remainingAmountCents: newRemaining };
@@ -1719,12 +1730,29 @@ export async function updateCardCycleDays(
     .run();
 }
 
+export type StatementUpsertResult = {
+  /** A row was inserted or updated (drives sync progress counters). */
+  changed: boolean;
+  /**
+   * An EXISTING statement transitioned unpaid → paid with a positive amount.
+   * This is the edge the promo auto-decrement fires on (§17a in CLAUDE.md).
+   * Deliberately false for insert-already-paid: a statement first imported in
+   * its paid state is history, not an observed transition — user-entered promo
+   * remainings already reflect it, and decrementing again would double-count.
+   */
+  becamePaid: boolean;
+};
+
 /**
  * Upsert a statement keyed by (cardId, statementDate), falling back to
  * (cardId, dueDate) when an issuer shifts the reported statement date for the
  * same payable cycle. Uses the unique index added in 0005 so exact re-syncs
  * are idempotent. Will not overwrite a paid record with empty paid fields —
  * manual reconciliation wins over Plaid's read-only snapshot.
+ *
+ * The caller owns the promo decrement: when `becamePaid` is true, route the
+ * statement through `applyPromoChunksForPaidStatement` (same contract as the
+ * statements PATCH route — the edge guard stays at the caller by design).
  */
 export async function upsertCreditCardStatementByDate(
   cardId: string,
@@ -1737,7 +1765,7 @@ export async function upsertCreditCardStatementByDate(
     paidDate?: string | null;
     liveBalanceCents?: number | null;
   },
-): Promise<boolean> {
+): Promise<StatementUpsertResult> {
   const db = getDb();
   let existing = await db
     .select()
@@ -1787,7 +1815,7 @@ export async function upsertCreditCardStatementByDate(
       log.warn(
         `plaid-liabilities: ignored $0 statement for card ${cardId} on ${data.statementDate}; prior unpaid carryover ${priorUnpaidCents} cents with live balance ${data.liveBalanceCents} cents`,
       );
-      return false;
+      return { changed: false, becamePaid: false };
     }
   }
 
@@ -1805,11 +1833,12 @@ export async function upsertCreditCardStatementByDate(
         paidDate: data.paidDate ?? null,
       })
       .run();
-    return true;
+    return { changed: true, becamePaid: false };
   }
 
   // Don't clobber a manual paid record with Plaid-only data.
   const keepPaid = existing.paidAmountCents != null && (data.paidAmountCents ?? null) == null;
+  const becamePaid = existing.paidAmountCents == null && (data.paidAmountCents ?? 0) > 0;
   await db
     .update(creditCardStatements)
     .set({
@@ -1823,7 +1852,7 @@ export async function upsertCreditCardStatementByDate(
     })
     .where(eq(creditCardStatements.id, existing.id))
     .run();
-  return true;
+  return { changed: true, becamePaid };
 }
 
 
