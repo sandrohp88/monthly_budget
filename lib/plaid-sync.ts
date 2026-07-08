@@ -22,7 +22,7 @@ import {
   updateStatement,
   findMatchingOpenStatement,
   getStatementSettledByDraft,
-  setPlaidDraftKind,
+  updatePlaidDraft,
   deletePlaidDraft,
 } from "./repos";
 import { todayIso } from "./dates";
@@ -154,9 +154,14 @@ async function reconcileCardPaymentDraft(input: {
   // the same payment-like shape but money moving the other way.
   if (looksLikeReversal(input.description, input.originalDescription)) return false;
 
-  // Only reconcile from the credit account linked to a card.
+  // Only reconcile from the credit account linked to an ACTIVE card.
+  // findMatchingOpenStatement only ever scans active cards, so an archived
+  // (but still linked) card can never match here regardless — this check
+  // just makes that explicit instead of relying on an emergent empty-array
+  // result, and keeps this function's participation decision in sync with
+  // reconcileExistingCardPaymentDrafts's own active-card gate.
   const linkedCard = await getCreditCardByPlaidAccountId(input.userId, input.accountId);
-  if (!linkedCard) return false;
+  if (!linkedCard || !linkedCard.isActive) return false;
 
   const alreadySettled = await getStatementSettledByDraft(linkedCard.id, input.transactionId);
   if (alreadySettled) return false;
@@ -186,9 +191,19 @@ async function reconcileCardPaymentDraft(input: {
  * credit accounts. Payments synced before card-payment detection existed were
  * stored as `expense` and never reconciled; a fresh cursor sync won't revisit
  * them. This re-evaluates each stored draft (using its persisted primary
- * category + description), fixes a mislabeled `kind`, and reconciles it. Safe
- * to run every sync — reconciliation is idempotent (a settled statement won't
- * re-match). Returns the number of statements newly settled.
+ * category + description) against the classifier's CURRENT verdict and
+ * writes it in both directions — not just forward to card_payment, but back
+ * to expense too, so a fixed/tightened rule (see plaid-transaction-kind.ts)
+ * can correct a previously-mislabeled draft instead of the flip becoming a
+ * one-way ratchet. Safe to run every sync — reconciliation is idempotent (a
+ * settled statement won't re-match). Returns the number of statements newly
+ * settled.
+ *
+ * Linked accounts are restricted to ACTIVE cards — this must agree with
+ * `reconcileCardPaymentDraft`'s own active check, or an archived-but-linked
+ * card's payment gets classified card_payment (removed from spend) yet can
+ * never actually reconcile (findMatchingOpenStatement only scans active
+ * cards), silently.
  */
 async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string): Promise<number> {
   const accounts = await listPlaidAccountsByItem(itemId);
@@ -198,7 +213,7 @@ async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string
   const linkedAccountIds = new Set<string>();
   for (const id of creditAccountIds) {
     const card = await getCreditCardByPlaidAccountId(userId, id);
-    if (card) linkedAccountIds.add(id);
+    if (card && card.isActive) linkedAccountIds.add(id);
   }
   if (linkedAccountIds.size === 0) return 0;
 
@@ -210,14 +225,25 @@ async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string
 
   let reconciled = 0;
   for (const draft of drafts) {
-    // Stored drafts keep only the PRIMARY category — looksLikeCardPayment works
-    // off that + the description.
-    if (!looksLikeCardPayment({ primaryCategory: draft.plaidCategory, description: draft.description })) {
-      continue;
+    // User-actioned drafts (turned into a real one-time expense or promo)
+    // already represent this money elsewhere — flipping kind out from under
+    // them would double-represent it.
+    if (draft.linkedExpenseId || draft.linkedPromoId) continue;
+
+    // Stored drafts keep only the PRIMARY category — looksLikeCardPayment
+    // works off that + the description.
+    const verdict: "expense" | "card_payment" = looksLikeCardPayment({
+      primaryCategory: draft.plaidCategory,
+      description: draft.description,
+      amountCents: draft.amountCents,
+    })
+      ? "card_payment"
+      : "expense";
+    if (draft.kind !== verdict) {
+      await updatePlaidDraft(userId, draft.id, { kind: verdict });
     }
-    if (draft.kind !== "card_payment") {
-      await setPlaidDraftKind(userId, draft.id, "card_payment");
-    }
+    if (verdict !== "card_payment") continue;
+
     const settled = await reconcileCardPaymentDraft({
       userId,
       transactionId: draft.id,
@@ -366,7 +392,10 @@ export async function syncPlaidTransactions(
         const accounts = await listPlaidAccountsByItem(item.id);
         const accountIds = new Set(accounts.map((a) => a.id));
         const accountById = new Map(accounts.map((a) => [a.id, a] as const));
-        const linkedCards = await listCreditCards(userId, true);
+        // Active cards only — an archived card's payments must not be treated
+        // as "linked" here, or classification and reconciliation disagree
+        // (see reconcileExistingCardPaymentDrafts's doc comment).
+        const linkedCards = await listCreditCards(userId, false);
         const linkedCardAccountIds = new Set(
           linkedCards
             .map((c) => c.plaidAccountId)

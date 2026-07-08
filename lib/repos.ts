@@ -2025,30 +2025,18 @@ export async function updatePlaidDraftStatus(
   return getPlaidDraft(userId, id);
 }
 
-/**
- * Correct a stored draft's `kind`. Used by the sync backfill to reclassify a
- * card payment that an earlier sync mislabeled `expense` (a credit-side payment
- * posts as a negative amount, which the old classifier rejected).
- */
-export async function setPlaidDraftKind(
-  userId: string,
-  id: string,
-  kind: "expense" | "card_payment",
-): Promise<void> {
-  const db = getDb();
-  await db
-    .update(plaidTransactionDrafts)
-    .set({ kind })
-    .where(and(eq(plaidTransactionDrafts.userId, userId), eq(plaidTransactionDrafts.id, id)))
-    .run();
-}
-
 export async function updatePlaidDraft(
   userId: string,
   id: string,
   patch: Partial<Pick<
     PlaidTransactionDraftRow,
-    "date" | "description" | "amountCents" | "plaidCategory" | "merchantName" | "originalDescription"
+    | "date"
+    | "description"
+    | "amountCents"
+    | "plaidCategory"
+    | "merchantName"
+    | "originalDescription"
+    | "kind"
   >>,
 ): Promise<PlaidTransactionDraftRow | undefined> {
   const db = getDb();
