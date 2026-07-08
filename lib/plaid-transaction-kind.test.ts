@@ -109,4 +109,54 @@ describe("classifyDraftKind", () => {
       }),
     ).toBe("expense");
   });
+
+  it("classifies a POSITIVE LOAN_DISBURSEMENTS autopay as card_payment by category alone", () => {
+    // Isolates the non-merchant-category branch from the sign fallback: a
+    // positive amount here would fail the "negative money in" check on its
+    // own, so this only passes if the LOAN_DISBURSEMENTS category check is
+    // actually doing something (the old test fixture for this rule also
+    // matched the generic keyword fallback, so the category branch itself
+    // was never exercised in isolation).
+    expect(
+      classifyDraftKind({
+        amountCents: 50000,
+        accountType: "credit",
+        accountIsLinkedToCard: true,
+        primaryCategory: "LOAN_DISBURSEMENTS",
+        detailedCategory: null,
+        description: "Autopay Payment",
+      }),
+    ).toBe("card_payment");
+  });
+
+  it("does not classify a GEICO *AUTOPAY insurance purchase as card_payment", () => {
+    // A positive merchant purchase that happens to contain "autopay" in its
+    // description must not be swallowed by the description-keyword fallback.
+    expect(
+      classifyDraftKind({
+        amountCents: 8500,
+        accountType: "credit",
+        accountIsLinkedToCard: true,
+        primaryCategory: "INSURANCE",
+        detailedCategory: "INSURANCE_AUTO",
+        description: "GEICO *AUTOPAY",
+      }),
+    ).toBe("expense");
+  });
+
+  it("does not classify a bare 'payment' substring on a non-payment category as card_payment", () => {
+    // "Balance Transfer Payment to Chase" contains "payment" but none of the
+    // specific keywords, and TRANSFER_OUT isn't a payment-posting category —
+    // this must not match via bare substring.
+    expect(
+      classifyDraftKind({
+        amountCents: 20000,
+        accountType: "credit",
+        accountIsLinkedToCard: true,
+        primaryCategory: "TRANSFER_OUT",
+        detailedCategory: null,
+        description: "Balance Transfer Payment to Chase",
+      }),
+    ).toBe("expense");
+  });
 });

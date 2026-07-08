@@ -668,6 +668,247 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
     // But the draft is still reclassified so it stops looking like spend.
     expect((await getPlaidDraft(user.id, "pay_partial"))!.kind).toBe("card_payment");
   });
+
+  it("does not settle a near-full partial payment ($460 against a $505.10 statement)", async () => {
+    // Regression for a too-loose match tolerance: 10%-of-payment tolerance
+    // used to let a $460 payment "settle" a $505.10 statement, silently
+    // dropping the $45.10 residual from the projection.
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_chase",
+      institutionName: "Chase",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_near_full",
+      itemId: item.id,
+      userId: user.id,
+      name: "Sapphire",
+      mask: "1111",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 505_10,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Sapphire",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: false,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_near_full");
+    const today = todayIso();
+    await createStatement(card.id, {
+      statementDate: addDaysIso(today, -26),
+      dueDate: today,
+      statementBalanceCents: 505_10,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [
+          {
+            transaction_id: "pay_near_full",
+            account_id: "acct_near_full",
+            pending: false,
+            date: today,
+            name: "Autopay Payment",
+            original_description: "AUTOPAY PAYMENT",
+            amount: 460.0,
+            personal_finance_category: { primary: "LOAN_PAYMENTS" },
+            merchant_name: null,
+          },
+        ],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.statementsReconciled).toBe(0);
+    expect((await listStatements(card.id))[0]!.paidAmountCents).toBeNull();
+  });
+
+  it("does not settle a statement from a payment reversal/return", async () => {
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_chase",
+      institutionName: "Chase",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_reversal",
+      itemId: item.id,
+      userId: user.id,
+      name: "Sapphire",
+      mask: "1111",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 300_00,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Sapphire",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: false,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_reversal");
+    const today = todayIso();
+    await createStatement(card.id, {
+      statementDate: addDaysIso(today, -26),
+      dueDate: today,
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [
+          {
+            transaction_id: "pay_reversed",
+            account_id: "acct_reversal",
+            pending: false,
+            date: today,
+            name: "Payment Returned",
+            original_description: "PAYMENT RETURNED - INSUFFICIENT FUNDS",
+            amount: -300.0,
+            personal_finance_category: { primary: "LOAN_PAYMENTS" },
+            merchant_name: null,
+          },
+        ],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.statementsReconciled).toBe(0);
+    expect((await listStatements(card.id))[0]!.paidAmountCents).toBeNull();
+  });
+
+  it("cannot double-settle two statements from one payment within the same sync", async () => {
+    // Both statements have the same balance and both fall within the match
+    // window, so before the settled_by_draft_id gate this single payment
+    // could settle the inline reconcile's statement AND then get replayed
+    // by the same sync's backfill against the OTHER open statement.
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_chase",
+      institutionName: "Chase",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_double",
+      itemId: item.id,
+      userId: user.id,
+      name: "Sapphire",
+      mask: "1111",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 300_00,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Sapphire",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: true,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_double");
+    const today = todayIso();
+    const statementOlder = await createStatement(card.id, {
+      statementDate: addDaysIso(today, -56),
+      dueDate: addDaysIso(today, -30),
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    const statementNewer = await createStatement(card.id, {
+      statementDate: addDaysIso(today, -26),
+      dueDate: today,
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [
+          {
+            transaction_id: "pay_double",
+            account_id: "acct_double",
+            pending: false,
+            date: today,
+            name: "Autopay Payment Thank You",
+            original_description: "AUTOPAY PAYMENT",
+            amount: 300.0,
+            personal_finance_category: {
+              primary: "LOAN_PAYMENTS",
+              detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+            },
+            merchant_name: null,
+          },
+        ],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    // Exactly one statement settles — never both from a single payment.
+    expect(result.statementsReconciled).toBe(1);
+
+    const stmts = await listStatements(card.id);
+    const older = stmts.find((s) => s.id === statementOlder.id)!;
+    const newer = stmts.find((s) => s.id === statementNewer.id)!;
+    const paidCount = [older, newer].filter((s) => s.paidAmountCents != null).length;
+    expect(paidCount).toBe(1);
+  });
 });
 
 async function makeUser() {

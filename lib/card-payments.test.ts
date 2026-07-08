@@ -39,6 +39,7 @@ function stmt(over: Partial<StatementWithCardName> = {}): StatementWithCardName 
     paidAmountCents: null,
     paidDate: null,
     notes: null,
+    settledByDraftId: null,
     createdAt: 0,
     ...over,
   };

@@ -106,7 +106,7 @@ export function TransactionsClient({
     const q = query.trim().toLowerCase();
     return transactions.filter((txn) => {
       if (filter === "debits" && (txn.amountCents <= 0 || txn.kind === "card_payment")) return false;
-      if (filter === "credits" && txn.amountCents >= 0) return false;
+      if (filter === "credits" && (txn.amountCents >= 0 || txn.kind === "card_payment")) return false;
       if (filter === "card_payments" && txn.kind !== "card_payment") return false;
       if (filter === "promos" && !isPromoCandidate(txn) && !txn.linkedPromoId) return false;
       if (!q) return true;
@@ -128,7 +128,7 @@ export function TransactionsClient({
   // → balance reduction on the linked card). They'd double-count if added to
   // the DEBITS aggregate, so we surface them separately.
   const debits = transactions.filter((txn) => txn.amountCents > 0 && txn.kind !== "card_payment");
-  const credits = transactions.filter((txn) => txn.amountCents < 0);
+  const credits = transactions.filter((txn) => txn.amountCents < 0 && txn.kind !== "card_payment");
   const cardPayments = transactions.filter((txn) => txn.kind === "card_payment");
   const promoCandidates = transactions.filter(isPromoCandidate);
 
@@ -150,7 +150,7 @@ export function TransactionsClient({
         <Tile label="IMPORTED" value={transactions.length} delta="approved automatically" />
         <Tile label="DEBITS" value={debits.length} delta={<Money cents={debits.reduce((s, t) => s + t.amountCents, 0)} />} />
         <Tile label="CREDITS" value={credits.length} delta={<Money cents={Math.abs(credits.reduce((s, t) => s + t.amountCents, 0))} />} />
-        <Tile label="CARD PAYMENTS" value={cardPayments.length} delta={<Money cents={cardPayments.reduce((s, t) => s + t.amountCents, 0)} />} />
+        <Tile label="CARD PAYMENTS" value={cardPayments.length} delta={<Money cents={cardPayments.reduce((s, t) => s + Math.abs(t.amountCents), 0)} />} />
         <Tile label="PROMO CANDIDATES" value={promoCandidates.length} variant={promoCandidates.length ? "amber" : "default"} delta="API evidence or PayPal > $150" />
       </TileGrid>
 

@@ -21,12 +21,16 @@ import {
   upsertCreditCardStatementByDate,
   updateStatement,
   findMatchingOpenStatement,
-  setPlaidDraftKind,
+  getStatementSettledByDraft,
+  updatePlaidDraft,
+  deletePlaidDraft,
+  listStatements,
 } from "./repos";
+import type { PlaidTransactionDraftRow } from "./db/schema";
 import { todayIso } from "./dates";
-import { dueDateFromStatement } from "./credit-cards";
+import { dueDateFromStatement, isStatementOpen } from "./credit-cards";
 import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
-import { classifyDraftKind, looksLikeCardPayment } from "./plaid-transaction-kind";
+import { classifyDraftKind, looksLikeCardPayment, looksLikeReversal } from "./plaid-transaction-kind";
 import {
   isPayPalCreditAccount,
   isPayPalWalletAccount,
@@ -120,8 +124,14 @@ async function autoCreatePromoFromTransaction(input: {
  * MAGNITUDE. Only payments on a credit account linked to one of the user's
  * cards reconcile (the card's own side of the payment); the depository-side
  * transfer is the same money and is left alone. `findMatchingOpenStatement`
- * still requires the magnitude to be within ~10% of the statement balance, so
- * a partial payment on a revolving card does NOT clear the statement.
+ * requires the magnitude to be within ~$1 of the statement balance, so a
+ * partial payment on a revolving card does NOT clear the statement.
+ *
+ * A draft settles at most one statement, EVER — `getStatementSettledByDraft`
+ * gates on that before matching, so a payment already consumed by one cycle
+ * can't later "settle" another (a new statement appearing on a later sync
+ * that happens to fall in the same amount/date window, or this same sync's
+ * post-loop backfill re-scanning the draft it just reconciled inline).
  *
  * Idempotent: `findMatchingOpenStatement` only returns statements with no
  * recorded payment, so a re-synced (or backfilled) draft finds nothing to
@@ -136,14 +146,28 @@ async function reconcileCardPaymentDraft(input: {
   amountCents: number;
   date: string;
   kind: "expense" | "card_payment";
+  description?: string | null;
+  originalDescription?: string | null;
 }): Promise<boolean> {
   if (input.kind !== "card_payment") return false;
   const paymentCents = Math.abs(input.amountCents);
   if (paymentCents <= 0) return false;
+  // A reversal/return of a prior payment must never settle a statement — it's
+  // the same payment-like shape but money moving the other way.
+  if (looksLikeReversal(input.description, input.originalDescription)) return false;
 
-  // Only reconcile from the credit account linked to a card.
+  // Only reconcile from the credit account linked to an ACTIVE card.
+  // findMatchingOpenStatement only ever scans active cards, so an archived
+  // (but still linked) card can never match here regardless — this check
+  // just makes that explicit instead of relying on an emergent empty-array
+  // result, and keeps this function's participation decision in sync with
+  // reconcileExistingCardPaymentDrafts's own active-card gate.
   const linkedCard = await getCreditCardByPlaidAccountId(input.userId, input.accountId);
-  if (!linkedCard) return false;
+  if (!linkedCard || !linkedCard.isActive) return false;
+
+  const alreadySettled = await getStatementSettledByDraft(linkedCard.id, input.transactionId);
+  if (alreadySettled) return false;
+
   const match = await findMatchingOpenStatement(input.userId, paymentCents, input.date, {
     cardId: linkedCard.id,
   });
@@ -152,6 +176,7 @@ async function reconcileCardPaymentDraft(input: {
   await updateStatement(match.id, {
     paidAmountCents: paymentCents,
     paidDate: input.date,
+    settledByDraftId: input.transactionId,
   });
   // findMatchingOpenStatement only returns unpaid statements, so this is always
   // the unpaid→paid edge — decrement promos exactly once.
@@ -168,36 +193,76 @@ async function reconcileCardPaymentDraft(input: {
  * credit accounts. Payments synced before card-payment detection existed were
  * stored as `expense` and never reconciled; a fresh cursor sync won't revisit
  * them. This re-evaluates each stored draft (using its persisted primary
- * category + description), fixes a mislabeled `kind`, and reconciles it. Safe
- * to run every sync — reconciliation is idempotent (a settled statement won't
- * re-match). Returns the number of statements newly settled.
+ * category + description) against the classifier's CURRENT verdict and
+ * writes it in both directions — not just forward to card_payment, but back
+ * to expense too, so a fixed/tightened rule (see plaid-transaction-kind.ts)
+ * can correct a previously-mislabeled draft instead of the flip becoming a
+ * one-way ratchet. Safe to run every sync — reconciliation is idempotent (a
+ * settled statement won't re-match). Returns the number of statements newly
+ * settled.
+ *
+ * Linked accounts are restricted to ACTIVE cards — this must agree with
+ * `reconcileCardPaymentDraft`'s own active check, or an archived-but-linked
+ * card's payment gets classified card_payment (removed from spend) yet can
+ * never actually reconcile (findMatchingOpenStatement only scans active
+ * cards), silently.
+ *
+ * `allApprovedDrafts` is this item's full approved-drafts list, fetched once
+ * by the caller and shared with the other post-sync passes (promo seeding)
+ * instead of each re-querying it.
  */
-async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string): Promise<number> {
+async function reconcileExistingCardPaymentDrafts(
+  userId: string,
+  itemId: string,
+  allApprovedDrafts: readonly PlaidTransactionDraftRow[],
+): Promise<number> {
   const accounts = await listPlaidAccountsByItem(itemId);
-  const creditAccountIds = new Set(accounts.filter((a) => a.type === "credit").map((a) => a.id));
-  if (creditAccountIds.size === 0) return 0;
+  const creditAccountIds = [...new Set(accounts.filter((a) => a.type === "credit").map((a) => a.id))];
+  if (creditAccountIds.length === 0) return 0;
 
-  const linkedAccountIds = new Set<string>();
-  for (const id of creditAccountIds) {
-    const card = await getCreditCardByPlaidAccountId(userId, id);
-    if (card) linkedAccountIds.add(id);
-  }
-  if (linkedAccountIds.size === 0) return 0;
-
-  const drafts = (await listPlaidDrafts(userId, "approved")).filter((d) =>
-    linkedAccountIds.has(d.accountId),
+  const linkedCards = (
+    await Promise.all(creditAccountIds.map((id) => getCreditCardByPlaidAccountId(userId, id)))
+  ).filter((card): card is NonNullable<typeof card> => card != null && card.isActive);
+  if (linkedCards.length === 0) return 0;
+  const linkedAccountIds = new Set(
+    linkedCards.map((card) => card.plaidAccountId).filter((id): id is string => id != null),
   );
+
+  // Steady-state short-circuit: once every linked card's statements are
+  // settled, no draft could possibly reconcile. This only skips the
+  // expensive per-draft reconcile attempt (getCreditCardByPlaidAccountId +
+  // getStatementSettledByDraft + a full per-card statement scan) below —
+  // the kind correction pass still runs so a fixed/tightened classifier rule
+  // keeps correcting mislabeled drafts even with nothing left to settle.
+  const anyOpenStatements = (await Promise.all(linkedCards.map((card) => listStatements(card.id)))).some(
+    (stmts) => stmts.some(isStatementOpen),
+  );
+
+  // Pending transactions haven't posted yet — they're picked up once they
+  // clear (same guard the modified-transactions path uses inline).
+  const drafts = allApprovedDrafts.filter((d) => linkedAccountIds.has(d.accountId) && !d.pending);
 
   let reconciled = 0;
   for (const draft of drafts) {
-    // Stored drafts keep only the PRIMARY category — looksLikeCardPayment works
-    // off that + the description.
-    if (!looksLikeCardPayment({ primaryCategory: draft.plaidCategory, description: draft.description })) {
-      continue;
+    // User-actioned drafts (turned into a real one-time expense or promo)
+    // already represent this money elsewhere — flipping kind out from under
+    // them would double-represent it.
+    if (draft.linkedExpenseId || draft.linkedPromoId) continue;
+
+    // Stored drafts keep only the PRIMARY category — looksLikeCardPayment
+    // works off that + the description.
+    const verdict: "expense" | "card_payment" = looksLikeCardPayment({
+      primaryCategory: draft.plaidCategory,
+      description: draft.description,
+      amountCents: draft.amountCents,
+    })
+      ? "card_payment"
+      : "expense";
+    if (draft.kind !== verdict) {
+      await updatePlaidDraft(userId, draft.id, { kind: verdict });
     }
-    if (draft.kind !== "card_payment") {
-      await setPlaidDraftKind(userId, draft.id, "card_payment");
-    }
+    if (verdict !== "card_payment" || !anyOpenStatements) continue;
+
     const settled = await reconcileCardPaymentDraft({
       userId,
       transactionId: draft.id,
@@ -205,19 +270,24 @@ async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string
       amountCents: draft.amountCents,
       date: draft.date,
       kind: "card_payment",
+      description: draft.description,
+      originalDescription: draft.originalDescription,
     });
     if (settled) reconciled++;
   }
   return reconciled;
 }
 
-async function autoCreatePromosFromExistingDrafts(userId: string, itemId: string): Promise<void> {
+async function autoCreatePromosFromExistingDrafts(
+  userId: string,
+  itemId: string,
+  allApprovedDrafts: readonly PlaidTransactionDraftRow[],
+): Promise<void> {
   const accounts = await listPlaidAccountsByItem(itemId);
   const accountIds = new Set(accounts.map((account) => account.id));
   if (accountIds.size === 0) return;
 
-  const drafts = await listPlaidDrafts(userId, "approved");
-  for (const draft of drafts) {
+  for (const draft of allApprovedDrafts) {
     if (!accountIds.has(draft.accountId) || draft.linkedPromoId) continue;
     await autoCreatePromoFromTransaction({
       userId,
@@ -244,7 +314,11 @@ async function autoCreatePromosFromExistingDrafts(userId: string, itemId: string
  * reconcile flow (`authoritativeSource = paypal_promo_list`) or the
  * unpaid→paid statement decrement edge.
  */
-async function seedPayPalSpecialFinancingPromos(userId: string, itemId: string): Promise<void> {
+async function seedPayPalSpecialFinancingPromos(
+  userId: string,
+  itemId: string,
+  allApprovedDrafts: readonly PlaidTransactionDraftRow[],
+): Promise<void> {
   const accounts = await listPlaidAccountsByItem(itemId);
   const paypalCreditAccount = accounts.find(isPayPalCreditAccount);
   if (!paypalCreditAccount) return;
@@ -255,9 +329,7 @@ async function seedPayPalSpecialFinancingPromos(userId: string, itemId: string):
   const walletAccountIds = new Set(accounts.filter(isPayPalWalletAccount).map((account) => account.id));
   if (walletAccountIds.size === 0) return;
 
-  const drafts = (await listPlaidDrafts(userId, "approved")).filter((draft) =>
-    walletAccountIds.has(draft.accountId),
-  );
+  const drafts = allApprovedDrafts.filter((draft) => walletAccountIds.has(draft.accountId));
   const latestDraftDate = drafts.reduce(
     (latest, draft) => (draft.date > latest ? draft.date : latest),
     "",
@@ -344,7 +416,10 @@ export async function syncPlaidTransactions(
         const accounts = await listPlaidAccountsByItem(item.id);
         const accountIds = new Set(accounts.map((a) => a.id));
         const accountById = new Map(accounts.map((a) => [a.id, a] as const));
-        const linkedCards = await listCreditCards(userId, true);
+        // Active cards only — an archived card's payments must not be treated
+        // as "linked" here, or classification and reconciliation disagree
+        // (see reconcileExistingCardPaymentDrafts's doc comment).
+        const linkedCards = await listCreditCards(userId, false);
         const linkedCardAccountIds = new Set(
           linkedCards
             .map((c) => c.plaidAccountId)
@@ -424,6 +499,8 @@ export async function syncPlaidTransactions(
               amountCents,
               date: txn.date,
               kind,
+              description: txn.name,
+              originalDescription,
             })
           ) {
             totalStatementsReconciled++;
@@ -486,6 +563,8 @@ export async function syncPlaidTransactions(
               amountCents,
               date: txn.date,
               kind,
+              description: txn.name,
+              originalDescription,
             }))
           ) {
             totalStatementsReconciled++;
@@ -493,15 +572,32 @@ export async function syncPlaidTransactions(
           modified++;
         }
 
+        // A removed transaction no longer exists in the user's real history —
+        // dismiss its draft so it stops being replayed by the backfill (and
+        // drops out of spend/credit totals). Approving it into a real expense
+        // or promo already created a separate record, so this doesn't erase
+        // anything the user actioned.
+        for (const removedTxn of data.removed) {
+          if (removedTxn.transaction_id) {
+            await deletePlaidDraft(userId, removedTxn.transaction_id);
+          }
+        }
         removed += data.removed.length;
       }
 
       // Persist the advanced cursor.
       await updatePlaidItemCursor(item.id, cursor ?? "", Date.now());
-      await autoCreatePromosFromExistingDrafts(userId, item.id);
-      await seedPayPalSpecialFinancingPromos(userId, item.id);
+      // Fetched once and shared across the three post-sync passes below,
+      // instead of each re-querying the user's full approved-drafts list.
+      const approvedDrafts = await listPlaidDrafts(userId, "approved");
+      await autoCreatePromosFromExistingDrafts(userId, item.id, approvedDrafts);
+      await seedPayPalSpecialFinancingPromos(userId, item.id, approvedDrafts);
       // Catch up payments synced before card-payment detection existed.
-      totalStatementsReconciled += await reconcileExistingCardPaymentDrafts(userId, item.id);
+      totalStatementsReconciled += await reconcileExistingCardPaymentDrafts(
+        userId,
+        item.id,
+        approvedDrafts,
+      );
 
       totalAdded += added;
       totalModified += modified;

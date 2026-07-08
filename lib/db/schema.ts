@@ -267,6 +267,13 @@ export const creditCardStatements = sqliteTable(
     paidAmountCents: integer("paid_amount_cents"),
     paidDate: text("paid_date"),
     notes: text("notes"),
+    /**
+     * Plaid transaction_id of the draft that auto-reconciled this statement as
+     * paid, if any. Once set, that draft can never settle a DIFFERENT
+     * statement — without this gate a single payment could "pay" two
+     * adjacent cycles (see reconcileCardPaymentDraft in lib/plaid-sync.ts).
+     */
+    settledByDraftId: text("settled_by_draft_id"),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({

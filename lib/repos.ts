@@ -1170,10 +1170,25 @@ export async function listStatementsForUser(
 }
 
 /**
- * Find an unpaid statement whose balance is within 10% of `amountCents` and
- * whose DUE date is within `dateRangeDays` of `aroundDate` (a card payment
- * posts near the due date, not the statement close). Used to auto-match a
- * posted LOAN_PAYMENTS transaction to the statement it settled.
+ * Absolute-cents tolerance for auto-matching a payment to a statement. A real
+ * "pay the statement balance" autopay reports the exact balance; this only
+ * absorbs sub-dollar noise (Plaid's float dollar amounts, issuer rounding) —
+ * deliberately NOT a percentage, so a partial payment (even 90%+ of the
+ * balance, e.g. $460 against a $505.10 statement) never gets treated as
+ * clearing the statement. A true partial is left unmatched: there's no data
+ * model for "partially paid, $X still owed" (isStatementOpen in
+ * lib/credit-cards.ts treats ANY recorded paidAmountCents as resolved,
+ * regardless of amount), so recording a partial would misrepresent the
+ * statement as settled rather than actually track the residual.
+ */
+const STATEMENT_MATCH_TOLERANCE_CENTS = 100;
+
+/**
+ * Find an unpaid statement whose balance is within
+ * `STATEMENT_MATCH_TOLERANCE_CENTS` of `amountCents` and whose DUE date is
+ * within `dateRangeDays` of `aroundDate` (a card payment posts near the due
+ * date, not the statement close). Used to auto-match a posted LOAN_PAYMENTS
+ * transaction to the statement it settled.
  *
  * When `cardId` is supplied (the card linked to the payment's Plaid account),
  * only that card's statements are considered — otherwise all of the user's
@@ -1209,14 +1224,36 @@ export async function findMatchingOpenStatement(
       const dayDiff = Math.abs(dueTime - targetTime) / (1000 * 60 * 60 * 24);
       if (dayDiff > dateRangeDays) continue;
 
-      // Amount proximity (within 10%, at least $1 tolerance).
-      const threshold = Math.max(amountCents * 0.1, 100);
-      if (Math.abs(s.statementBalanceCents - amountCents) <= threshold) {
+      if (Math.abs(s.statementBalanceCents - amountCents) <= STATEMENT_MATCH_TOLERANCE_CENTS) {
         return { ...s, cardId: card.id };
       }
     }
   }
   return null;
+}
+
+/**
+ * Has `draftId` already settled a statement on `cardId`? A payment draft may
+ * settle at most one statement, ever — without this gate the same draft can
+ * "settle" a second statement later (a new unpaid statement appearing within
+ * the match window on a later sync) or even in the same sync run (the
+ * post-sync backfill re-scanning the draft it just reconciled inline).
+ */
+export async function getStatementSettledByDraft(
+  cardId: string,
+  draftId: string,
+): Promise<CreditCardStatementRow | undefined> {
+  const db = getDb();
+  return db
+    .select()
+    .from(creditCardStatements)
+    .where(
+      and(
+        eq(creditCardStatements.cardId, cardId),
+        eq(creditCardStatements.settledByDraftId, draftId),
+      ),
+    )
+    .get();
 }
 
 export async function getStatement(
@@ -1988,30 +2025,18 @@ export async function updatePlaidDraftStatus(
   return getPlaidDraft(userId, id);
 }
 
-/**
- * Correct a stored draft's `kind`. Used by the sync backfill to reclassify a
- * card payment that an earlier sync mislabeled `expense` (a credit-side payment
- * posts as a negative amount, which the old classifier rejected).
- */
-export async function setPlaidDraftKind(
-  userId: string,
-  id: string,
-  kind: "expense" | "card_payment",
-): Promise<void> {
-  const db = getDb();
-  await db
-    .update(plaidTransactionDrafts)
-    .set({ kind })
-    .where(and(eq(plaidTransactionDrafts.userId, userId), eq(plaidTransactionDrafts.id, id)))
-    .run();
-}
-
 export async function updatePlaidDraft(
   userId: string,
   id: string,
   patch: Partial<Pick<
     PlaidTransactionDraftRow,
-    "date" | "description" | "amountCents" | "plaidCategory" | "merchantName" | "originalDescription"
+    | "date"
+    | "description"
+    | "amountCents"
+    | "plaidCategory"
+    | "merchantName"
+    | "originalDescription"
+    | "kind"
   >>,
 ): Promise<PlaidTransactionDraftRow | undefined> {
   const db = getDb();
