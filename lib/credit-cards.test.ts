@@ -36,6 +36,7 @@ function statement(over: Partial<CreditCardStatementRow> = {}): CreditCardStatem
     paidAmountCents: null,
     paidDate: null,
     notes: null,
+    settledByDraftId: null,
     createdAt: 0,
     ...over,
   };

@@ -21,12 +21,14 @@ import {
   upsertCreditCardStatementByDate,
   updateStatement,
   findMatchingOpenStatement,
+  getStatementSettledByDraft,
   setPlaidDraftKind,
+  deletePlaidDraft,
 } from "./repos";
 import { todayIso } from "./dates";
 import { dueDateFromStatement } from "./credit-cards";
 import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
-import { classifyDraftKind, looksLikeCardPayment } from "./plaid-transaction-kind";
+import { classifyDraftKind, looksLikeCardPayment, looksLikeReversal } from "./plaid-transaction-kind";
 import {
   isPayPalCreditAccount,
   isPayPalWalletAccount,
@@ -120,8 +122,14 @@ async function autoCreatePromoFromTransaction(input: {
  * MAGNITUDE. Only payments on a credit account linked to one of the user's
  * cards reconcile (the card's own side of the payment); the depository-side
  * transfer is the same money and is left alone. `findMatchingOpenStatement`
- * still requires the magnitude to be within ~10% of the statement balance, so
- * a partial payment on a revolving card does NOT clear the statement.
+ * requires the magnitude to be within ~$1 of the statement balance, so a
+ * partial payment on a revolving card does NOT clear the statement.
+ *
+ * A draft settles at most one statement, EVER — `getStatementSettledByDraft`
+ * gates on that before matching, so a payment already consumed by one cycle
+ * can't later "settle" another (a new statement appearing on a later sync
+ * that happens to fall in the same amount/date window, or this same sync's
+ * post-loop backfill re-scanning the draft it just reconciled inline).
  *
  * Idempotent: `findMatchingOpenStatement` only returns statements with no
  * recorded payment, so a re-synced (or backfilled) draft finds nothing to
@@ -136,14 +144,23 @@ async function reconcileCardPaymentDraft(input: {
   amountCents: number;
   date: string;
   kind: "expense" | "card_payment";
+  description?: string | null;
+  originalDescription?: string | null;
 }): Promise<boolean> {
   if (input.kind !== "card_payment") return false;
   const paymentCents = Math.abs(input.amountCents);
   if (paymentCents <= 0) return false;
+  // A reversal/return of a prior payment must never settle a statement — it's
+  // the same payment-like shape but money moving the other way.
+  if (looksLikeReversal(input.description, input.originalDescription)) return false;
 
   // Only reconcile from the credit account linked to a card.
   const linkedCard = await getCreditCardByPlaidAccountId(input.userId, input.accountId);
   if (!linkedCard) return false;
+
+  const alreadySettled = await getStatementSettledByDraft(linkedCard.id, input.transactionId);
+  if (alreadySettled) return false;
+
   const match = await findMatchingOpenStatement(input.userId, paymentCents, input.date, {
     cardId: linkedCard.id,
   });
@@ -152,6 +169,7 @@ async function reconcileCardPaymentDraft(input: {
   await updateStatement(match.id, {
     paidAmountCents: paymentCents,
     paidDate: input.date,
+    settledByDraftId: input.transactionId,
   });
   // findMatchingOpenStatement only returns unpaid statements, so this is always
   // the unpaid→paid edge — decrement promos exactly once.
@@ -184,8 +202,10 @@ async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string
   }
   if (linkedAccountIds.size === 0) return 0;
 
-  const drafts = (await listPlaidDrafts(userId, "approved")).filter((d) =>
-    linkedAccountIds.has(d.accountId),
+  // Pending transactions haven't posted yet — they're picked up once they
+  // clear (same guard the modified-transactions path uses inline).
+  const drafts = (await listPlaidDrafts(userId, "approved")).filter(
+    (d) => linkedAccountIds.has(d.accountId) && !d.pending,
   );
 
   let reconciled = 0;
@@ -205,6 +225,8 @@ async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string
       amountCents: draft.amountCents,
       date: draft.date,
       kind: "card_payment",
+      description: draft.description,
+      originalDescription: draft.originalDescription,
     });
     if (settled) reconciled++;
   }
@@ -424,6 +446,8 @@ export async function syncPlaidTransactions(
               amountCents,
               date: txn.date,
               kind,
+              description: txn.name,
+              originalDescription,
             })
           ) {
             totalStatementsReconciled++;
@@ -486,6 +510,8 @@ export async function syncPlaidTransactions(
               amountCents,
               date: txn.date,
               kind,
+              description: txn.name,
+              originalDescription,
             }))
           ) {
             totalStatementsReconciled++;
@@ -493,6 +519,16 @@ export async function syncPlaidTransactions(
           modified++;
         }
 
+        // A removed transaction no longer exists in the user's real history —
+        // dismiss its draft so it stops being replayed by the backfill (and
+        // drops out of spend/credit totals). Approving it into a real expense
+        // or promo already created a separate record, so this doesn't erase
+        // anything the user actioned.
+        for (const removedTxn of data.removed) {
+          if (removedTxn.transaction_id) {
+            await deletePlaidDraft(userId, removedTxn.transaction_id);
+          }
+        }
         removed += data.removed.length;
       }
 

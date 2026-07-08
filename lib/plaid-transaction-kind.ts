@@ -39,6 +39,22 @@ export function looksLikeCardPayment(input: {
 }
 
 /**
+ * A reversal/return of a prior payment, not a new payment settling a
+ * statement. Issuers often tag these with the same payment-like
+ * category/description as a real payment, so classification still treats
+ * them as `card_payment` (not spend) — but reconciliation must never let one
+ * clear a statement. Kept conservative (a handful of unambiguous substrings)
+ * since this only ever narrows matching, never widens it.
+ */
+export function looksLikeReversal(
+  description?: string | null,
+  originalDescription?: string | null,
+): boolean {
+  const text = `${description ?? ""} ${originalDescription ?? ""}`.toLowerCase();
+  return text.includes("revers") || text.includes("return") || text.includes("redemption");
+}
+
+/**
  * Classify a synced transaction. A payment toward a linked credit card is
  * `card_payment` (not spend): the cash leaving the source account already
  * covers it. Such a payment posts on the CREDIT account, reducing the balance —
