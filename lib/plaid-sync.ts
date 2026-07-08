@@ -24,9 +24,11 @@ import {
   getStatementSettledByDraft,
   updatePlaidDraft,
   deletePlaidDraft,
+  listStatements,
 } from "./repos";
+import type { PlaidTransactionDraftRow } from "./db/schema";
 import { todayIso } from "./dates";
-import { dueDateFromStatement } from "./credit-cards";
+import { dueDateFromStatement, isStatementOpen } from "./credit-cards";
 import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
 import { classifyDraftKind, looksLikeCardPayment, looksLikeReversal } from "./plaid-transaction-kind";
 import {
@@ -204,24 +206,41 @@ async function reconcileCardPaymentDraft(input: {
  * card's payment gets classified card_payment (removed from spend) yet can
  * never actually reconcile (findMatchingOpenStatement only scans active
  * cards), silently.
+ *
+ * `allApprovedDrafts` is this item's full approved-drafts list, fetched once
+ * by the caller and shared with the other post-sync passes (promo seeding)
+ * instead of each re-querying it.
  */
-async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string): Promise<number> {
+async function reconcileExistingCardPaymentDrafts(
+  userId: string,
+  itemId: string,
+  allApprovedDrafts: readonly PlaidTransactionDraftRow[],
+): Promise<number> {
   const accounts = await listPlaidAccountsByItem(itemId);
-  const creditAccountIds = new Set(accounts.filter((a) => a.type === "credit").map((a) => a.id));
-  if (creditAccountIds.size === 0) return 0;
+  const creditAccountIds = [...new Set(accounts.filter((a) => a.type === "credit").map((a) => a.id))];
+  if (creditAccountIds.length === 0) return 0;
 
-  const linkedAccountIds = new Set<string>();
-  for (const id of creditAccountIds) {
-    const card = await getCreditCardByPlaidAccountId(userId, id);
-    if (card && card.isActive) linkedAccountIds.add(id);
-  }
-  if (linkedAccountIds.size === 0) return 0;
+  const linkedCards = (
+    await Promise.all(creditAccountIds.map((id) => getCreditCardByPlaidAccountId(userId, id)))
+  ).filter((card): card is NonNullable<typeof card> => card != null && card.isActive);
+  if (linkedCards.length === 0) return 0;
+  const linkedAccountIds = new Set(
+    linkedCards.map((card) => card.plaidAccountId).filter((id): id is string => id != null),
+  );
+
+  // Steady-state short-circuit: once every linked card's statements are
+  // settled, no draft could possibly reconcile. This only skips the
+  // expensive per-draft reconcile attempt (getCreditCardByPlaidAccountId +
+  // getStatementSettledByDraft + a full per-card statement scan) below —
+  // the kind correction pass still runs so a fixed/tightened classifier rule
+  // keeps correcting mislabeled drafts even with nothing left to settle.
+  const anyOpenStatements = (await Promise.all(linkedCards.map((card) => listStatements(card.id)))).some(
+    (stmts) => stmts.some(isStatementOpen),
+  );
 
   // Pending transactions haven't posted yet — they're picked up once they
   // clear (same guard the modified-transactions path uses inline).
-  const drafts = (await listPlaidDrafts(userId, "approved")).filter(
-    (d) => linkedAccountIds.has(d.accountId) && !d.pending,
-  );
+  const drafts = allApprovedDrafts.filter((d) => linkedAccountIds.has(d.accountId) && !d.pending);
 
   let reconciled = 0;
   for (const draft of drafts) {
@@ -242,7 +261,7 @@ async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string
     if (draft.kind !== verdict) {
       await updatePlaidDraft(userId, draft.id, { kind: verdict });
     }
-    if (verdict !== "card_payment") continue;
+    if (verdict !== "card_payment" || !anyOpenStatements) continue;
 
     const settled = await reconcileCardPaymentDraft({
       userId,
@@ -259,13 +278,16 @@ async function reconcileExistingCardPaymentDrafts(userId: string, itemId: string
   return reconciled;
 }
 
-async function autoCreatePromosFromExistingDrafts(userId: string, itemId: string): Promise<void> {
+async function autoCreatePromosFromExistingDrafts(
+  userId: string,
+  itemId: string,
+  allApprovedDrafts: readonly PlaidTransactionDraftRow[],
+): Promise<void> {
   const accounts = await listPlaidAccountsByItem(itemId);
   const accountIds = new Set(accounts.map((account) => account.id));
   if (accountIds.size === 0) return;
 
-  const drafts = await listPlaidDrafts(userId, "approved");
-  for (const draft of drafts) {
+  for (const draft of allApprovedDrafts) {
     if (!accountIds.has(draft.accountId) || draft.linkedPromoId) continue;
     await autoCreatePromoFromTransaction({
       userId,
@@ -292,7 +314,11 @@ async function autoCreatePromosFromExistingDrafts(userId: string, itemId: string
  * reconcile flow (`authoritativeSource = paypal_promo_list`) or the
  * unpaid→paid statement decrement edge.
  */
-async function seedPayPalSpecialFinancingPromos(userId: string, itemId: string): Promise<void> {
+async function seedPayPalSpecialFinancingPromos(
+  userId: string,
+  itemId: string,
+  allApprovedDrafts: readonly PlaidTransactionDraftRow[],
+): Promise<void> {
   const accounts = await listPlaidAccountsByItem(itemId);
   const paypalCreditAccount = accounts.find(isPayPalCreditAccount);
   if (!paypalCreditAccount) return;
@@ -303,9 +329,7 @@ async function seedPayPalSpecialFinancingPromos(userId: string, itemId: string):
   const walletAccountIds = new Set(accounts.filter(isPayPalWalletAccount).map((account) => account.id));
   if (walletAccountIds.size === 0) return;
 
-  const drafts = (await listPlaidDrafts(userId, "approved")).filter((draft) =>
-    walletAccountIds.has(draft.accountId),
-  );
+  const drafts = allApprovedDrafts.filter((draft) => walletAccountIds.has(draft.accountId));
   const latestDraftDate = drafts.reduce(
     (latest, draft) => (draft.date > latest ? draft.date : latest),
     "",
@@ -563,10 +587,17 @@ export async function syncPlaidTransactions(
 
       // Persist the advanced cursor.
       await updatePlaidItemCursor(item.id, cursor ?? "", Date.now());
-      await autoCreatePromosFromExistingDrafts(userId, item.id);
-      await seedPayPalSpecialFinancingPromos(userId, item.id);
+      // Fetched once and shared across the three post-sync passes below,
+      // instead of each re-querying the user's full approved-drafts list.
+      const approvedDrafts = await listPlaidDrafts(userId, "approved");
+      await autoCreatePromosFromExistingDrafts(userId, item.id, approvedDrafts);
+      await seedPayPalSpecialFinancingPromos(userId, item.id, approvedDrafts);
       // Catch up payments synced before card-payment detection existed.
-      totalStatementsReconciled += await reconcileExistingCardPaymentDrafts(userId, item.id);
+      totalStatementsReconciled += await reconcileExistingCardPaymentDrafts(
+        userId,
+        item.id,
+        approvedDrafts,
+      );
 
       totalAdded += added;
       totalModified += modified;
