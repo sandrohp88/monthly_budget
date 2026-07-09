@@ -33,11 +33,14 @@ export function looksLikeCardPayment(input: {
   // "autopay" (GEICO *AUTOPAY, an insurance premium) or "payment" (BALANCE
   // TRANSFER PAYMENT TO CHASE, a transfer to somewhere else), so a keyword
   // only counts alongside a non-merchant category (the credit-side payment
-  // landing here, tagged LOAN_DISBURSEMENTS or TRANSFER_IN by some issuers)
-  // OR a negative amount (money IN on the credit account — a purchase never
-  // is). This is what keeps "Payment Thank You" working for the real
-  // ****9873 shape (LOAN_DISBURSEMENTS, negative) while rejecting a positive
-  // merchant purchase that happens to contain the same word.
+  // landing here, tagged LOAN_DISBURSEMENTS / TRANSFER_IN / TRANSFER_OUT by
+  // some issuers) OR a negative amount with NO category at all. A negative
+  // amount with a MERCHANT category is a refund wearing the purchase's own
+  // descriptor ('GEICO *AUTOPAY' negated is the premium's refund, not a card
+  // payment) — it must stay `expense` or it vanishes from the credits view
+  // and can even settle a statement by magnitude. This still keeps "Payment
+  // Thank You" working for the real ****9873 shape (LOAN_DISBURSEMENTS,
+  // negative).
   const hasPaymentKeyword =
     desc.includes("payment thank you") ||
     desc.includes("autopay") ||
@@ -45,8 +48,10 @@ export function looksLikeCardPayment(input: {
     desc.includes("bill pay");
   if (!hasPaymentKeyword) return false;
 
-  const isNonMerchantCategory = primary === "LOAN_DISBURSEMENTS" || primary === "TRANSFER_IN";
-  return isNonMerchantCategory || input.amountCents < 0;
+  const isNonMerchantCategory =
+    primary === "LOAN_DISBURSEMENTS" || primary === "TRANSFER_IN" || primary === "TRANSFER_OUT";
+  if (isNonMerchantCategory) return true;
+  return input.amountCents < 0 && primary === "";
 }
 
 /**
@@ -54,15 +59,30 @@ export function looksLikeCardPayment(input: {
  * statement. Issuers often tag these with the same payment-like
  * category/description as a real payment, so classification still treats
  * them as `card_payment` (not spend) — but reconciliation must never let one
- * clear a statement. Kept conservative (a handful of unambiguous substrings)
- * since this only ever narrows matching, never widens it.
+ * clear a statement. Blocking here only narrows matching (the statement stays
+ * visibly open — recoverable), while a miss lets money that moved the wrong
+ * way mark a statement paid (silent and irreversible via the promo edge), so
+ * the list leans broad and covers the common bounce vocabulary. "nsf"/"rtn"
+ * match on word boundaries only — "tra-NSF-er" would otherwise flag every
+ * transfer-worded payment.
  */
 export function looksLikeReversal(
   description?: string | null,
   originalDescription?: string | null,
 ): boolean {
   const text = `${description ?? ""} ${originalDescription ?? ""}`.toLowerCase();
-  return text.includes("revers") || text.includes("return") || text.includes("redemption");
+  return (
+    text.includes("revers") ||
+    text.includes("return") ||
+    text.includes("redemption") ||
+    text.includes("refund") ||
+    text.includes("reject") ||
+    text.includes("chargeback") ||
+    text.includes("dishonor") ||
+    text.includes("insufficient") ||
+    /\bnsf\b/.test(text) ||
+    /\brtn\b/.test(text)
+  );
 }
 
 /**

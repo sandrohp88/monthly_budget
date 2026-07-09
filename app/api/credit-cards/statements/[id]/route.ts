@@ -31,6 +31,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
       ? { minimumPaymentCents: data.minimumPaymentCents }
       : {}),
     ...(data.paidAmountCents !== undefined ? { paidAmountCents: data.paidAmountCents } : {}),
+    // Un-paying releases the draft that auto-settled this statement — without
+    // this, the re-opened statement could never auto-reconcile again (the
+    // settle-once gate would see its own draft as already consumed).
+    ...(data.paidAmountCents === null ? { settledByDraftId: null } : {}),
     ...(data.paidDate !== undefined ? { paidDate: data.paidDate } : {}),
     ...(data.notes !== undefined ? { notes: data.notes ?? null } : {}),
   });

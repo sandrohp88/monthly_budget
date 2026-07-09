@@ -279,6 +279,11 @@ export const creditCardStatements = sqliteTable(
   (t) => ({
     cardDue: index("cc_statements_card_due_idx").on(t.cardId, t.dueDate),
     cardDateUnique: uniqueIndex("cc_statements_card_date_unique_idx").on(t.cardId, t.statementDate),
+    // A payment draft may settle at most ONE statement, globally — enforced at
+    // the DB level so no code path (present or future) can double-spend a draft.
+    settledByDraftUnique: uniqueIndex("cc_statements_settled_by_draft_unique_idx")
+      .on(t.settledByDraftId)
+      .where(sql`settled_by_draft_id IS NOT NULL`),
   }),
 );
 

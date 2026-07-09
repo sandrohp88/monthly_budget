@@ -543,6 +543,10 @@ const importCreditCardStatementSchema = z.object({
   paidAmountCents: cents.nullable().optional(),
   paidDate: isoDate.nullable().optional(),
   notes: optionalNotes,
+  // Plaid transaction_id of the draft that settled this statement. Must
+  // round-trip through backup/restore or every draft becomes re-spendable
+  // after an import (the settle-once gate reopens).
+  settledByDraftId: z.string().min(1).max(128).nullable().optional(),
 });
 
 const importCreditCardPromoSchema = z.object({
