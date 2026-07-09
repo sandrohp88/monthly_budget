@@ -98,7 +98,7 @@ app/
     projection/            ← filterable projection event table
     reports/               ← category / spend analytics
     settings/
-    transactions/          ← Plaid draft review (approve / dismiss / promo)
+    transactions/          ← Plaid draft review (approve / dismiss / promo) + auto-matched "paid bill" markers
   api/                     ← REST endpoints, all server-only
     {entity}/route.ts      ← list (GET) + create (POST)
     {entity}/[id]/route.ts ← read/update/delete
@@ -111,7 +111,8 @@ app/
 components/
   ui/                      ← shadcn-style primitives (button, card, input, dialog, sheet, …)
   app-shell.tsx            ← topbar + sidebar wrapper
-  sidebar.tsx              ← nav with `g` + `d/b/a/t/c/p/e/l/j/x/w/r/s` shortcuts (hint auto-generated from NAV)
+  sidebar.tsx              ← nav with `g` + `d/b/a/t/c/p/e/l/j/x/w/r/s` shortcuts (hint auto-generated from NAV);
+                             two sections: Core (dashboard/calendar/bills/transactions/accounts) and More (the rest)
   projection-chart.tsx     ← Recharts area chart
   money.tsx, date-label.tsx, money-input.tsx
   category-dialog.tsx      ← shared "add new category" dialog (used in 2 places)

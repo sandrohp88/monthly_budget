@@ -26,6 +26,9 @@ export type SidebarSummary = {
   deltaCents: number;
 };
 
+// Section 1 = the core loop (projection, calendar, bills, transactions,
+// accounts). Section 2 = everything that feeds the projection but is
+// visited far less often. Keep shortcuts stable — they're muscle memory.
 export const NAV: ReadonlyArray<{
   href: string;
   label: string;
@@ -34,15 +37,15 @@ export const NAV: ReadonlyArray<{
   section: 1 | 2;
 }> = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, shortcut: "d", section: 1 },
-  { href: "/bills", label: "Bills", icon: CreditCard, shortcut: "b", section: 1 },
-  { href: "/accounts", label: "Accounts", icon: Landmark, shortcut: "a", section: 1 },
-  { href: "/transactions", label: "Transactions", icon: ReceiptText, shortcut: "t", section: 1 },
-  { href: "/credit-cards", label: "Credit Cards", icon: Wallet, shortcut: "c", section: 1 },
-  { href: "/paychecks", label: "Paychecks", icon: CircleDollarSign, shortcut: "p", section: 1 },
-  { href: "/extras", label: "One-Time", icon: PartyPopper, shortcut: "e", section: 1 },
   { href: "/calendar", label: "Calendar", icon: CalendarDays, shortcut: "l", section: 1 },
-  { href: "/ledger", label: "Ledger", icon: ChartLine, shortcut: "x", section: 1 },
-  { href: "/assets", label: "Assets", icon: Gem, shortcut: "w", section: 1 },
+  { href: "/bills", label: "Bills", icon: CreditCard, shortcut: "b", section: 1 },
+  { href: "/transactions", label: "Transactions", icon: ReceiptText, shortcut: "t", section: 1 },
+  { href: "/accounts", label: "Accounts", icon: Landmark, shortcut: "a", section: 1 },
+  { href: "/credit-cards", label: "Credit Cards", icon: Wallet, shortcut: "c", section: 2 },
+  { href: "/paychecks", label: "Paychecks", icon: CircleDollarSign, shortcut: "p", section: 2 },
+  { href: "/extras", label: "One-Time", icon: PartyPopper, shortcut: "e", section: 2 },
+  { href: "/ledger", label: "Ledger", icon: ChartLine, shortcut: "x", section: 2 },
+  { href: "/assets", label: "Assets", icon: Gem, shortcut: "w", section: 2 },
   { href: "/settings", label: "Settings", icon: Settings, shortcut: "s", section: 2 },
 ];
 
@@ -135,9 +138,9 @@ export function Sidebar({
 
       {/* nav */}
       <nav className="flex-1 overflow-y-auto py-3">
-        <SectionLabel>Plan</SectionLabel>
+        <SectionLabel>Core</SectionLabel>
         {NAV.filter((n) => n.section === 1).map(renderItem)}
-        <SectionLabel className="mt-4">Manage</SectionLabel>
+        <SectionLabel className="mt-4">More</SectionLabel>
         {NAV.filter((n) => n.section === 2).map(renderItem)}
       </nav>
 

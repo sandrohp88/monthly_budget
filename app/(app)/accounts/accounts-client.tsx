@@ -334,9 +334,12 @@ function AccountRow({
   // Most recent statement on the linked card, if any.
   const latestStatement = link?.statements[0];
 
+  // Horizontal strip: identity grows on the left, controls and balance sit
+  // in fixed columns on the right. Stacks vertically below md.
   return (
-    <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2">
-      <div className="flex items-center justify-between gap-3">
+    <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2.5">
+      <div className="flex flex-col gap-2.5 md:flex-row md:items-center md:gap-4">
+        {/* identity + card linkage */}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-0)] truncate">
@@ -349,27 +352,15 @@ function AccountRow({
             )}
             <StatusPill variant="default">{typeLabel}</StatusPill>
           </div>
-        </div>
-        <div className={cn("text-[15px] font-bold tabular shrink-0", balanceColor)}>
-          {account.balanceCents != null ? <Money cents={account.balanceCents} /> : <span className="text-[var(--text-3)] text-[11px]">—</span>}
-        </div>
-      </div>
-
-      {/* Credit-card linkage section */}
-      {isCredit && (
-        <div className="mt-2">
-          {link ? (
-            <div className="rounded-sm border border-[var(--mint-dim)] bg-[var(--bg-2)] px-2.5 py-1.5">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.15em] text-[var(--mint)]">
+          {isCredit && (
+            <div className="mt-1.5">
+              {link ? (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+                  <span className="flex items-center gap-1 font-bold text-[var(--mint)]">
                     <Link2 className="h-2.5 w-2.5" />
-                    LINKED CARD
-                  </div>
-                  <div className="mt-0.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--text-0)] truncate">
                     {link.card.name}
-                  </div>
-                  <div className="mt-0.5 text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+                  </span>
+                  <span>
                     {link.card.statementCycleMode === "interval_days"
                       ? `${link.card.statementCycleIntervalDays}D CYCLE`
                       : `STMT DAY ${link.card.statementDay}`}{" "}
@@ -382,57 +373,68 @@ function AccountRow({
                         <Money cents={statementCashDueCents(latestStatement)} />
                       </>
                     )}
-                  </div>
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onUnlinkCard(account.id)}
+                    disabled={unlinking}
+                    aria-label="Unlink card"
+                    title="Unlink from credit card"
+                  >
+                    <Unlink className="h-3 w-3" />
+                  </Button>
                 </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => onUnlinkCard(account.id)}
-                  disabled={unlinking}
-                  aria-label="Unlink card"
-                  title="Unlink from credit card"
-                >
-                  <Unlink className="h-3 w-3" />
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-2 rounded-sm border border-dashed border-[var(--border-raw)] bg-[var(--bg-2)] px-2.5 py-1.5">
-              <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-                NOT LINKED TO A CREDIT CARD
-              </span>
-              <Button
-                id={`link-card-${account.id}`}
-                size="sm"
-                variant="outline"
-                onClick={() => onLinkCard(account)}
-              >
-                <Link2 className="h-3 w-3" />
-                LINK CARD
-              </Button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                    NOT LINKED TO A CREDIT CARD
+                  </span>
+                  <Button
+                    id={`link-card-${account.id}`}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onLinkCard(account)}
+                  >
+                    <Link2 className="h-3 w-3" />
+                    LINK CARD
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>
-      )}
 
-      {/* Toggles */}
-      <div className="mt-2 flex flex-col gap-1.5 text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">
-        <label className="flex cursor-pointer items-center justify-between">
-          <span>USE AS STARTING BALANCE IN PROJECTION</span>
-          <Switch
-            id={`starting-balance-${account.id}`}
-            checked={account.useAsStartingBalance}
-            onCheckedChange={(v) => onToggle(account.id, "useAsStartingBalance", v)}
-          />
-        </label>
-        <label className="flex cursor-pointer items-center justify-between">
-          <span>INCLUDE IN TRANSACTION SYNC</span>
-          <Switch
-            id={`sync-enabled-${account.id}`}
-            checked={account.syncEnabled}
-            onCheckedChange={(v) => onToggle(account.id, "syncEnabled", v)}
-          />
-        </label>
+        {/* toggles */}
+        <div className="flex shrink-0 items-center gap-4 text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+          <label
+            className="flex cursor-pointer items-center gap-1.5"
+            title="Use this account's live balance as the projection's starting balance"
+          >
+            <span>BALANCE SOURCE</span>
+            <Switch
+              id={`starting-balance-${account.id}`}
+              checked={account.useAsStartingBalance}
+              onCheckedChange={(v) => onToggle(account.id, "useAsStartingBalance", v)}
+            />
+          </label>
+          <label
+            className="flex cursor-pointer items-center gap-1.5"
+            title="Include this account in transaction sync"
+          >
+            <span>SYNC</span>
+            <Switch
+              id={`sync-enabled-${account.id}`}
+              checked={account.syncEnabled}
+              onCheckedChange={(v) => onToggle(account.id, "syncEnabled", v)}
+            />
+          </label>
+        </div>
+
+        {/* balance */}
+        <div className={cn("shrink-0 text-[15px] font-bold tabular md:w-28 md:text-right", balanceColor)}>
+          {account.balanceCents != null ? <Money cents={account.balanceCents} /> : <span className="text-[var(--text-3)] text-[11px]">—</span>}
+        </div>
       </div>
     </div>
   );

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { buildProjection } from "@/lib/projection-server";
-import { listBills, listExtras, listPaychecks, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance } from "@/lib/repos";
+import { listPaychecks, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance } from "@/lib/repos";
 import { isStatementOpen, statementCashDueCents } from "@/lib/credit-cards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CardSubTag, PageHead } from "@/components/ui/page-head";
@@ -16,7 +16,7 @@ import { ProjectionChart } from "@/components/projection-chart";
 import { addDaysIso, todayIso } from "@/lib/dates";
 import { findWorstDay } from "@/lib/projection";
 import { cn } from "@/lib/cn";
-import { Plus, Download } from "lucide-react";
+import { Plus } from "lucide-react";
 import { BudgetUtilization } from "@/components/budget-utilization";
 
 export const dynamic = "force-dynamic";
@@ -33,6 +33,15 @@ function balanceClass(cents: number) {
   return "text-[var(--mint)]";
 }
 
+function balanceVariant(cents: number): "mint" | "amber" | "red" {
+  if (cents < 0) return "red";
+  if (cents < 50000) return "amber";
+  return "mint";
+}
+
+const AGENDA_DAYS = 14;
+const AGENDA_MAX_CARDS = 12;
+
 export default async function DashboardPage() {
   const session = await auth();
   const userId = (session?.user as { id?: string } | undefined)?.id;
@@ -45,9 +54,7 @@ export default async function DashboardPage() {
   const driftedCardCount = Object.keys(promoDriftByCard).length;
 
   const currentMonth = todayIso().slice(0, 7);
-  const [bills, extras, paychecks, ccStatements, budgetUtilization, liveBalance] = await Promise.all([
-    listBills(userId, false),
-    listExtras(userId),
+  const [paychecks, ccStatements, budgetUtilization, liveBalance] = await Promise.all([
     listPaychecks(userId),
     listStatementsForUser(userId),
     computeCategoryUtilization(userId, currentMonth),
@@ -63,29 +70,9 @@ export default async function DashboardPage() {
       : null;
   const ccOverdueCount = openStatements.filter((s) => s.dueDate < todayIso()).length;
 
-  const totalMonthlyBills = bills.reduce(
-    (sum, b) => sum + (b.intervalMonths > 0 ? Math.round(b.amountCents / b.intervalMonths) : b.amountCents),
-    0,
-  );
-  // Annualized cost of bills that don't recur monthly (quarterly, annual, etc.).
-  const nonMonthlyBills = bills.filter((b) => b.intervalMonths > 1);
-  const totalAnnualBills = nonMonthlyBills.reduce(
-    (sum, b) => sum + Math.round((b.amountCents * 12) / b.intervalMonths),
-    0,
-  );
-
   const today = todayIso();
-  const next90 = addDaysIso(today, 90);
-  const upcomingExtras = extras
-    .filter((e) => e.date >= today && e.date <= next90)
-    .reduce((sum, e) => sum + e.amountCents, 0);
-  const upcomingExtraCount = extras.filter((e) => e.date >= today && e.date <= next90).length;
-
   const upcomingPaychecks = paychecks.filter((p) => p.payDate >= today);
   const nextPayday = upcomingPaychecks[0];
-
-  const totalIncome = rows.reduce((s, r) => s + r.incomeCents, 0);
-  const avgMonthlyIncome = projectionMonths > 0 ? Math.round(totalIncome / projectionMonths) : 0;
 
   type MonthAgg = { key: string; income: number; expense: number; ending: number };
   const months: MonthAgg[] = [];
@@ -107,14 +94,23 @@ export default async function DashboardPage() {
   // Balance vs projection delta: compare live Plaid balance to today's projected balance
   const todayRow = rows.find((r) => r.date === today);
   const projectedTodayCents = todayRow?.balanceCents ?? projection.startingBalanceCents;
+  const currentBalanceCents = liveBalance ?? projectedTodayCents;
   const balanceDeltaCents = liveBalance != null ? liveBalance - projectedTodayCents : null;
   const balanceDeltaSignificant =
     balanceDeltaCents != null && Math.abs(balanceDeltaCents) > 50_00; // > $50 drift
 
-  // Build "upcoming events" list — next 6 income/expense rows
-  const upcomingEvents = rows
-    .filter((r) => r.date >= today && (r.events.length > 0))
-    .slice(0, 5);
+  // Horizontal agenda: the next two weeks, one card per day that has
+  // something scheduled. Settled/paid zero-amount markers are calendar
+  // detail — skip them here so the strip only shows cash still in motion.
+  const agendaEnd = addDaysIso(today, AGENDA_DAYS);
+  const agendaDays = rows
+    .filter((r) => r.date >= today && r.date <= agendaEnd)
+    .map((r) => ({
+      ...r,
+      events: r.events.filter((e) => !(e.isPaid && e.amountCents === 0)),
+    }))
+    .filter((r) => r.events.length > 0)
+    .slice(0, AGENDA_MAX_CARDS);
 
   return (
     <div className="fade-in space-y-4">
@@ -123,46 +119,21 @@ export default async function DashboardPage() {
         title="OVERVIEW"
         subtitle="Cash-flow projection and runway analysis"
         actions={
-          <>
-            <Button variant="outline" asChild>
-              <Link href="/api/backup/export">
-                <Download className="h-3 w-3" /> EXPORT
-              </Link>
-            </Button>
-            <Button variant="primary" asChild>
-              <Link href="/bills">
-                <Plus className="h-3 w-3" /> NEW BILL
-              </Link>
-            </Button>
-          </>
+          <Button variant="primary" asChild>
+            <Link href="/bills">
+              <Plus className="h-3 w-3" /> NEW BILL
+            </Link>
+          </Button>
         }
       />
 
       <TileGrid cols={4}>
         <Tile
           compact
-          label="MONTHLY BILLS"
-          value={<Money cents={totalMonthlyBills} />}
-          delta={`amortized across all cycles`}
-        />
-        <Tile
-          compact
-          label="NON-MONTHLY (ANNUALIZED)"
-          value={<Money cents={totalAnnualBills} />}
-          delta={`${nonMonthlyBills.length} tracked`}
-        />
-        <Tile
-          compact
-          label="ONE-TIME (90D)"
-          value={<Money cents={upcomingExtras} />}
-          delta={`${upcomingExtraCount} planned`}
-        />
-        <Tile
-          compact
-          label="AVG MONTHLY INCOME"
-          value={<Money cents={avgMonthlyIncome} />}
-          variant="mint"
-          delta={`net: ${avgMonthlyIncome - totalMonthlyBills > 0 ? "+" : ""}${formatDelta(avgMonthlyIncome - totalMonthlyBills)}`}
+          label="CURRENT BALANCE"
+          value={<Money cents={currentBalanceCents} />}
+          variant={balanceVariant(currentBalanceCents)}
+          delta={liveBalance != null ? "live · linked accounts" : "projected as of today"}
         />
         <Tile
           compact
@@ -288,113 +259,135 @@ export default async function DashboardPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-3 lg:grid-cols-[1.4fr_1fr]">
-        <Card>
-          <CardHeader className="px-4 py-3">
-            <div>
-              <CardSubTag>TABLE_01</CardSubTag>
-              <CardTitle className="mt-0.5 text-[14px]">MONTHLY SUMMARY</CardTitle>
-            </div>
-            <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
-              PROJECTION_MONTHS = {projectionMonths}
-            </div>
-          </CardHeader>
-          <div className="overflow-x-auto">
-            <table className="w-full text-[11px] font-mono tabular">
-              <thead>
-                <tr className="border-b border-[var(--border-raw)] bg-[var(--bg-1)] text-left">
-                  <th className="px-3 py-2 text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    MONTH
-                  </th>
-                  <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    INCOME
-                  </th>
-                  <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    BILLS
-                  </th>
-                  <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    NET
-                  </th>
-                  <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    END BAL
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {months.slice(0, projectionMonths).map((m) => {
-                  const net = m.income - m.expense;
-                  return (
-                    <tr key={m.key} className="border-b border-[var(--border-raw)] last:border-0 hover:bg-[var(--bg-2)]">
-                      <td className="px-3 py-2 font-semibold text-[var(--text-0)] uppercase">{m.key}</td>
-                      <td className="px-3 py-2 text-right">
-                        <Money cents={m.income} />
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <Money cents={m.expense} />
-                      </td>
-                      <td className={cn("px-3 py-2 text-right font-bold", netClass(net))}>
-                        <Money cents={net} signed />
-                      </td>
-                      <td className={cn("px-3 py-2 text-right font-bold", balanceClass(m.ending))}>
-                        <Money cents={m.ending} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      <Card>
+        <CardHeader className="px-4 py-3">
+          <div>
+            <CardSubTag>AGENDA_01</CardSubTag>
+            <CardTitle className="mt-0.5 text-[14px]">NEXT {AGENDA_DAYS} DAYS</CardTitle>
           </div>
-        </Card>
-
-        <Card>
-          <CardHeader className="px-4 py-3">
-            <div>
-              <CardSubTag>LOG_01</CardSubTag>
-              <CardTitle className="mt-0.5 text-[14px]">UPCOMING EVENTS</CardTitle>
+          <Link
+            href="/calendar"
+            className="text-[10px] uppercase tracking-[0.15em] text-[var(--mint)] hover:text-[var(--mint-bright)]"
+          >
+            OPEN CALENDAR →
+          </Link>
+        </CardHeader>
+        <CardContent className="p-3 pt-0">
+          {agendaDays.length === 0 ? (
+            <div className="py-5 text-center text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+              Nothing scheduled in the next {AGENDA_DAYS} days
             </div>
-            <Link
-              href="/ledger"
-              className="text-[10px] uppercase tracking-[0.15em] text-[var(--mint)] hover:text-[var(--mint-bright)]"
-            >
-              VIEW ALL →
-            </Link>
-          </CardHeader>
-          <div className="px-2 py-1">
-            {upcomingEvents.length === 0 ? (
-              <div className="px-4 py-6 text-center text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-                No upcoming events
-              </div>
-            ) : (
-              upcomingEvents.map((row) => (
-                <div
-                  key={row.date}
-                  className="grid cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-[var(--border-raw)] px-3 py-2 last:border-0 hover:bg-[var(--bg-2)]"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate text-[11px] font-medium text-[var(--text-0)]">
-                      {row.events.map((e) => e.label).slice(0, 2).join(" + ")}
-                      {row.events.length > 2 ? ` +${row.events.length - 2}` : ""}
-                    </div>
-                    <div className="mt-1 text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-                      <DateLabel iso={row.date} format="short" /> ·{" "}
-                      {row.incomeCents > 0 ? "INCOME" : "EXPENSE"}
-                    </div>
-                  </div>
-                  <div
+          ) : (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {agendaDays.map((row) => {
+                const net = row.incomeCents - row.expenseCents;
+                return (
+                  <Link
+                    key={row.date}
+                    href="/calendar"
                     className={cn(
-                      "tabular text-[12px] font-bold",
-                      row.incomeCents > 0 ? "text-[var(--mint)]" : "text-[var(--red)]",
+                      "w-[190px] shrink-0 rounded-[10px] border bg-[var(--bg-1)] p-2.5 transition-colors hover:border-[var(--border-2)]",
+                      row.date === today ? "border-[var(--mint-dim)]" : "border-[var(--border-raw)]",
                     )}
                   >
-                    {row.incomeCents > 0 ? "+" : "−"}
-                    <Money cents={Math.abs(row.incomeCents - row.expenseCents)} />
-                  </div>
-                </div>
-              ))
-            )}
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-2)]">
+                        <DateLabel iso={row.date} format="short" />
+                      </span>
+                      <span className={cn("tabular text-[11px] font-bold", netClass(net))}>
+                        {net > 0 ? "+" : net < 0 ? "−" : ""}
+                        <Money cents={Math.abs(net)} />
+                      </span>
+                    </div>
+                    <div className="space-y-0.5">
+                      {row.events.slice(0, 3).map((ev, i) => {
+                        const credit = ev.kind === "paycheck" || (ev.kind === "extra" && ev.amountCents < 0);
+                        return (
+                          <div key={i} className="flex items-center justify-between gap-1.5 text-[10px] leading-tight">
+                            <span className="min-w-0 truncate text-[var(--text-1)]">{ev.label}</span>
+                            <span className={cn("tabular shrink-0", credit ? "text-[var(--mint)]" : "text-[var(--red)]")}>
+                              {credit ? "+" : "−"}
+                              <Money cents={Math.abs(ev.amountCents)} />
+                            </span>
+                          </div>
+                        );
+                      })}
+                      {row.events.length > 3 ? (
+                        <div className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                          +{row.events.length - 3} more
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between border-t border-[var(--border-raw)] pt-1.5 text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                      <span>END OF DAY</span>
+                      <span className={cn("tabular text-[10px] font-semibold", balanceClass(row.balanceCents))}>
+                        <Money cents={row.balanceCents} />
+                      </span>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="px-4 py-3">
+          <div>
+            <CardSubTag>TABLE_01</CardSubTag>
+            <CardTitle className="mt-0.5 text-[14px]">MONTHLY SUMMARY</CardTitle>
           </div>
-        </Card>
-      </div>
+          <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
+            PROJECTION_MONTHS = {projectionMonths}
+          </div>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11px] font-mono tabular">
+            <thead>
+              <tr className="border-b border-[var(--border-raw)] bg-[var(--bg-1)] text-left">
+                <th className="px-3 py-2 text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  MONTH
+                </th>
+                <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  INCOME
+                </th>
+                <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  BILLS
+                </th>
+                <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  NET
+                </th>
+                <th className="px-3 py-2 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  END BAL
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {months.slice(0, projectionMonths).map((m) => {
+                const net = m.income - m.expense;
+                return (
+                  <tr key={m.key} className="border-b border-[var(--border-raw)] last:border-0 hover:bg-[var(--bg-2)]">
+                    <td className="px-3 py-2 font-semibold text-[var(--text-0)] uppercase">{m.key}</td>
+                    <td className="px-3 py-2 text-right">
+                      <Money cents={m.income} />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <Money cents={m.expense} />
+                    </td>
+                    <td className={cn("px-3 py-2 text-right font-bold", netClass(net))}>
+                      <Money cents={net} signed />
+                    </td>
+                    <td className={cn("px-3 py-2 text-right font-bold", balanceClass(m.ending))}>
+                      <Money cents={m.ending} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
 
       {budgetUtilization.length > 0 && (
         <Card>
@@ -420,9 +413,4 @@ function daysBetween(a: string, b: string): number {
   const da = new Date(a + "T00:00:00Z").getTime();
   const db = new Date(b + "T00:00:00Z").getTime();
   return Math.max(0, Math.round((db - da) / (1000 * 60 * 60 * 24)));
-}
-
-function formatDelta(cents: number): string {
-  const dollars = Math.abs(cents) / 100;
-  return `$${dollars.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
 }
