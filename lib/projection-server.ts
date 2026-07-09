@@ -60,6 +60,15 @@ export type ProjectionBundle = {
   promoDriftByCard: Record<string, number>;
   /** Category names for variable bill charge groups, keyed by `cardId:dueDate`. */
   variableBillCategoriesByKey: Record<string, string[]>;
+  /**
+   * Posted Plaid drafts that settled a bill occurrence (linked mode only),
+   * keyed by draft id. Lets the transactions page mark a row as "this paid
+   * bill X" using the exact same matches the projection acted on.
+   */
+  billMatchesByDraftId: Record<
+    string,
+    { billId: string; billName: string; occurrenceDate: string }
+  >;
 };
 
 export const buildProjection = cache(_buildProjection);
@@ -168,6 +177,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     string,
     Array<{ date: string; paidAmountCents?: number }>
   >();
+  const billMatchesByDraftId: ProjectionBundle["billMatchesByDraftId"] = {};
   if (linked) {
     const recentDrafts = await listStartingBalanceDraftsInRange(
       userId,
@@ -187,10 +197,18 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
       })),
       recentDrafts,
     );
+    const billNameById = new Map(cashBills.map((b) => [b.id, b.name] as const));
     for (const m of matches) {
       const list = paidOccurrencesByBill.get(m.billId) ?? [];
       list.push({ date: m.occurrenceDate, paidAmountCents: m.paidAmountCents });
       paidOccurrencesByBill.set(m.billId, list);
+      for (const draftId of m.draftIds) {
+        billMatchesByDraftId[draftId] = {
+          billId: m.billId,
+          billName: billNameById.get(m.billId) ?? "Bill",
+          occurrenceDate: m.occurrenceDate,
+        };
+      }
     }
   }
   // Each draft on date D subtracts amountCents from the running balance
@@ -301,5 +319,6 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     promoSummariesByCard,
     promoDriftByCard: cardPayments.promoDriftByCard,
     variableBillCategoriesByKey: cardPayments.variableBillCategoriesByKey,
+    billMatchesByDraftId,
   };
 }

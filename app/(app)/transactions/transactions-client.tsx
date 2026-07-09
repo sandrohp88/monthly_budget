@@ -26,7 +26,10 @@ import { isSpecialFinancingCandidate } from "@/lib/plaid-promo-parser";
 import { looksLikeReversal } from "@/lib/plaid-transaction-kind";
 import type { DraftWithAccount } from "@/app/api/plaid/drafts/route";
 
-type FilterKey = "all" | "debits" | "credits" | "card_payments" | "promos";
+type FilterKey = "all" | "debits" | "credits" | "bills" | "card_payments" | "promos";
+
+/** A posted transaction the projection matched to a generated bill occurrence. */
+export type BillMatch = { billId: string; billName: string; occurrenceDate: string };
 
 function addMonthsIso(iso: string, months: number): string {
   const parts = iso.split("-").map(Number);
@@ -52,9 +55,11 @@ function isPromoCandidate(txn: DraftWithAccount): boolean {
 export function TransactionsClient({
   initialTransactions,
   categoryNames,
+  billMatches,
 }: {
   initialTransactions: DraftWithAccount[];
   categoryNames: string[];
+  billMatches: Record<string, BillMatch>;
 }) {
   const [transactions, setTransactions] = React.useState(initialTransactions);
   const [query, setQuery] = React.useState("");
@@ -108,6 +113,7 @@ export function TransactionsClient({
     return transactions.filter((txn) => {
       if (filter === "debits" && (txn.amountCents <= 0 || txn.kind === "card_payment")) return false;
       if (filter === "credits" && (txn.amountCents >= 0 || txn.kind === "card_payment")) return false;
+      if (filter === "bills" && !billMatches[txn.id]) return false;
       if (filter === "card_payments" && txn.kind !== "card_payment") return false;
       if (filter === "promos" && !isPromoCandidate(txn) && !txn.linkedPromoId) return false;
       if (!q) return true;
@@ -123,7 +129,7 @@ export function TransactionsClient({
         .toLowerCase()
         .includes(q);
     });
-  }, [filter, query, transactions]);
+  }, [billMatches, filter, query, transactions]);
 
   // Card payments are intra-account transfers (cash leaving the source account
   // → balance reduction on the linked card). They'd double-count if added to
@@ -131,6 +137,7 @@ export function TransactionsClient({
   const debits = transactions.filter((txn) => txn.amountCents > 0 && txn.kind !== "card_payment");
   const credits = transactions.filter((txn) => txn.amountCents < 0 && txn.kind !== "card_payment");
   const cardPayments = transactions.filter((txn) => txn.kind === "card_payment");
+  const billsPaid = transactions.filter((txn) => billMatches[txn.id]);
   const promoCandidates = transactions.filter(isPromoCandidate);
   // A payment and its bounce/reversal are BOTH kind=card_payment (opposite
   // signs vary by issuer), so neither a signed sum nor a magnitude sum is
@@ -164,12 +171,18 @@ export function TransactionsClient({
         <Tile label="DEBITS" value={debits.length} delta={<Money cents={debits.reduce((s, t) => s + t.amountCents, 0)} />} />
         <Tile label="CREDITS" value={credits.length} delta={<Money cents={Math.abs(credits.reduce((s, t) => s + t.amountCents, 0))} />} />
         <Tile label="CARD PAYMENTS" value={cardPayments.length} delta={<Money cents={cardPaymentsNetCents} />} />
+        <Tile
+          label="BILLS PAID"
+          value={billsPaid.length}
+          variant={billsPaid.length ? "mint" : "default"}
+          delta="auto-matched to scheduled bills"
+        />
         <Tile label="PROMO CANDIDATES" value={promoCandidates.length} variant={promoCandidates.length ? "amber" : "default"} delta="API evidence or PayPal > $150" />
       </TileGrid>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
-          {(["all", "debits", "credits", "card_payments", "promos"] as const).map((key) => (
+          {(["all", "debits", "credits", "bills", "card_payments", "promos"] as const).map((key) => (
             <button
               key={key}
               onClick={() => setFilter(key)}
@@ -210,6 +223,7 @@ export function TransactionsClient({
           <div className="divide-y divide-[var(--border-raw)]">
             {visible.map((txn) => {
               const isCredit = txn.amountCents < 0;
+              const billMatch = billMatches[txn.id];
               return (
                 <div
                   key={txn.id}
@@ -226,6 +240,12 @@ export function TransactionsClient({
                       <span>{txn.accountName}{txn.accountMask ? ` ****${txn.accountMask}` : ""}</span>
                       {txn.linkedCreditCardName ? <span className="text-[var(--mint)]">· {txn.linkedCreditCardName}</span> : null}
                       {txn.plaidCategory ? <span>· {txn.plaidCategory}</span> : null}
+                      {billMatch ? (
+                        <StatusPill>
+                          PAID BILL · {billMatch.billName}{" "}
+                          <DateLabel iso={billMatch.occurrenceDate} format="short" />
+                        </StatusPill>
+                      ) : null}
                       {txn.kind === "card_payment" ? <StatusPill>CARD PAYMENT</StatusPill> : null}
                       {txn.promoPayoffDate ? (
                         <StatusPill variant="amber">PAYOFF <DateLabel iso={txn.promoPayoffDate} format="short" /></StatusPill>
