@@ -23,6 +23,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tile, TileGrid } from "@/components/ui/tile";
 import { cn } from "@/lib/cn";
 import { isSpecialFinancingCandidate } from "@/lib/plaid-promo-parser";
+import { looksLikeReversal } from "@/lib/plaid-transaction-kind";
 import type { DraftWithAccount } from "@/app/api/plaid/drafts/route";
 
 type FilterKey = "all" | "debits" | "credits" | "card_payments" | "promos";
@@ -131,6 +132,18 @@ export function TransactionsClient({
   const credits = transactions.filter((txn) => txn.amountCents < 0 && txn.kind !== "card_payment");
   const cardPayments = transactions.filter((txn) => txn.kind === "card_payment");
   const promoCandidates = transactions.filter(isPromoCandidate);
+  // A payment and its bounce/reversal are BOTH kind=card_payment (opposite
+  // signs vary by issuer), so neither a signed sum nor a magnitude sum is
+  // honest — net reversals against payments instead: a $500 payment that
+  // bounced shows $0 paid, not $1,000.
+  const cardPaymentsNetCents = cardPayments.reduce(
+    (sum, t) =>
+      sum +
+      (looksLikeReversal(t.description, t.originalDescription)
+        ? -Math.abs(t.amountCents)
+        : Math.abs(t.amountCents)),
+    0,
+  );
 
   return (
     <div className="space-y-6 fade-in">
@@ -150,7 +163,7 @@ export function TransactionsClient({
         <Tile label="IMPORTED" value={transactions.length} delta="approved automatically" />
         <Tile label="DEBITS" value={debits.length} delta={<Money cents={debits.reduce((s, t) => s + t.amountCents, 0)} />} />
         <Tile label="CREDITS" value={credits.length} delta={<Money cents={Math.abs(credits.reduce((s, t) => s + t.amountCents, 0))} />} />
-        <Tile label="CARD PAYMENTS" value={cardPayments.length} delta={<Money cents={cardPayments.reduce((s, t) => s + Math.abs(t.amountCents), 0)} />} />
+        <Tile label="CARD PAYMENTS" value={cardPayments.length} delta={<Money cents={cardPaymentsNetCents} />} />
         <Tile label="PROMO CANDIDATES" value={promoCandidates.length} variant={promoCandidates.length ? "amber" : "default"} delta="API evidence or PayPal > $150" />
       </TileGrid>
 

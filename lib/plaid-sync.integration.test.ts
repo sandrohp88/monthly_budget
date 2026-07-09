@@ -906,8 +906,120 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
     const stmts = await listStatements(card.id);
     const older = stmts.find((s) => s.id === statementOlder.id)!;
     const newer = stmts.find((s) => s.id === statementNewer.id)!;
-    const paidCount = [older, newer].filter((s) => s.paidAmountCents != null).length;
-    expect(paidCount).toBe(1);
+    // And it must be the CURRENT cycle (due today), stamped with the draft
+    // that paid it — a count-only assertion would stay green if the matcher's
+    // ordering regressed and settled last month's statement instead.
+    expect(newer.paidAmountCents).toBe(300_00);
+    expect(newer.settledByDraftId).toBe("pay_double");
+    expect(older.paidAmountCents).toBeNull();
+    expect(older.settledByDraftId).toBeNull();
+  });
+
+  it("a payment whose statement was paid by another path cannot settle the next cycle", async () => {
+    // The settle-once gate only records DRAFT-path settlements; statements
+    // marked paid manually (or by the Liabilities sync, or restored from a
+    // pre-0024 backup) carry no settledByDraftId. The already-accounted
+    // heuristic must consume the payment draft against that paid statement
+    // instead of letting it "settle" the next cycle of the same amount.
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_chase",
+      institutionName: "Chase",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_accounted",
+      itemId: item.id,
+      userId: user.id,
+      name: "Sapphire",
+      mask: "1111",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 300_00,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Sapphire",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: true,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_accounted");
+    const today = todayIso();
+    // Last cycle: already marked paid WITHOUT a settledByDraftId (manual /
+    // Liabilities / pre-0024 provenance), paid by the very payment below.
+    const statementPaidElsewhere = await createStatement(card.id, {
+      statementDate: addDaysIso(today, -28),
+      dueDate: addDaysIso(today, -2),
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: 300_00,
+      paidDate: addDaysIso(today, -2),
+      notes: null,
+    });
+    // Current cycle: same fixed amount, unpaid, due within the match window.
+    const statementOpen = await createStatement(card.id, {
+      statementDate: addDaysIso(today, -1),
+      dueDate: addDaysIso(today, 26),
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [
+          {
+            transaction_id: "pay_accounted",
+            account_id: "acct_accounted",
+            pending: false,
+            date: addDaysIso(today, -2),
+            name: "Autopay Payment Thank You",
+            original_description: "AUTOPAY PAYMENT",
+            amount: 300.0,
+            personal_finance_category: {
+              primary: "LOAN_PAYMENTS",
+              detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+            },
+            merchant_name: null,
+          },
+        ],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.statementsReconciled).toBe(0);
+
+    const stmts = await listStatements(card.id);
+    const paidElsewhere = stmts.find((s) => s.id === statementPaidElsewhere.id)!;
+    const open = stmts.find((s) => s.id === statementOpen.id)!;
+    // The draft was consumed against the already-paid cycle (stamped for
+    // provenance), and the open statement stayed open.
+    expect(paidElsewhere.settledByDraftId).toBe("pay_accounted");
+    expect(open.paidAmountCents).toBeNull();
+    expect(open.settledByDraftId).toBeNull();
+
+    // Idempotent across syncs: the consumed draft never settles the open one.
+    const again = await syncPlaidTransactions(user.id, item.id);
+    expect(again.statementsReconciled).toBe(0);
+    expect(
+      (await listStatements(card.id)).find((s) => s.id === statementOpen.id)!.paidAmountCents,
+    ).toBeNull();
   });
 });
 
