@@ -55,7 +55,7 @@ export function MobileNav({
 
         {/* nav */}
         <nav className="flex-1 overflow-y-auto py-3">
-          <SectionLabel>Plan</SectionLabel>
+          <SectionLabel>Core</SectionLabel>
           {NAV.filter((n) => n.section === 1).map((item) => {
             const Icon = item.icon;
             const active = pathname === item.href;
@@ -76,7 +76,7 @@ export function MobileNav({
               </Link>
             );
           })}
-          <SectionLabel className="mt-4">Manage</SectionLabel>
+          <SectionLabel className="mt-4">More</SectionLabel>
           {NAV.filter((n) => n.section === 2).map((item) => {
             const Icon = item.icon;
             const active = pathname === item.href;
