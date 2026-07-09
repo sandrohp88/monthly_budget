@@ -20,7 +20,7 @@ import {
   updateCardCycleDays,
   upsertCreditCardStatementByDate,
   updateStatement,
-  findMatchingOpenStatement,
+  settleStatementWithDraft,
   getStatementSettledByDraft,
   updatePlaidDraft,
   deletePlaidDraft,
@@ -127,15 +127,12 @@ async function autoCreatePromoFromTransaction(input: {
  * requires the magnitude to be within ~$1 of the statement balance, so a
  * partial payment on a revolving card does NOT clear the statement.
  *
- * A draft settles at most one statement, EVER — `getStatementSettledByDraft`
- * gates on that before matching, so a payment already consumed by one cycle
- * can't later "settle" another (a new statement appearing on a later sync
- * that happens to fall in the same amount/date window, or this same sync's
- * post-loop backfill re-scanning the draft it just reconciled inline).
- *
- * Idempotent: `findMatchingOpenStatement` only returns statements with no
- * recorded payment, so a re-synced (or backfilled) draft finds nothing to
- * settle and the promo decrement never double-fires.
+ * A draft settles at most one statement, EVER — `settleStatementWithDraft`
+ * owns that invariant (global consumption gate + already-accounted heuristic
+ * + unpaid-only matching + the §17a promo edge), so this function is just the
+ * Plaid-side guards: classification, reversal shape, and the active linked
+ * card. Idempotent by construction — a re-synced or backfilled draft is
+ * consumed and settles nothing further.
  *
  * Returns true when it settled a statement.
  */
@@ -165,25 +162,17 @@ async function reconcileCardPaymentDraft(input: {
   const linkedCard = await getCreditCardByPlaidAccountId(input.userId, input.accountId);
   if (!linkedCard || !linkedCard.isActive) return false;
 
-  const alreadySettled = await getStatementSettledByDraft(linkedCard.id, input.transactionId);
-  if (alreadySettled) return false;
-
-  const match = await findMatchingOpenStatement(input.userId, paymentCents, input.date, {
+  const settled = await settleStatementWithDraft(input.userId, {
+    draftId: input.transactionId,
     cardId: linkedCard.id,
+    paymentCents,
+    date: input.date,
   });
-  if (!match) return false;
+  if (!settled) return false;
 
-  await updateStatement(match.id, {
-    paidAmountCents: paymentCents,
-    paidDate: input.date,
-    settledByDraftId: input.transactionId,
-  });
-  // findMatchingOpenStatement only returns unpaid statements, so this is always
-  // the unpaid→paid edge — decrement promos exactly once.
-  await applyPromoChunksForPaidStatement(input.userId, match.cardId, match.statementDate);
   log.info(
     `plaid-sync: reconciled card_payment ${input.transactionId} ` +
-      `($${(paymentCents / 100).toFixed(2)}) → statement ${match.id} on card ${match.cardId} (marked paid)`,
+      `($${(paymentCents / 100).toFixed(2)}) → statement ${settled.id} on card ${settled.cardId} (marked paid)`,
   );
   return true;
 }
@@ -228,14 +217,22 @@ async function reconcileExistingCardPaymentDrafts(
     linkedCards.map((card) => card.plaidAccountId).filter((id): id is string => id != null),
   );
 
+  // One statement load per linked card, shared by the two derivations below.
+  const statementsPerCard = await Promise.all(linkedCards.map((card) => listStatements(card.id)));
+
   // Steady-state short-circuit: once every linked card's statements are
   // settled, no draft could possibly reconcile. This only skips the
-  // expensive per-draft reconcile attempt (getCreditCardByPlaidAccountId +
-  // getStatementSettledByDraft + a full per-card statement scan) below —
-  // the kind correction pass still runs so a fixed/tightened classifier rule
-  // keeps correcting mislabeled drafts even with nothing left to settle.
-  const anyOpenStatements = (await Promise.all(linkedCards.map((card) => listStatements(card.id)))).some(
-    (stmts) => stmts.some(isStatementOpen),
+  // expensive per-draft reconcile attempt below — the kind correction pass
+  // still runs so a fixed/tightened classifier rule keeps correcting
+  // mislabeled drafts even with nothing left to settle.
+  const anyOpenStatements = statementsPerCard.some((stmts) => stmts.some(isStatementOpen));
+
+  // Drafts that have PROVABLY settled a statement are payments regardless of
+  // what the current (possibly tightened) heuristic says about their stored
+  // category/description — never flip them back to expense, or the same
+  // dollars count as spend while the settled statement also represents them.
+  const settledDraftIds = new Set(
+    statementsPerCard.flat().map((s) => s.settledByDraftId).filter((id): id is string => id != null),
   );
 
   // Pending transactions haven't posted yet — they're picked up once they
@@ -251,13 +248,15 @@ async function reconcileExistingCardPaymentDrafts(
 
     // Stored drafts keep only the PRIMARY category — looksLikeCardPayment
     // works off that + the description.
-    const verdict: "expense" | "card_payment" = looksLikeCardPayment({
-      primaryCategory: draft.plaidCategory,
-      description: draft.description,
-      amountCents: draft.amountCents,
-    })
-      ? "card_payment"
-      : "expense";
+    const verdict: "expense" | "card_payment" =
+      settledDraftIds.has(draft.id) ||
+      looksLikeCardPayment({
+        primaryCategory: draft.plaidCategory,
+        description: draft.description,
+        amountCents: draft.amountCents,
+      })
+        ? "card_payment"
+        : "expense";
     if (draft.kind !== verdict) {
       await updatePlaidDraft(userId, draft.id, { kind: verdict });
     }
@@ -504,6 +503,15 @@ export async function syncPlaidTransactions(
             })
           ) {
             totalStatementsReconciled++;
+          } else if (kind === "card_payment") {
+            // A new payment that settled nothing is worth one log line: the
+            // $1 match tolerance deliberately leaves partial/adjusted payments
+            // unmatched, and this is the only signal that it happened.
+            log.info(
+              `plaid-sync: card_payment ${txn.transaction_id} ` +
+                `($${(Math.abs(amountCents) / 100).toFixed(2)} on ${txn.date}) ` +
+                `did not match any open statement — leaving unreconciled`,
+            );
           }
 
           added++;
@@ -578,25 +586,47 @@ export async function syncPlaidTransactions(
         // or promo already created a separate record, so this doesn't erase
         // anything the user actioned.
         for (const removedTxn of data.removed) {
-          if (removedTxn.transaction_id) {
-            await deletePlaidDraft(userId, removedTxn.transaction_id);
+          if (!removedTxn.transaction_id) continue;
+          // If this draft had auto-settled a statement, the payment it
+          // represented no longer exists — un-settle so the statement's cash
+          // due re-enters the projection instead of silently vanishing. Promo
+          // chunks decremented on the unpaid→paid edge are NOT auto-restored
+          // (§17a keeps promo mutation on that edge only) — log loudly so the
+          // user can reconcile promo balances manually.
+          const settledStmt = await getStatementSettledByDraft(userId, removedTxn.transaction_id);
+          if (settledStmt && settledStmt.paidAmountCents != null) {
+            await updateStatement(settledStmt.id, {
+              paidAmountCents: null,
+              paidDate: null,
+              settledByDraftId: null,
+            });
+            log.warn(
+              `plaid-sync: transaction ${removedTxn.transaction_id} was removed by Plaid but had ` +
+                `settled statement ${settledStmt.id} — statement re-opened; if this card has active ` +
+                `promos, their remaining balances may need manual reconciliation`,
+            );
           }
+          await deletePlaidDraft(userId, removedTxn.transaction_id);
         }
         removed += data.removed.length;
       }
 
       // Persist the advanced cursor.
       await updatePlaidItemCursor(item.id, cursor ?? "", Date.now());
-      // Fetched once and shared across the three post-sync passes below,
-      // instead of each re-querying the user's full approved-drafts list.
+      // Fetched once and shared by the two promo passes below.
       const approvedDrafts = await listPlaidDrafts(userId, "approved");
       await autoCreatePromosFromExistingDrafts(userId, item.id, approvedDrafts);
       await seedPayPalSpecialFinancingPromos(userId, item.id, approvedDrafts);
       // Catch up payments synced before card-payment detection existed.
+      // Re-fetched AFTER the promo passes: they set linkedPromoId on drafts
+      // they act on, and the reconcile pass's user-actioned guard must see
+      // those writes — a stale array would let it flip the kind of (and
+      // reconcile) a draft that was promo-linked seconds earlier.
+      const draftsAfterPromoPasses = await listPlaidDrafts(userId, "approved");
       totalStatementsReconciled += await reconcileExistingCardPaymentDrafts(
         userId,
         item.id,
-        approvedDrafts,
+        draftsAfterPromoPasses,
       );
 
       totalAdded += added;
