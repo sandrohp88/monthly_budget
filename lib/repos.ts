@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lt, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
 import { statementCashDueCents } from "./credit-cards";
 import {
@@ -2033,7 +2033,17 @@ export async function upsertPlaidDraft(data: NewPlaidTransactionDraft): Promise<
         plaidCategory: data.plaidCategory,
         merchantName: data.merchantName,
         pending: data.pending,
-        kind: data.kind,
+        // A user-actioned draft (approved into a real expense or promo) keeps
+        // its kind: a Plaid re-categorization arriving via `modified` must not
+        // flip a row whose money is already represented elsewhere — same guard
+        // the sync backfill applies on its path. Unqualified/table-qualified
+        // columns in DO UPDATE refer to the EXISTING row in SQLite.
+        kind: sql`CASE
+          WHEN ${plaidTransactionDrafts.linkedExpenseId} IS NOT NULL
+            OR ${plaidTransactionDrafts.linkedPromoId} IS NOT NULL
+          THEN ${plaidTransactionDrafts.kind}
+          ELSE ${data.kind ?? "expense"}
+        END`,
       },
     })
     .run();
