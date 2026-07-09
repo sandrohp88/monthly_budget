@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gte, inArray, lt, lte } from "drizzle-orm";
 import { getDb } from "./db/client";
+import { statementCashDueCents } from "./credit-cards";
 import {
   assets,
   bills,
@@ -1184,76 +1185,129 @@ export async function listStatementsForUser(
 const STATEMENT_MATCH_TOLERANCE_CENTS = 100;
 
 /**
- * Find an unpaid statement whose balance is within
- * `STATEMENT_MATCH_TOLERANCE_CENTS` of `amountCents` and whose DUE date is
- * within `dateRangeDays` of `aroundDate` (a card payment posts near the due
- * date, not the statement close). Used to auto-match a posted LOAN_PAYMENTS
- * transaction to the statement it settled.
- *
- * When `cardId` is supplied (the card linked to the payment's Plaid account),
- * only that card's statements are considered — otherwise all of the user's
- * cards are scanned. The most recent matching statement wins.
- */
-export async function findMatchingOpenStatement(
-  userId: string,
-  amountCents: number,
-  aroundDate: string,
-  opts: { dateRangeDays?: number; cardId?: string } = {},
-): Promise<(CreditCardStatementRow & { cardId: string }) | null> {
-  const dateRangeDays = opts.dateRangeDays ?? 35;
-  const db = getDb();
-  const allCards = await listCreditCards(userId, false);
-  const cards = opts.cardId ? allCards.filter((c) => c.id === opts.cardId) : allCards;
-  if (cards.length === 0) return null;
-
-  const targetTime = new Date(aroundDate).getTime();
-  for (const card of cards) {
-    const stmts = await db
-      .select()
-      .from(creditCardStatements)
-      .where(eq(creditCardStatements.cardId, card.id))
-      .orderBy(desc(creditCardStatements.statementDate))
-      .all();
-
-    for (const s of stmts) {
-      // Already paid (any recorded payment) — skip.
-      if (s.paidAmountCents != null) continue;
-
-      // Proximity to the DUE date (when a payment actually posts).
-      const dueTime = new Date(s.dueDate).getTime();
-      const dayDiff = Math.abs(dueTime - targetTime) / (1000 * 60 * 60 * 24);
-      if (dayDiff > dateRangeDays) continue;
-
-      if (Math.abs(s.statementBalanceCents - amountCents) <= STATEMENT_MATCH_TOLERANCE_CENTS) {
-        return { ...s, cardId: card.id };
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Has `draftId` already settled a statement on `cardId`? A payment draft may
- * settle at most one statement, ever — without this gate the same draft can
- * "settle" a second statement later (a new unpaid statement appearing within
- * the match window on a later sync) or even in the same sync run (the
- * post-sync backfill re-scanning the draft it just reconciled inline).
+ * Has `draftId` already settled (or been consumed by) a statement anywhere in
+ * this user's account? A payment draft may settle at most one statement, EVER
+ * — globally, not per card, so re-linking a Plaid account to a different card
+ * can't free an already-spent draft. Backed by the partial UNIQUE index from
+ * migration 0025, which makes a double-spend a constraint violation even if a
+ * future code path skips this check.
  */
 export async function getStatementSettledByDraft(
-  cardId: string,
+  userId: string,
   draftId: string,
 ): Promise<CreditCardStatementRow | undefined> {
   const db = getDb();
-  return db
-    .select()
+  const row = await db
+    .select({ statement: creditCardStatements })
     .from(creditCardStatements)
+    .innerJoin(creditCards, eq(creditCardStatements.cardId, creditCards.id))
     .where(
       and(
-        eq(creditCardStatements.cardId, cardId),
+        eq(creditCards.userId, userId),
         eq(creditCardStatements.settledByDraftId, draftId),
       ),
     )
     .get();
+  return row?.statement;
+}
+
+/**
+ * Consume a payment draft against the card's statements — the ONLY path that
+ * may mark a statement paid from a Plaid draft. One atomic decision per call:
+ *
+ * 1. Draft already consumed (globally) → no-op.
+ * 2. A PAID statement of unknown provenance (no settledByDraftId — marked paid
+ *    manually, by the Liabilities sync, restored from a pre-0024 backup)
+ *    matches this payment's window and amount → assume this draft IS that
+ *    payment: stamp it for provenance and consume the draft WITHOUT settling
+ *    anything new. This is what stops a payment whose statement was paid by
+ *    another path from "settling" the next cycle.
+ * 3. An UNPAID statement's cash due (statementCashDueCents — the minimum for
+ *    PayPal $0-balance statements, the balance otherwise) matches within
+ *    `STATEMENT_MATCH_TOLERANCE_CENTS` and the due date is within
+ *    `dateRangeDays` of the payment date → mark it paid, stamp the draft, and
+ *    fire the unpaid→paid promo edge exactly once (§17a).
+ *
+ * Returns the newly-settled statement, or null when nothing was settled
+ * (consumed, accounted, or no match).
+ */
+export async function settleStatementWithDraft(
+  userId: string,
+  input: {
+    draftId: string;
+    cardId: string;
+    paymentCents: number;
+    date: string;
+    dateRangeDays?: number;
+  },
+): Promise<(CreditCardStatementRow & { cardId: string }) | null> {
+  const dateRangeDays = input.dateRangeDays ?? 35;
+  if (input.paymentCents <= 0) return null;
+
+  const consumed = await getStatementSettledByDraft(userId, input.draftId);
+  if (consumed) return null;
+
+  const db = getDb();
+  const stmts = await db
+    .select()
+    .from(creditCardStatements)
+    .where(eq(creditCardStatements.cardId, input.cardId))
+    .orderBy(desc(creditCardStatements.statementDate))
+    .all();
+
+  const targetTime = new Date(input.date).getTime();
+  const withinWindow = (s: CreditCardStatementRow) =>
+    Math.abs(new Date(s.dueDate).getTime() - targetTime) / (1000 * 60 * 60 * 24) <=
+    dateRangeDays;
+  const amountMatches = (cents: number) =>
+    Math.abs(cents - input.paymentCents) <= STATEMENT_MATCH_TOLERANCE_CENTS;
+
+  // Step 2 — already-accounted heuristic (statements are newest-first, so the
+  // most recent plausible cycle wins).
+  const accounted = stmts.find(
+    (s) =>
+      s.paidAmountCents != null &&
+      s.settledByDraftId == null &&
+      withinWindow(s) &&
+      (amountMatches(s.paidAmountCents) || amountMatches(statementCashDueCents(s))),
+  );
+  if (accounted) {
+    await db
+      .update(creditCardStatements)
+      .set({ settledByDraftId: input.draftId })
+      .where(eq(creditCardStatements.id, accounted.id))
+      .run();
+    return null;
+  }
+
+  // Step 3 — settle an open statement by its cash due.
+  const match = stmts.find((s) => {
+    if (s.paidAmountCents != null) return false;
+    const dueCents = statementCashDueCents(s);
+    if (dueCents <= 0) return false;
+    return withinWindow(s) && amountMatches(dueCents);
+  });
+  if (!match) return null;
+
+  await db
+    .update(creditCardStatements)
+    .set({
+      paidAmountCents: input.paymentCents,
+      paidDate: input.date,
+      settledByDraftId: input.draftId,
+    })
+    .where(eq(creditCardStatements.id, match.id))
+    .run();
+  // The match was unpaid, so this is always the unpaid→paid edge — decrement
+  // promos exactly once (§17a).
+  await applyPromoChunksForPaidStatement(userId, input.cardId, match.statementDate);
+  return {
+    ...match,
+    cardId: input.cardId,
+    paidAmountCents: input.paymentCents,
+    paidDate: input.date,
+    settledByDraftId: input.draftId,
+  };
 }
 
 export async function getStatement(
@@ -2242,7 +2296,7 @@ export async function exportAll(userId: string) {
   ]);
   return {
     exportedAt: new Date().toISOString(),
-    schemaVersion: 7,
+    schemaVersion: 8,
     settings: s,
     bills: b,
     billPaymentOverrides: bo,
@@ -2466,6 +2520,7 @@ function importInsideTransaction(
       paidAmountCents: s.paidAmountCents ?? null,
       paidDate: s.paidDate ?? null,
       notes: s.notes ?? null,
+      settledByDraftId: s.settledByDraftId ?? null,
     }).run();
   }
 
