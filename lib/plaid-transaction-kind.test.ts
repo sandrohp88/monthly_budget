@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyDraftKind } from "./plaid-transaction-kind";
+import { classifyDraftKind, looksLikeReversal } from "./plaid-transaction-kind";
 
 describe("classifyDraftKind", () => {
   it("classifies LOAN_PAYMENTS_CREDIT_CARD_PAYMENT on a credit account as card_payment", () => {
@@ -158,5 +158,54 @@ describe("classifyDraftKind", () => {
         description: "Balance Transfer Payment to Chase",
       }),
     ).toBe("expense");
+  });
+
+  it("does not classify a NEGATIVE merchant refund with a payment keyword as card_payment", () => {
+    // A refund wears the purchase's own descriptor: 'GEICO *AUTOPAY' negated
+    // is the premium coming back, not a card payment. Negative + keyword must
+    // not outrank the merchant category.
+    expect(
+      classifyDraftKind({
+        amountCents: -18632,
+        accountType: "credit",
+        accountIsLinkedToCard: true,
+        primaryCategory: "INSURANCE",
+        detailedCategory: "INSURANCE_AUTO",
+        description: "GEICO *AUTOPAY",
+      }),
+    ).toBe("expense");
+  });
+
+  it("classifies a negative keyword payment with no category as card_payment", () => {
+    // Issuers sometimes omit the category entirely on the credit-side payment;
+    // negative (money in) + an unmistakable payment phrase is enough then.
+    expect(
+      classifyDraftKind({
+        amountCents: -30000,
+        accountType: "credit",
+        accountIsLinkedToCard: true,
+        primaryCategory: null,
+        detailedCategory: null,
+        description: "Online Payment - Thank You",
+      }),
+    ).toBe("card_payment");
+  });
+});
+
+describe("looksLikeReversal", () => {
+  it("flags the common bounce/return vocabulary", () => {
+    expect(looksLikeReversal("Payment Returned", null)).toBe(true);
+    expect(looksLikeReversal("AUTOPAY PYMT REJECTED - NSF", null)).toBe(true);
+    expect(looksLikeReversal("PAYMENT REVERSAL", null)).toBe(true);
+    expect(looksLikeReversal("PMT RTN INSUFFICIENT FUNDS", null)).toBe(true);
+    expect(looksLikeReversal("CHARGEBACK CREDIT", null)).toBe(true);
+    expect(looksLikeReversal("REFUND ADJUSTMENT", null)).toBe(true);
+    expect(looksLikeReversal(null, "POINTS REDEMPTION PAYMENT")).toBe(true);
+  });
+
+  it("does not flag transfer-worded payments ('nsf' hides inside 'transfer')", () => {
+    expect(looksLikeReversal("ONLINE TRANSFER PAYMENT", null)).toBe(false);
+    expect(looksLikeReversal("Payment Thank You - Web", null)).toBe(false);
+    expect(looksLikeReversal("AUTOPAY PAYMENT", "ELECTRONIC PAYMENT FROM CHK")).toBe(false);
   });
 });
