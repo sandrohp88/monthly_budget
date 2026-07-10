@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Pencil, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
+import { Link2, Pencil, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,6 +31,8 @@ type FilterKey = "all" | "debits" | "credits" | "bills" | "card_payments" | "pro
 /** A posted transaction the projection matched to a generated bill occurrence. */
 export type BillMatch = { billId: string; billName: string; occurrenceDate: string };
 
+export type BillOption = { id: string; name: string };
+
 function addMonthsIso(iso: string, months: number): string {
   const parts = iso.split("-").map(Number);
   const year = parts[0] ?? new Date().getUTCFullYear();
@@ -56,10 +58,12 @@ export function TransactionsClient({
   initialTransactions,
   categoryNames,
   billMatches,
+  bills = [],
 }: {
   initialTransactions: DraftWithAccount[];
   categoryNames: string[];
   billMatches: Record<string, BillMatch>;
+  bills?: BillOption[];
 }) {
   const [transactions, setTransactions] = React.useState(initialTransactions);
   const [query, setQuery] = React.useState("");
@@ -67,6 +71,9 @@ export function TransactionsClient({
   const [syncing, setSyncing] = React.useState(false);
   const [editing, setEditing] = React.useState<DraftWithAccount | null>(null);
   const [promoTxn, setPromoTxn] = React.useState<DraftWithAccount | null>(null);
+  const [linkingTxn, setLinkingTxn] = React.useState<DraftWithAccount | null>(null);
+
+  const billNameById = React.useMemo(() => new Map(bills.map((b) => [b.id, b.name])), [bills]);
 
   const refresh = React.useCallback(async () => {
     const res = await fetch("/api/plaid/drafts?status=approved");
@@ -246,6 +253,17 @@ export function TransactionsClient({
                           <DateLabel iso={billMatch.occurrenceDate} format="short" />
                         </StatusPill>
                       ) : null}
+                      {txn.linkedBillId ? (
+                        <StatusPill variant="off" className="cursor-pointer">
+                          <button
+                            type="button"
+                            title="Manually linked — click to change or unlink"
+                            onClick={() => setLinkingTxn(txn)}
+                          >
+                            LINKED · {billNameById.get(txn.linkedBillId)?.toUpperCase() ?? "BILL"}
+                          </button>
+                        </StatusPill>
+                      ) : null}
                       {txn.kind === "card_payment" ? <StatusPill>CARD PAYMENT</StatusPill> : null}
                       {txn.promoPayoffDate ? (
                         <StatusPill variant="amber">PAYOFF <DateLabel iso={txn.promoPayoffDate} format="short" /></StatusPill>
@@ -269,6 +287,17 @@ export function TransactionsClient({
                     ) : null}
                   </div>
                   <div className="flex justify-end gap-1">
+                    {txn.amountCents > 0 && txn.kind !== "card_payment" ? (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label="Link to bill"
+                        title={txn.linkedBillId ? "Change bill link" : "Link to a bill"}
+                        onClick={() => setLinkingTxn(txn)}
+                      >
+                        <Link2 className={cn("h-3.5 w-3.5", txn.linkedBillId && "text-[var(--mint)]")} />
+                      </Button>
+                    ) : null}
                     <Button size="icon" variant="ghost" aria-label="Edit" onClick={() => setEditing(txn)}>
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
@@ -305,7 +334,94 @@ export function TransactionsClient({
           }}
         />
       ) : null}
+
+      {linkingTxn ? (
+        <TransactionBillLinkDialog
+          transaction={linkingTxn}
+          bills={bills}
+          onClose={() => setLinkingTxn(null)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function TransactionBillLinkDialog({
+  transaction,
+  bills,
+  onClose,
+}: {
+  transaction: DraftWithAccount;
+  bills: BillOption[];
+  onClose: () => void;
+}) {
+  const [billId, setBillId] = React.useState<string>(transaction.linkedBillId ?? "");
+  const [saving, setSaving] = React.useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/plaid/drafts/${transaction.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "link_bill", billId: billId === "" ? null : billId }),
+      });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Link failed");
+      // The paid-marker reconciliation runs server-side — reload so the
+      // projection re-matches with the new link (and learned alias).
+      window.location.reload();
+    } catch (err) {
+      toast.error((err as Error).message);
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <CardSubTag>BILL_LINK</CardSubTag>
+          <DialogTitle>LINK TRANSACTION TO BILL</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-[11px]">
+            <div className="font-semibold uppercase tracking-[0.08em] text-[var(--text-0)]">
+              {displayName(transaction)}
+            </div>
+            <div className="mt-0.5 text-[10px] uppercase tracking-[0.1em] text-[var(--text-3)]">
+              <DateLabel iso={transaction.date} format="short" /> ·{" "}
+              <Money cents={Math.abs(transaction.amountCents)} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="link-bill">BILL</Label>
+            <select
+              id="link-bill"
+              value={billId}
+              onChange={(e) => setBillId(e.target.value)}
+              className="w-full rounded-sm border border-[var(--border-2)] bg-[var(--bg-1)] px-3 py-2 text-[11px] uppercase tracking-[0.08em] text-[var(--text-0)] focus:outline-none focus:ring-1 focus:ring-[var(--mint)]"
+            >
+              <option value="">— NOT LINKED —</option>
+              {bills.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </div>
+          <p className="text-[10px] leading-relaxed tracking-wide text-[var(--text-3)]">
+            The reconciliation treats this transaction as paying the selected bill, and future
+            transactions with the same wording become match candidates for it automatically.
+          </p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={saving}>CANCEL</Button>
+            <Button type="submit" variant="primary" disabled={saving}>
+              {saving ? "SAVING..." : "SAVE LINK"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

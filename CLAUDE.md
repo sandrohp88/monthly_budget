@@ -327,6 +327,8 @@ weird gets emitted before merging.
 - `0021_add_category_budget` — `categories.budget_amount_cents`.
 - `0022_soft_delete_extras_paychecks` — `is_active` on `paychecks` + `one_time_expenses`.
 - `0023_add_assets` — `assets` table (manual net-worth lines; not part of the cash projection).
+- `0024_settled_by_draft_id` / `0025_settled_by_draft_unique` — `credit_card_statements.settled_by_draft_id` + partial unique index (card-payment reconciliation, PRs #57–59).
+- `0026_link_drafts_to_bills` — `plaid_transaction_drafts.linked_bill_id` (manual transaction→bill link; reconciliation treats the draft as paying that bill and learns its descriptor as an alias for future months). No DB-level FK — SQLite ALTER TABLE can't add one; bills are archived, never deleted.
 
 ---
 
@@ -669,6 +671,21 @@ the card's statement payment will carry it (avoids double-counting). If the
 linked card is later archived, the bill **falls back to cash** in the
 projection so a recurring obligation never disappears silently. See the filter
 in `lib/projection-server.ts` (`cashBills`).
+
+### Bill reconciliation (auto + manual links)
+`lib/bill-reconciliation.ts` (pure) matches posted drafts on starting-balance
+accounts to generated bill occurrences so paid bills render as PAID markers
+instead of pending debits (linked mode only — see the wiring in
+`lib/projection-server.ts`). Matching is name-based and conservative; when the
+heuristic can't see a match (e.g. two same-utility bills whose names don't
+appear in the bank descriptor), the user can **manually link** a transaction
+to a bill on `/transactions` (`plaid_transaction_drafts.linked_bill_id`,
+PATCH action `link_bill`). Manual links bypass the name gate, win their
+occurrence over heuristic candidates, and every linked draft's descriptor
+becomes a **learned alias** for that bill (`listBillLinkDescriptors`) so
+future months' identically-worded transactions match automatically. The
+settle threshold (`SETTLE_MIN_FRACTION`) still applies to linked drafts — a
+tiny linked payment won't mark a large bill paid.
 
 ### Adding Plaid features — recipe
 1. New repo function in `lib/repos.ts` (always user-scoped).

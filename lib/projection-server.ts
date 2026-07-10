@@ -9,6 +9,7 @@ import {
   listCreditCards,
   listExtras,
   listPaychecks,
+  listBillLinkDescriptors,
   listPlaidAccounts,
   listAllPromoPayments,
   listPromos,
@@ -189,11 +190,24 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   const billMatchesByDraftId: ProjectionBundle["billMatchesByDraftId"] = {};
   const paidOccurrencesByBillOut: ProjectionBundle["paidOccurrencesByBill"] = {};
   if (linked) {
-    const recentDrafts = await listStartingBalanceDraftsInRange(
-      userId,
-      addDaysIso(today, -RECONCILE_LOOKBACK_DAYS),
-      today,
-    );
+    const [recentDrafts, linkDescriptors] = await Promise.all([
+      listStartingBalanceDraftsInRange(
+        userId,
+        addDaysIso(today, -RECONCILE_LOOKBACK_DAYS),
+        today,
+      ),
+      listBillLinkDescriptors(userId),
+    ]);
+    // Every descriptor the user ever manually linked to a bill becomes an
+    // alias: banks repeat the same wording each month, so one link teaches
+    // all future cycles.
+    const aliasesByBill = new Map<string, string[]>();
+    for (const d of linkDescriptors) {
+      const list = aliasesByBill.get(d.billId) ?? [];
+      list.push(d.description);
+      if (d.merchantName) list.push(d.merchantName);
+      aliasesByBill.set(d.billId, list);
+    }
     const matches = matchPaidBillOccurrences(
       cashBills.map((b) => ({
         id: b.id,
@@ -206,6 +220,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
         ),
       })),
       recentDrafts,
+      { aliasesByBill },
     );
     const billNameById = new Map(cashBills.map((b) => [b.id, b.name] as const));
     for (const m of matches) {

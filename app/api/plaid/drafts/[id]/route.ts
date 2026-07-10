@@ -2,10 +2,12 @@ import { NextResponse } from "next/server";
 import { ensureUser, readJson, jsonError } from "@/lib/api";
 import { plaidDraftActionSchema } from "@/lib/validation";
 import {
+  getBill,
   getPlaidDraft,
   updatePlaidDraft,
   deletePlaidDraft,
   updatePlaidDraftStatus,
+  setPlaidDraftBillLink,
   createExtra,
   createPromo,
   getCreditCardByPlaidAccountId,
@@ -39,6 +41,22 @@ export async function PATCH(
       amountCents: body.amountCents ?? draft.amountCents,
       plaidCategory: body.category ?? draft.plaidCategory,
     });
+    return NextResponse.json({ draft: updated });
+  }
+
+  if (body.action === "link_bill") {
+    if (draft.status === "dismissed") {
+      return jsonError("Deleted transactions cannot be linked to a bill", 409);
+    }
+    const billId = body.billId ?? null;
+    if (billId !== null) {
+      if (draft.amountCents <= 0) {
+        return jsonError("Only debit transactions can pay a bill", 400);
+      }
+      const bill = await getBill(auth.userId, billId);
+      if (!bill) return jsonError("Bill not found", 404);
+    }
+    const updated = await setPlaidDraftBillLink(auth.userId, id, billId);
     return NextResponse.json({ draft: updated });
   }
 

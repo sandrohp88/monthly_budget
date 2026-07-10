@@ -330,7 +330,7 @@ export const plaidExchangeSchema = z.object({
 /** User action on a single transaction draft. */
 export const plaidDraftActionSchema = z
   .object({
-    action: z.enum(["approve", "dismiss", "create_promo", "update_transaction"]),
+    action: z.enum(["approve", "dismiss", "create_promo", "update_transaction", "link_bill"]),
     // approve path — user may override these before confirming
     date: isoDate.optional(),
     description: z.string().min(1).max(120).optional(),
@@ -344,8 +344,16 @@ export const plaidDraftActionSchema = z
     startDate: isoDate.optional(),
     endDate: isoDate.optional(),
     monthlyPaymentCents: cents.refine((n) => n > 0, "Monthly payment must be positive").nullable().optional(),
+    // link_bill path — null clears the link
+    billId: z.string().min(1).max(64).nullable().optional(),
   })
   .superRefine((v, ctx) => {
+    if (v.action === "link_bill") {
+      if (v.billId === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["billId"], message: "billId is required (null to unlink)" });
+      }
+      return;
+    }
     if (v.action === "update_transaction") {
       if (!v.description) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["description"], message: "Description is required" });

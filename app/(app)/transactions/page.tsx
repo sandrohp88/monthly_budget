@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { buildProjection } from "@/lib/projection-server";
 import {
+  listBills,
   listCategories,
   listCreditCards,
   listPlaidAccounts,
@@ -19,11 +20,12 @@ export default async function TransactionsPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [drafts, accounts, cards, categories, projection] = await Promise.all([
+  const [drafts, accounts, cards, categories, bills, projection] = await Promise.all([
     listPlaidDrafts(userId, "approved"),
     listPlaidAccounts(userId),
     listCreditCards(userId, false),
     listCategories(userId),
+    listBills(userId, false),
     // Cached per request (the layout already builds it) — reused here for the
     // bill-reconciliation matches so the rows can show "this paid bill X".
     buildProjection(userId),
@@ -74,6 +76,7 @@ export default async function TransactionsPage() {
       initialTransactions={transactions}
       categoryNames={categories.filter((c) => c.kind === "expense").map((c) => c.name)}
       billMatches={projection?.billMatchesByDraftId ?? {}}
+      bills={bills.map((b) => ({ id: b.id, name: b.name }))}
     />
   );
 }

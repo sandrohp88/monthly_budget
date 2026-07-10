@@ -554,6 +554,16 @@ export const plaidTransactionDrafts = sqliteTable(
       .default("expense"),
     linkedExpenseId: text("linked_expense_id"),
     linkedPromoId: text("linked_promo_id"),
+    /**
+     * Manual bill link set by the user on /transactions. The bill
+     * reconciliation treats this draft as paying that bill (bypassing the
+     * name heuristic), and the draft's descriptor becomes a learned alias so
+     * future months' identically-worded transactions match automatically.
+     * No DB-level FK (SQLite ALTER TABLE limitation) — bills are archived,
+     * not deleted, so dangling ids are effectively impossible; the matcher
+     * ignores links to bills it isn't given anyway.
+     */
+    linkedBillId: text("linked_bill_id"),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
