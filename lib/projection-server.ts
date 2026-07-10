@@ -69,6 +69,15 @@ export type ProjectionBundle = {
     string,
     { billId: string; billName: string; occurrenceDate: string }
   >;
+  /**
+   * Bill occurrences settled by posted drafts (linked mode only), keyed by
+   * bill id, ascending by occurrence date. Only covers the reconcile lookback
+   * window (~45 days), so this is "the current cycle's payment", not history.
+   */
+  paidOccurrencesByBill: Record<
+    string,
+    Array<{ occurrenceDate: string; paidDate: string; paidAmountCents: number }>
+  >;
 };
 
 export const buildProjection = cache(_buildProjection);
@@ -178,6 +187,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     Array<{ date: string; paidAmountCents?: number }>
   >();
   const billMatchesByDraftId: ProjectionBundle["billMatchesByDraftId"] = {};
+  const paidOccurrencesByBillOut: ProjectionBundle["paidOccurrencesByBill"] = {};
   if (linked) {
     const recentDrafts = await listStartingBalanceDraftsInRange(
       userId,
@@ -202,6 +212,14 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
       const list = paidOccurrencesByBill.get(m.billId) ?? [];
       list.push({ date: m.occurrenceDate, paidAmountCents: m.paidAmountCents });
       paidOccurrencesByBill.set(m.billId, list);
+      // matches arrive sorted by (billId, occurrenceDate), so these stay ascending
+      const out = paidOccurrencesByBillOut[m.billId] ?? [];
+      out.push({
+        occurrenceDate: m.occurrenceDate,
+        paidDate: m.paidDate,
+        paidAmountCents: m.paidAmountCents,
+      });
+      paidOccurrencesByBillOut[m.billId] = out;
       for (const draftId of m.draftIds) {
         billMatchesByDraftId[draftId] = {
           billId: m.billId,
@@ -320,5 +338,6 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     promoDriftByCard: cardPayments.promoDriftByCard,
     variableBillCategoriesByKey: cardPayments.variableBillCategoriesByKey,
     billMatchesByDraftId,
+    paidOccurrencesByBill: paidOccurrencesByBillOut,
   };
 }
