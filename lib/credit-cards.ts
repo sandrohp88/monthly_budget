@@ -128,11 +128,15 @@ export function previousStatementDateOnOrBefore(
 /**
  * Given a statement date and the card's dueDay, compute the matching due date
  * for that statement. Heuristic: due date is the next occurrence of `dueDay`
- * that is at least 14 days after the statement (most US issuers grant 21–25).
+ * at least `graceDays` after the statement (most US issuers grant 21–25;
+ * per-card via `credit_cards.grace_period_days`, default 14).
  */
-export function dueDateFromStatement(statementIso: string, dueDay: number): string {
-  // Start looking 14 days out
-  const earliest = addDaysIso(statementIso, 14);
+export function dueDateFromStatement(
+  statementIso: string,
+  dueDay: number,
+  graceDays = 14,
+): string {
+  const earliest = addDaysIso(statementIso, Math.max(0, graceDays));
   return nextDayOfMonthOnOrAfter(earliest, dueDay);
 }
 
@@ -309,7 +313,7 @@ export type LinkedBillEstimate = {
  * consistent with the daily ledger.
  */
 export function estimateCurrentCycle(
-  card: StatementCycleConfig & { dueDay: number },
+  card: StatementCycleConfig & { dueDay: number; gracePeriodDays?: number },
   linkedBills: ReadonlyArray<BillRow>,
   fromIso: string,
   linkedExtras: ReadonlyArray<OneTimeExpenseRow> = [],
@@ -438,7 +442,7 @@ export type PromoCycleScheduleWithBalance = PromoCycleSchedule & {
  */
 export function projectPromoSchedule(
   promo: CreditCardPromoRow,
-  card: StatementCycleConfig & { dueDay: number },
+  card: StatementCycleConfig & { dueDay: number; gracePeriodDays?: number },
   fromIso: string,
   skipDueDates: ReadonlySet<string>,
   scheduledPayments: ReadonlyArray<Pick<CreditCardPromoPaymentRow, "dueDate" | "amountCents">> = [],
@@ -454,7 +458,7 @@ export function projectPromoSchedule(
 
 export function projectPromoScheduleWithBalances(
   promo: CreditCardPromoRow,
-  card: StatementCycleConfig & { dueDay: number },
+  card: StatementCycleConfig & { dueDay: number; gracePeriodDays?: number },
   fromIso: string,
   skipDueDates: ReadonlySet<string>,
   scheduledPayments: ReadonlyArray<Pick<CreditCardPromoPaymentRow, "dueDate" | "amountCents">> = [],
@@ -503,7 +507,7 @@ export function projectPromoScheduleWithBalances(
   let cursor = fromIso;
   let virtualRemaining = promo.remainingAmountCents;
   const firstStatement = nextStatementDateOnOrAfter(cursor, card);
-  const firstStatementDueDate = dueDateFromStatement(firstStatement, card.dueDay);
+  const firstStatementDueDate = dueDateFromStatement(firstStatement, card.dueDay, card.gracePeriodDays);
   const activeFrom = fromIso > promo.startDate ? fromIso : promo.startDate;
   const currentCycleDueDate = nextDayOfMonthOnOrAfter(activeFrom, card.dueDay);
   const currentPaymentDate =
@@ -518,7 +522,7 @@ export function projectPromoScheduleWithBalances(
   // Hard cap on iterations to avoid runaway loops if dates ever go sideways.
   for (let i = 0; i < 240 && virtualRemaining > 0; i++) {
     const statement = nextStatementDateOnOrAfter(cursor, card);
-    const dueDate = dueDateFromStatement(statement, card.dueDay);
+    const dueDate = dueDateFromStatement(statement, card.dueDay, card.gracePeriodDays);
     // Stop scheduling once we'd be paying after the deadline. The final chunk
     // (forced "lump") is captured below by the asOfIso > endDate branch.
     if (dueDate > promo.endDate) {
@@ -559,7 +563,7 @@ export type PromoWhatIf = {
  */
 export function promoWhatIf(
   promo: CreditCardPromoRow,
-  card: StatementCycleConfig & { dueDay: number },
+  card: StatementCycleConfig & { dueDay: number; gracePeriodDays?: number },
   todayIso: string,
   scheduledPayments: ReadonlyArray<Pick<CreditCardPromoPaymentRow, "dueDate" | "amountCents">> = [],
 ): PromoWhatIf {
@@ -584,7 +588,7 @@ export function promoWhatIf(
  */
 export function cardPromoWhatIf(
   promos: ReadonlyArray<CreditCardPromoRow>,
-  card: StatementCycleConfig & { dueDay: number },
+  card: StatementCycleConfig & { dueDay: number; gracePeriodDays?: number },
   todayIso: string,
   paymentsByPromoId: ReadonlyMap<string, ReadonlyArray<Pick<CreditCardPromoPaymentRow, "dueDate" | "amountCents">>> = new Map(),
 ): PromoWhatIf {

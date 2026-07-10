@@ -129,6 +129,14 @@ describe("dueDateFromStatement", () => {
     // that matches the contract: "next occurrence ≥ 14 days out, clamped to month length".
     expect(dueDateFromStatement("2025-02-14", 31)).toBe("2025-02-28");
   });
+
+  it("honors a per-card grace period", () => {
+    // 25-day grace: statement Jan 15 → earliest Feb 9 → next 5th = Mar 5,
+    // where the 14-day default would have picked Feb 5.
+    expect(dueDateFromStatement("2025-01-15", 5, 25)).toBe("2025-03-05");
+    // Zero grace: the same-month dueDay right after the statement is valid.
+    expect(dueDateFromStatement("2025-01-15", 16, 0)).toBe("2025-01-16");
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -209,6 +209,12 @@ export const creditCards = sqliteTable(
     statementCycleAnchorDate: text("statement_cycle_anchor_date"),
     statementCycleIntervalDays: integer("statement_cycle_interval_days").notNull().default(31),
     dueDay: integer("due_day").notNull(),
+    /**
+     * Minimum days between statement close and payment due, used by
+     * dueDateFromStatement to pick which occurrence of dueDay a statement
+     * maps to. Most US issuers grant 21-25; 14 is a safe floor default.
+     */
+    gracePeriodDays: integer("grace_period_days").notNull().default(14),
     currentBalanceCents: integer("current_balance_cents"),
     autoPay: integer("auto_pay", { mode: "boolean" }).notNull().default(false),
     notes: text("notes"),
