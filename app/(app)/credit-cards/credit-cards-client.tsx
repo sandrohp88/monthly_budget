@@ -890,6 +890,7 @@ function CardDialog({
     card?.statementCycleIntervalDays ?? 31,
   );
   const [dueDay, setDueDay] = React.useState(card?.dueDay ?? 26);
+  const [gracePeriodDays, setGracePeriodDays] = React.useState(card?.gracePeriodDays ?? 14);
   const [currentBalanceCents, setCurrentBalance] = React.useState<number>(
     card?.currentBalanceCents ?? 0,
   );
@@ -915,6 +916,7 @@ function CardDialog({
             statementCycleMode === "interval_days" ? statementCycleAnchorDate : null,
           statementCycleIntervalDays,
           dueDay,
+          gracePeriodDays,
           currentBalanceCents: trackCurrentBalance ? currentBalanceCents : null,
           autoPay,
           notes: notes.trim() || null,
@@ -991,6 +993,21 @@ function CardDialog({
                 onChange={(e) => setDueDay(Number(e.target.value))}
               />
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="cc-grace">GRACE DAYS (STATEMENT → DUE)</Label>
+            <Input
+              id="cc-grace"
+              type="number"
+              min={0}
+              max={60}
+              required
+              value={gracePeriodDays}
+              onChange={(e) => setGracePeriodDays(Number(e.target.value))}
+            />
+            <p className="text-[10px] tracking-wide text-[var(--text-3)]">
+              Minimum days between statement close and payment due — most US issuers grant 21–25.
+            </p>
           </div>
           {statementCycleMode === "interval_days" ? (
             <div className="grid grid-cols-2 gap-4">
@@ -1094,7 +1111,9 @@ function StatementCreateDialog({
   const today = todayIso();
   const defaultStatementDate = previousStatementDateOnOrBefore(today, card);
   const [statementDate, setStatementDate] = React.useState(defaultStatementDate);
-  const [dueDate, setDueDate] = React.useState(dueDateFromStatement(defaultStatementDate, card.dueDay));
+  const [dueDate, setDueDate] = React.useState(
+    dueDateFromStatement(defaultStatementDate, card.dueDay, card.gracePeriodDays),
+  );
   const [statementBalanceCents, setBalance] = React.useState(0);
   const [notes, setNotes] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -1149,7 +1168,7 @@ function StatementCreateDialog({
                 value={statementDate}
                 onChange={(e) => {
                   setStatementDate(e.target.value);
-                  setDueDate(dueDateFromStatement(e.target.value, card.dueDay));
+                  setDueDate(dueDateFromStatement(e.target.value, card.dueDay, card.gracePeriodDays));
                 }}
               />
             </div>

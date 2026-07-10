@@ -219,7 +219,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     const openCycleCents = Math.max(0, liveBalance - unpaid - promoRemaining);
     if (openCycleCents <= 0) continue;
     const nextStatement = nextStatementDateOnOrAfter(today, card);
-    const dueDate = dueDateFromStatement(nextStatement, card.dueDay);
+    const dueDate = dueDateFromStatement(nextStatement, card.dueDay, card.gracePeriodDays);
     // Prefer the recorded statement: if the cycle this estimate lands on
     // already has a recorded statement, that statement's cash is authoritative
     // for the date (it becomes a ccExtra). Layering the live-balance estimate

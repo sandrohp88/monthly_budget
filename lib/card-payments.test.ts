@@ -16,6 +16,7 @@ function card(over: Partial<CreditCardRow> = {}): CreditCardRow {
     statementCycleAnchorDate: null,
     statementCycleIntervalDays: 31,
     dueDay: 10,
+    gracePeriodDays: 14,
     currentBalanceCents: null,
     autoPay: false,
     notes: null,

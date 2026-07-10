@@ -74,7 +74,7 @@ export function projectVariableBillCardCharges(opts: {
           name: entry.bill.name,
           category: entry.bill.category,
           date: row.date,
-          dueDate: dueDateFromStatement(statementDate, card.dueDay),
+          dueDate: dueDateFromStatement(statementDate, card.dueDay, card.gracePeriodDays),
           amountCents,
         });
       });

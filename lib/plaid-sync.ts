@@ -740,7 +740,7 @@ export async function syncCreditCardLiabilitiesForItem(
       if (stmtDate && liab.last_statement_balance != null) {
         // If Plaid omits next_payment_due_date, derive it from the card's dueDay
         // using the same heuristic we use for manual cards.
-        const resolvedDue = dueDate ?? dueDateFromStatement(stmtDate, card.dueDay);
+        const resolvedDue = dueDate ?? dueDateFromStatement(stmtDate, card.dueDay, card.gracePeriodDays);
 
         // If the most recent payment paid off the most recent statement, mark it.
         const lastPayDate = liab.last_payment_date ?? null;

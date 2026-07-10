@@ -176,6 +176,8 @@ const creditCardBaseSchema = z.object({
   statementCycleAnchorDate: isoDate.nullable().optional(),
   statementCycleIntervalDays: z.number().int().min(1).max(366).default(31),
   dueDay: z.number().int().min(1).max(31),
+  /** Days between statement close and payment due (issuer grace period). */
+  gracePeriodDays: z.number().int().min(0).max(60).default(14),
   currentBalanceCents: cents.refine((n) => n >= 0, "Balance must be non-negative").nullable().optional(),
   autoPay: z.boolean().default(false),
   notes: z.string().max(500).nullable().optional(),
