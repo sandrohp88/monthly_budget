@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { Link2, Pencil, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -340,6 +341,10 @@ export function TransactionsClient({
           transaction={linkingTxn}
           bills={bills}
           onClose={() => setLinkingTxn(null)}
+          onSaved={(updated) => {
+            setTransactions((rows) => rows.map((row) => (row.id === updated.id ? { ...row, ...updated } : row)));
+            setLinkingTxn(null);
+          }}
         />
       ) : null}
     </div>
@@ -350,11 +355,14 @@ function TransactionBillLinkDialog({
   transaction,
   bills,
   onClose,
+  onSaved,
 }: {
   transaction: DraftWithAccount;
   bills: BillOption[];
   onClose: () => void;
+  onSaved: (updated: DraftWithAccount) => void;
 }) {
+  const router = useRouter();
   const [billId, setBillId] = React.useState<string>(transaction.linkedBillId ?? "");
   const [saving, setSaving] = React.useState(false);
 
@@ -367,13 +375,16 @@ function TransactionBillLinkDialog({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "link_bill", billId: billId === "" ? null : billId }),
       });
-      const json = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(json.error ?? "Link failed");
-      // The paid-marker reconciliation runs server-side — reload so the
-      // projection re-matches with the new link (and learned alias).
-      window.location.reload();
+      const json = (await res.json()) as { draft?: DraftWithAccount; error?: string };
+      if (!res.ok || !json.draft) throw new Error(json.error ?? "Link failed");
+      toast.success(billId === "" ? "Link removed" : "Transaction linked to bill");
+      onSaved({ ...transaction, ...json.draft });
+      // The PAID BILL markers come from the server-side reconciliation —
+      // refresh re-renders the page with the new match (and learned alias).
+      router.refresh();
     } catch (err) {
       toast.error((err as Error).message);
+    } finally {
       setSaving(false);
     }
   };
