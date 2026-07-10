@@ -331,6 +331,7 @@ weird gets emitted before merging.
 - `0026_link_drafts_to_bills` — `plaid_transaction_drafts.linked_bill_id` (manual transaction→bill link; reconciliation treats the draft as paying that bill and learns its descriptor as an alias for future months). No DB-level FK — SQLite ALTER TABLE can't add one; bills are archived, never deleted.
 - `0027_statement_due_date_override` — `credit_card_statements.due_date_user_override` (set when the user edits a due date by hand; Plaid liability syncs then stop overwriting it — manual wins, same principle as paid records).
 - `0028_card_grace_period_days` — `credit_cards.grace_period_days` (per-card statement→due grace, default 14; feeds `dueDateFromStatement` everywhere instead of the old hardcoded floor).
+- `0029_paycheck_settled_by_draft` — `paychecks.settled_by_draft_id` + partial unique index (deposit-to-paycheck auto-reconciliation; a deposit draft settles at most one paycheck, ever — mirror of 0025).
 
 ---
 
@@ -695,6 +696,22 @@ becomes a **learned alias** for that bill (`listBillLinkDescriptors`) so
 future months' identically-worded transactions match automatically. The
 settle threshold (`SETTLE_MIN_FRACTION`) still applies to linked drafts — a
 tiny linked payment won't mark a large bill paid.
+
+### Paycheck reconciliation (deposits → paychecks)
+The income-side analog. `lib/paycheck-reconciliation.ts` (pure) matches
+approved deposit drafts (negative `amountCents`) on starting-balance accounts
+to scheduled paychecks: ±5 days of `payDate`, deposit within 70%–200% of the
+planned amount, best-amount-fit one-to-one assignment (two same-day earners
+split by amount; the paycheck note is a priority-only text signal). Unlike
+bills this PERSISTS: `reconcilePaycheckDeposits` in `lib/plaid-sync.ts` runs
+once per sync and calls `settlePaycheckWithDraft` (repos), which sets
+`actualReceived` + `actualAmountCents` + `settledByDraftId`. It fires ONLY on
+the not-received→received edge (manual reconciliation wins; re-syncs are
+no-ops) and consumes each draft at most once — enforced by the partial unique
+index from migration 0029. Un-marking received on `/paychecks` (or archiving
+the row) clears `settledByDraftId` so the deposit can re-settle — same
+release contract as the statements PATCH route. Auto-reconciled rows show an
+AUTO pill next to RECEIVED.
 
 ### Adding Plaid features — recipe
 1. New repo function in `lib/repos.ts` (always user-scoped).
