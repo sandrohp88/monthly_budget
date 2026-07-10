@@ -85,6 +85,13 @@ function intervalLabel(months: number): string {
 
 export type BillCardOption = { id: string; name: string; isActive: boolean };
 
+/** Latest bill occurrence settled by a posted linked-account transaction. */
+export type LastPaid = {
+  occurrenceDate: string;
+  paidDate: string;
+  paidAmountCents: number;
+};
+
 type OverrideItem = {
   id: string;
   billId: string;
@@ -99,12 +106,14 @@ export function BillsClient({
   categories,
   cards,
   initialOverrides = [],
+  lastPaidByBill = {},
 }: {
   initialBills: BillRow[];
   initialVariableBills: VariableBill[];
   categories: ReadonlyArray<string>;
   cards: ReadonlyArray<BillCardOption>;
   initialOverrides?: OverrideItem[];
+  lastPaidByBill?: Record<string, LastPaid>;
 }) {
   const [bills, setBills] = React.useState<BillRow[]>(initialBills);
   const [variableBills, setVariableBills] = React.useState<VariableBill[]>(initialVariableBills);
@@ -149,6 +158,10 @@ export function BillsClient({
   );
 
   const allCategories = Array.from(new Set(bills.map((b) => b.category.toUpperCase()))).sort();
+
+  // Reconciled payments only exist in linked-balance mode — hide the column
+  // entirely for manual-mode users instead of showing a dash for every row.
+  const hasPaidData = Object.keys(lastPaidByBill).length > 0;
 
   // Lookup card name by id for the in-row "VIA …" pill
   const cardById = React.useMemo(
@@ -371,6 +384,7 @@ export function BillsClient({
                 <TableHead onClick={() => setSortKey("next")} className="cursor-pointer text-right">
                   NEXT DUE ↕
                 </TableHead>
+                {hasPaidData ? <TableHead className="text-right">LAST PAID</TableHead> : null}
                 <TableHead>AUTOPAY</TableHead>
                 <TableHead onClick={() => setSortKey("monthly")} className="cursor-pointer text-right">
                   MONTHLY EQ ↕
@@ -417,6 +431,21 @@ export function BillsClient({
                   <TableCell className="text-right tabular">
                     <DateLabel iso={nextBillOccurrence(b, today)} format="short" />
                   </TableCell>
+                  {hasPaidData ? (
+                    <TableCell className="text-right tabular">
+                      {lastPaidByBill[b.id] ? (
+                        <span
+                          className="text-[var(--mint)]"
+                          title="Matched from posted linked-account transactions (current cycle)"
+                        >
+                          <DateLabel iso={lastPaidByBill[b.id]!.paidDate} format="short" /> ·{" "}
+                          <Money cents={lastPaidByBill[b.id]!.paidAmountCents} />
+                        </span>
+                      ) : (
+                        <span className="text-[var(--text-3)]">—</span>
+                      )}
+                    </TableCell>
+                  ) : null}
                   <TableCell>
                     <StatusPill variant={b.autoPay ? "default" : "off"}>
                       {b.autoPay ? "ON" : "OFF"}
@@ -436,7 +465,7 @@ export function BillsClient({
                 <TableCell className="text-right">
                   <Money cents={totalAmount} />
                 </TableCell>
-                <TableCell colSpan={3} />
+                <TableCell colSpan={hasPaidData ? 4 : 3} />
                 <TableCell className="text-right text-[var(--mint)]">
                   <Money cents={totalMonthly} />
                 </TableCell>
