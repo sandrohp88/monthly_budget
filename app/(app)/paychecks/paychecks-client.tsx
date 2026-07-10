@@ -62,6 +62,10 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
 
   const updateRow = async (row: PaycheckRow, patch: Partial<PaycheckRow>) => {
     const prev = items;
+    // The server releases the auto-reconcile draft link when a row is
+    // un-marked received — mirror that locally so the AUTO pill drops
+    // immediately instead of waiting for a reload.
+    if (patch.actualReceived === false) patch = { ...patch, settledByDraftId: null };
     setItems((curr) => curr.map((p) => (p.id === row.id ? { ...p, ...patch } : p)));
     try {
       const res = await fetch(`/api/paychecks/${row.id}`, {
@@ -224,10 +228,15 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
                         />
                       </TableCell>
                       <TableCell>
-                        <Switch
-                          checked={p.actualReceived}
-                          onCheckedChange={(v) => updateRow(p, { actualReceived: v })}
-                        />
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={p.actualReceived}
+                            onCheckedChange={(v) => updateRow(p, { actualReceived: v })}
+                          />
+                          {p.actualReceived && p.settledByDraftId ? (
+                            <StatusPill variant="default">AUTO</StatusPill>
+                          ) : null}
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         {p.actualReceived ? (
@@ -304,7 +313,12 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
                         <TableCell className="text-[var(--text-2)]">{p.note ?? ""}</TableCell>
                         <TableCell>
                           {p.actualReceived ? (
-                            <StatusPill variant={delta === 0 ? "default" : "warn"}>RECEIVED</StatusPill>
+                            <span className="inline-flex items-center gap-1.5">
+                              <StatusPill variant={delta === 0 ? "default" : "warn"}>RECEIVED</StatusPill>
+                              {p.settledByDraftId ? (
+                                <StatusPill variant="default">AUTO</StatusPill>
+                              ) : null}
+                            </span>
                           ) : (
                             <StatusPill variant="off">PENDING</StatusPill>
                           )}

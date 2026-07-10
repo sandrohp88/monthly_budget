@@ -91,6 +91,7 @@ export function AccountsClient({
         cardsUpdated?: number;
         statementsCreated?: number;
         statementsReconciled?: number;
+        paychecksReconciled?: number;
         error?: string;
       };
       if (!res.ok) throw new Error(json.error ?? "Sync failed");
@@ -103,7 +104,11 @@ export function AccountsClient({
         (json.statementsReconciled ?? 0) > 0
           ? ` · ${json.statementsReconciled} payment${json.statementsReconciled === 1 ? "" : "s"} reconciled`
           : "";
-      toast.success(`Sync complete — ${txnPart}${cardPart}${reconciledPart}`);
+      const paycheckPart =
+        (json.paychecksReconciled ?? 0) > 0
+          ? ` · ${json.paychecksReconciled} paycheck${json.paychecksReconciled === 1 ? "" : "s"} received`
+          : "";
+      toast.success(`Sync complete — ${txnPart}${cardPart}${reconciledPart}${paycheckPart}`);
       await Promise.all([refreshItems(), refreshCards()]);
     } catch (err) {
       toast.error((err as Error).message);

@@ -32,9 +32,11 @@ import { users } from "./db/schema";
 import { newId } from "./ids";
 import {
   createCreditCard,
+  createPaycheck,
   createPlaidItem,
   createPromo,
   createStatement,
+  getPaycheck,
   getPromo,
   getPlaidDraft,
   upsertPlaidAccount,
@@ -43,6 +45,7 @@ import {
   getCreditCard,
   listPromosForCard,
   listStatements,
+  updatePaycheck,
   updatePromo,
 } from "./repos";
 import { encryptToken } from "./plaid-crypto";
@@ -1038,6 +1041,278 @@ async function makeUser() {
     .run();
   return { id };
 }
+
+/** Item + depository checking account flagged as the starting-balance source. */
+async function seedCheckingAccount(userId: string, accountId = "acct_checking") {
+  const token = encryptToken("access-token");
+  const item = await createPlaidItem(userId, {
+    institutionId: "ins_bank",
+    institutionName: "Test Bank",
+    accessTokenEnc: token.enc,
+    accessTokenIv: token.iv,
+    accessTokenTag: token.tag,
+    cursor: null,
+    lastSyncedAt: null,
+    isActive: true,
+  });
+  await upsertPlaidAccount({
+    id: accountId,
+    itemId: item.id,
+    userId,
+    name: "Checking",
+    mask: "4242",
+    type: "depository",
+    subtype: "checking",
+    balanceCents: 5_000_00,
+    useAsStartingBalance: true,
+    updatedAt: Date.now(),
+  });
+  return { item, accountId };
+}
+
+function depositTxn(over: Record<string, unknown> = {}) {
+  return {
+    transaction_id: "dep_1",
+    account_id: "acct_checking",
+    pending: false,
+    date: todayIso(),
+    name: "ACME CORP DIRECT DEP",
+    original_description: "ACME CORP DIRECT DEP PPD",
+    amount: -1950.0, // Plaid: negative = money in
+    personal_finance_category: { primary: "INCOME" },
+    merchant_name: null,
+    ...over,
+  };
+}
+
+describe("syncPlaidTransactions paycheck reconciliation", () => {
+  it("auto-marks a scheduled paycheck received from a matching deposit; re-sync is a no-op", async () => {
+    const user = await makeUser();
+    const { item } = await seedCheckingAccount(user.id);
+    const paycheck = await createPaycheck(user.id, {
+      payDate: TODAY,
+      amountCents: 2000_00,
+      note: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [depositTxn()],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.paychecksReconciled).toBe(1);
+
+    const settled = (await getPaycheck(user.id, paycheck.id))!;
+    expect(settled.actualReceived).toBe(true);
+    expect(settled.actualAmountCents).toBe(1950_00);
+    expect(settled.settledByDraftId).toBe("dep_1");
+    // Planned amount is untouched — only the actual is recorded.
+    expect(settled.amountCents).toBe(2000_00);
+
+    // Re-sync (same feed) fires nothing: the draft is consumed and the row
+    // is already on the received side of the edge.
+    const again = await syncPlaidTransactions(user.id, item.id);
+    expect(again.paychecksReconciled).toBe(0);
+    expect((await getPaycheck(user.id, paycheck.id))!.actualAmountCents).toBe(1950_00);
+
+    // A user adjustment to the recorded actual survives further re-syncs —
+    // received rows are never touched again (manual wins).
+    await updatePaycheck(user.id, paycheck.id, { actualAmountCents: 1960_00 });
+    const third = await syncPlaidTransactions(user.id, item.id);
+    expect(third.paychecksReconciled).toBe(0);
+    expect((await getPaycheck(user.id, paycheck.id))!.actualAmountCents).toBe(1960_00);
+  });
+
+  it("never overwrites a manually reconciled paycheck", async () => {
+    const user = await makeUser();
+    const { item } = await seedCheckingAccount(user.id);
+    const paycheck = await createPaycheck(user.id, {
+      payDate: TODAY,
+      amountCents: 2000_00,
+      note: null,
+      actualReceived: true,
+      actualAmountCents: 2000_00, // user reconciled by hand before the sync ran
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [depositTxn()],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.paychecksReconciled).toBe(0);
+
+    const row = (await getPaycheck(user.id, paycheck.id))!;
+    expect(row.actualAmountCents).toBe(2000_00);
+    expect(row.settledByDraftId).toBeNull(); // still manual, no AUTO provenance
+  });
+
+  it("one deposit settles at most one of two same-day paychecks, ever", async () => {
+    const user = await makeUser();
+    const { item } = await seedCheckingAccount(user.id);
+    const a = await createPaycheck(user.id, { payDate: TODAY, amountCents: 2000_00, note: null });
+    const b = await createPaycheck(user.id, { payDate: TODAY, amountCents: 2000_00, note: null });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [depositTxn()],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.paychecksReconciled).toBe(1);
+
+    const rows = [(await getPaycheck(user.id, a.id))!, (await getPaycheck(user.id, b.id))!];
+    expect(rows.filter((r) => r.actualReceived)).toHaveLength(1);
+
+    // The consumed draft can't settle the second paycheck on a later sync.
+    const again = await syncPlaidTransactions(user.id, item.id);
+    expect(again.paychecksReconciled).toBe(0);
+    expect(
+      [(await getPaycheck(user.id, a.id))!, (await getPaycheck(user.id, b.id))!].filter(
+        (r) => r.actualReceived,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("splits two same-day earners' deposits by best amount fit", async () => {
+    const user = await makeUser();
+    const { item } = await seedCheckingAccount(user.id);
+    const mine = await createPaycheck(user.id, { payDate: TODAY, amountCents: 2000_00, note: null });
+    const spouse = await createPaycheck(user.id, { payDate: TODAY, amountCents: 1200_00, note: null });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [
+          depositTxn({ transaction_id: "dep_big", amount: -2010.0 }),
+          depositTxn({ transaction_id: "dep_small", name: "ZORP LLC PAYROLL", amount: -1180.0 }),
+        ],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.paychecksReconciled).toBe(2);
+
+    const mineRow = (await getPaycheck(user.id, mine.id))!;
+    const spouseRow = (await getPaycheck(user.id, spouse.id))!;
+    expect(mineRow.settledByDraftId).toBe("dep_big");
+    expect(mineRow.actualAmountCents).toBe(2010_00);
+    expect(spouseRow.settledByDraftId).toBe("dep_small");
+    expect(spouseRow.actualAmountCents).toBe(1180_00);
+  });
+
+  it("un-marking received releases the draft so a later sync can re-settle", async () => {
+    const user = await makeUser();
+    const { item } = await seedCheckingAccount(user.id);
+    const paycheck = await createPaycheck(user.id, {
+      payDate: TODAY,
+      amountCents: 2000_00,
+      note: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [depositTxn()],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    await syncPlaidTransactions(user.id, item.id);
+    expect((await getPaycheck(user.id, paycheck.id))!.settledByDraftId).toBe("dep_1");
+
+    // The PATCH route clears settledByDraftId whenever received flips off —
+    // same release contract as the statements route.
+    await updatePaycheck(user.id, paycheck.id, {
+      actualReceived: false,
+      actualAmountCents: null,
+      settledByDraftId: null,
+    });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.paychecksReconciled).toBe(1);
+    expect((await getPaycheck(user.id, paycheck.id))!.settledByDraftId).toBe("dep_1");
+  });
+
+  it("ignores deposits on accounts that do not feed the starting balance", async () => {
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_bank",
+      institutionName: "Test Bank",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_savings",
+      itemId: item.id,
+      userId: user.id,
+      name: "Savings",
+      mask: "9999",
+      type: "depository",
+      subtype: "savings",
+      balanceCents: 10_000_00,
+      useAsStartingBalance: false,
+      updatedAt: Date.now(),
+    });
+    const paycheck = await createPaycheck(user.id, {
+      payDate: TODAY,
+      amountCents: 2000_00,
+      note: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [depositTxn({ account_id: "acct_savings" })],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.paychecksReconciled).toBe(0);
+    expect((await getPaycheck(user.id, paycheck.id))!.actualReceived).toBe(false);
+  });
+});
 
 async function seedLinkedCard(userId: string, plaidAccountId = "acct_cc") {
   const item = await createPlaidItem(userId, {

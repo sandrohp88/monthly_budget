@@ -60,11 +60,25 @@ export const paychecks = sqliteTable(
     note: text("note"),
     actualReceived: integer("actual_received", { mode: "boolean" }).notNull().default(false),
     actualAmountCents: integer("actual_amount_cents"),
+    /**
+     * Plaid transaction_id of the deposit draft that auto-reconciled this
+     * paycheck as received, if any. Null on manually-reconciled rows. Once
+     * set, that draft can never settle a DIFFERENT paycheck — mirror of
+     * credit_card_statements.settled_by_draft_id (see settlePaycheckWithDraft
+     * in lib/repos.ts). Cleared when the user un-marks received, so the
+     * deposit is free to re-match.
+     */
+    settledByDraftId: text("settled_by_draft_id"),
     isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
     userDate: index("paychecks_user_date_idx").on(t.userId, t.payDate),
+    // A deposit draft may settle at most ONE paycheck, globally — enforced at
+    // the DB level so no code path (present or future) can double-spend it.
+    settledByDraftUnique: uniqueIndex("paychecks_settled_by_draft_unique_idx")
+      .on(t.settledByDraftId)
+      .where(sql`settled_by_draft_id IS NOT NULL`),
   }),
 );
 

@@ -16,6 +16,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       note: data.note ?? null,
       actualReceived: data.actualReceived ?? false,
       actualAmountCents: data.actualAmountCents ?? null,
+      // Un-marking received releases the deposit draft that auto-settled this
+      // paycheck — without this, the row could never auto-reconcile again
+      // (the consume-once gate would see its own draft as already spent).
+      ...(!(data.actualReceived ?? false) ? { settledByDraftId: null } : {}),
     });
     if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
     return NextResponse.json({ paycheck: updated });
