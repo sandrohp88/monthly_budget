@@ -293,3 +293,49 @@ function addDays(iso: string, days: number): string {
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
+
+/** ACH posting lag: don't call a bill unpaid until this many days after due. */
+export const OVERDUE_GRACE_DAYS = 2;
+/** How far back to look for unpaid occurrences before going quiet about them. */
+export const OVERDUE_LOOKBACK_DAYS = 12;
+
+export type UnpaidRecentOccurrence = {
+  billId: string;
+  billName: string;
+  dueDate: string;
+  expectedCents: number;
+};
+
+/**
+ * Recently-due bill occurrences with NO matched payment — the inverse of the
+ * paid markers, for a "was this actually paid?" alert. Only meaningful in
+ * linked mode (without transaction data every occurrence would flag).
+ *
+ * The window is deliberately short: `graceDays` after the due date absorbs
+ * ACH posting lag, and anything older than `lookbackDays` goes quiet instead
+ * of nagging forever about bills paid outside the linked accounts.
+ */
+export function findUnpaidRecentOccurrences(
+  bills: ReadonlyArray<ReconcilableBill>,
+  paidOccurrences: ReadonlyMap<string, ReadonlyArray<{ date: string }>>,
+  opts: { today: string; graceDays?: number; lookbackDays?: number },
+): UnpaidRecentOccurrence[] {
+  const grace = Math.max(0, opts.graceDays ?? OVERDUE_GRACE_DAYS);
+  const lookback = Math.max(1, opts.lookbackDays ?? OVERDUE_LOOKBACK_DAYS);
+  const windowEnd = addDays(opts.today, -grace);
+  const windowStart = addDays(opts.today, -lookback);
+  if (windowEnd < windowStart) return [];
+
+  const out: UnpaidRecentOccurrence[] = [];
+  for (const bill of bills) {
+    const paidDates = new Set((paidOccurrences.get(bill.id) ?? []).map((p) => p.date));
+    for (const occ of enumerateBillOccurrences(bill, windowStart, windowEnd)) {
+      if (paidDates.has(occ)) continue;
+      const expected = bill.overridesByDate?.get(occ) ?? bill.amountCents;
+      if (expected <= 0) continue; // zero-planned occurrence needs no payment
+      out.push({ billId: bill.id, billName: bill.name, dueDate: occ, expectedCents: expected });
+    }
+  }
+  out.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.billName.localeCompare(b.billName));
+  return out;
+}

@@ -49,7 +49,7 @@ export default async function DashboardPage() {
 
   const projection = await buildProjection(userId);
   if (!projection) redirect("/setup");
-  const { rows, projectionMonths, promoDriftByCard } = projection;
+  const { rows, projectionMonths, promoDriftByCard, unpaidRecentOccurrences } = projection;
   const totalPromoDriftCents = Object.values(promoDriftByCard).reduce((s, n) => s + n, 0);
   const driftedCardCount = Object.keys(promoDriftByCard).length;
 
@@ -201,6 +201,26 @@ export default async function DashboardPage() {
           }
         />
       </TileGrid>
+
+      {unpaidRecentOccurrences.length > 0 ? (
+        <AlertBar tag="UNPAID" variant="amber">
+          No matching payment has posted for{" "}
+          {unpaidRecentOccurrences.slice(0, 3).map((o, i) => (
+            <span key={`${o.billId}-${o.dueDate}`}>
+              {i > 0 ? ", " : ""}
+              <strong className="text-[var(--amber)]">{o.billName}</strong> (due{" "}
+              <DateLabel iso={o.dueDate} format="short" /> · <Money cents={o.expectedCents} />)
+            </span>
+          ))}
+          {unpaidRecentOccurrences.length > 3
+            ? ` and ${unpaidRecentOccurrences.length - 3} more`
+            : ""}
+          . If a payment posted under different wording, link it to the bill.{" "}
+          <Link href="/transactions" className="text-[var(--mint)] hover:underline">
+            Review transactions →
+          </Link>
+        </AlertBar>
+      ) : null}
 
       {totalPromoDriftCents > 0 ? (
         <AlertBar tag="DRIFT" variant="amber">

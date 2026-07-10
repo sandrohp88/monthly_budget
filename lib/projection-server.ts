@@ -26,7 +26,11 @@ import {
   type ProjectionRow,
 } from "./projection";
 import { projectCardPayments } from "./card-payments";
-import { matchPaidBillOccurrences } from "./bill-reconciliation";
+import {
+  findUnpaidRecentOccurrences,
+  matchPaidBillOccurrences,
+  type UnpaidRecentOccurrence,
+} from "./bill-reconciliation";
 
 export type PromoPaymentSummary = {
   id: string;
@@ -79,6 +83,11 @@ export type ProjectionBundle = {
     string,
     Array<{ occurrenceDate: string; paidDate: string; paidAmountCents: number }>
   >;
+  /**
+   * Recently-due bill occurrences with NO matched payment (linked mode only)
+   * — the "was this actually paid?" alert feed. Empty in manual mode.
+   */
+  unpaidRecentOccurrences: UnpaidRecentOccurrence[];
 };
 
 export const buildProjection = cache(_buildProjection);
@@ -189,6 +198,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   >();
   const billMatchesByDraftId: ProjectionBundle["billMatchesByDraftId"] = {};
   const paidOccurrencesByBillOut: ProjectionBundle["paidOccurrencesByBill"] = {};
+  let unpaidRecentOccurrences: UnpaidRecentOccurrence[] = [];
   if (linked) {
     const [recentDrafts, linkDescriptors] = await Promise.all([
       listStartingBalanceDraftsInRange(
@@ -208,20 +218,17 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
       if (d.merchantName) list.push(d.merchantName);
       aliasesByBill.set(d.billId, list);
     }
-    const matches = matchPaidBillOccurrences(
-      cashBills.map((b) => ({
-        id: b.id,
-        name: b.name,
-        amountCents: b.amountCents,
-        intervalMonths: b.intervalMonths,
-        anchorDate: b.anchorDate,
-        overridesByDate: new Map(
-          (billOverridesByBill.get(b.id) ?? []).map((o) => [o.date, o.amountCents] as const),
-        ),
-      })),
-      recentDrafts,
-      { aliasesByBill },
-    );
+    const reconcilableBills = cashBills.map((b) => ({
+      id: b.id,
+      name: b.name,
+      amountCents: b.amountCents,
+      intervalMonths: b.intervalMonths,
+      anchorDate: b.anchorDate,
+      overridesByDate: new Map(
+        (billOverridesByBill.get(b.id) ?? []).map((o) => [o.date, o.amountCents] as const),
+      ),
+    }));
+    const matches = matchPaidBillOccurrences(reconcilableBills, recentDrafts, { aliasesByBill });
     const billNameById = new Map(cashBills.map((b) => [b.id, b.name] as const));
     for (const m of matches) {
       const list = paidOccurrencesByBill.get(m.billId) ?? [];
@@ -243,6 +250,12 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
         };
       }
     }
+    // The inverse of the paid markers: recently-due occurrences nothing paid.
+    unpaidRecentOccurrences = findUnpaidRecentOccurrences(
+      reconcilableBills,
+      paidOccurrencesByBill,
+      { today },
+    );
   }
   // Each draft on date D subtracts amountCents from the running balance
   // (positive = expense, negative = refund flows to income). To make a
@@ -354,5 +367,6 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     variableBillCategoriesByKey: cardPayments.variableBillCategoriesByKey,
     billMatchesByDraftId,
     paidOccurrencesByBill: paidOccurrencesByBillOut,
+    unpaidRecentOccurrences,
   };
 }
