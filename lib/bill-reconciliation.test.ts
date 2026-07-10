@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   draftNamesBill,
   enumerateBillOccurrences,
+  findUnpaidRecentOccurrences,
   matchPaidBillOccurrences,
 } from "./bill-reconciliation";
 
@@ -275,5 +276,37 @@ describe("matchPaidBillOccurrences", () => {
       overridesByDate: new Map([["2026-07-15", 400_00]]),
     };
     expect(matchPaidBillOccurrences([highOverride], [draft({ amountCents: 30_00 })])).toEqual([]);
+  });
+});
+
+describe("findUnpaidRecentOccurrences", () => {
+  const bill = { id: "b1", name: "Rent", amountCents: 1450_00, intervalMonths: 1, anchorDate: "2026-07-01" };
+
+  it("flags a recently-due occurrence with no matched payment", () => {
+    expect(findUnpaidRecentOccurrences([bill], new Map(), { today: "2026-07-09" })).toEqual([
+      { billId: "b1", billName: "Rent", dueDate: "2026-07-01", expectedCents: 1450_00 },
+    ]);
+  });
+
+  it("stays quiet when the occurrence was matched to a payment", () => {
+    const paid = new Map([["b1", [{ date: "2026-07-01" }]]]);
+    expect(findUnpaidRecentOccurrences([bill], paid, { today: "2026-07-09" })).toEqual([]);
+  });
+
+  it("gives ACH posting lag before flagging (grace days)", () => {
+    // Due yesterday — inside the 2-day posting grace, so not flagged yet.
+    expect(findUnpaidRecentOccurrences([bill], new Map(), { today: "2026-07-02" })).toEqual([]);
+    // Two days later the grace has passed.
+    expect(findUnpaidRecentOccurrences([bill], new Map(), { today: "2026-07-03" })).toHaveLength(1);
+  });
+
+  it("goes quiet past the lookback window instead of nagging forever", () => {
+    // Jul 1 occurrence, 14 days later (> 12-day lookback) — silent.
+    expect(findUnpaidRecentOccurrences([bill], new Map(), { today: "2026-07-15" })).toEqual([]);
+  });
+
+  it("skips occurrences whose override plans zero cash", () => {
+    const withZero = { ...bill, overridesByDate: new Map([["2026-07-01", 0]]) };
+    expect(findUnpaidRecentOccurrences([withZero], new Map(), { today: "2026-07-09" })).toEqual([]);
   });
 });
