@@ -34,6 +34,7 @@ function stmt(over: Partial<StatementWithCardName> = {}): StatementWithCardName 
     cardName: "Card",
     statementDate: "2026-05-15",
     dueDate: "2026-06-10",
+    dueDateUserOverride: false,
     statementBalanceCents: 200_00,
     minimumPaymentCents: null,
     paidAmountCents: null,

@@ -1941,7 +1941,9 @@ export async function upsertCreditCardStatementByDate(
     .update(creditCardStatements)
     .set({
       statementDate: data.statementDate,
-      dueDate: data.dueDate,
+      // A hand-edited due date survives Plaid syncs (manual wins, same
+      // principle as paid records above).
+      ...(existing.dueDateUserOverride ? {} : { dueDate: data.dueDate }),
       statementBalanceCents: data.statementBalanceCents,
       minimumPaymentCents: data.minimumPaymentCents ?? null,
       ...(keepPaid

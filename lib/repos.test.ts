@@ -50,6 +50,7 @@ import {
   updateCardCycleDays,
   upsertCreditCardStatementByDate,
   listStatements,
+  updateStatement,
   applyPromoChunksForPaidStatement,
   replacePromoPayments,
   getPromo,
@@ -371,6 +372,35 @@ describe("repos / upsertCreditCardStatementByDate", () => {
       dueDate: "2025-04-10",
       statementBalanceCents: 250_00,
     });
+  });
+
+  it("a hand-edited due date survives later Plaid upserts", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Card",
+      statementDay: 15,
+      dueDay: 5,
+      autoPay: false,
+      isActive: true,
+    });
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2025-03-15",
+      dueDate: "2025-04-05",
+      statementBalanceCents: 100_00,
+    });
+    const created = (await listStatements(card.id))[0]!;
+    // User corrects the due date by hand — the route sets the override flag.
+    await updateStatement(created.id, { dueDate: "2025-04-12", dueDateUserOverride: true });
+
+    // Next Plaid sync reports the old due date again — it must not win.
+    await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2025-03-15",
+      dueDate: "2025-04-05",
+      statementBalanceCents: 100_00,
+    });
+    const stmts = await listStatements(card.id);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toMatchObject({ dueDate: "2025-04-12", statementBalanceCents: 100_00 });
   });
 
   it("updates the same due-date statement when Plaid shifts the statement date", async () => {
