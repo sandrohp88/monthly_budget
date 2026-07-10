@@ -329,6 +329,7 @@ weird gets emitted before merging.
 - `0023_add_assets` — `assets` table (manual net-worth lines; not part of the cash projection).
 - `0024_settled_by_draft_id` / `0025_settled_by_draft_unique` — `credit_card_statements.settled_by_draft_id` + partial unique index (card-payment reconciliation, PRs #57–59).
 - `0026_link_drafts_to_bills` — `plaid_transaction_drafts.linked_bill_id` (manual transaction→bill link; reconciliation treats the draft as paying that bill and learns its descriptor as an alias for future months). No DB-level FK — SQLite ALTER TABLE can't add one; bills are archived, never deleted.
+- `0027_statement_due_date_override` — `credit_card_statements.due_date_user_override` (set when the user edits a due date by hand; Plaid liability syncs then stop overwriting it — manual wins, same principle as paid records).
 
 ---
 

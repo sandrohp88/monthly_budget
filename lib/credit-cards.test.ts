@@ -31,6 +31,7 @@ function statement(over: Partial<CreditCardStatementRow> = {}): CreditCardStatem
     cardId: "c1",
     statementDate: "2025-01-15",
     dueDate: "2025-02-10",
+    dueDateUserOverride: false,
     statementBalanceCents: 100_000, // $1,000
     minimumPaymentCents: null,
     paidAmountCents: null,

@@ -24,6 +24,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const statement = await updateStatement(id, {
     ...(data.statementDate !== undefined ? { statementDate: data.statementDate } : {}),
     ...(data.dueDate !== undefined ? { dueDate: data.dueDate } : {}),
+    // A hand-edited due date must survive future Plaid syncs.
+    ...(data.dueDate !== undefined && data.dueDate !== existing.dueDate
+      ? { dueDateUserOverride: true }
+      : {}),
     ...(data.statementBalanceCents !== undefined
       ? { statementBalanceCents: data.statementBalanceCents }
       : {}),

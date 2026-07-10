@@ -262,6 +262,13 @@ export const creditCardStatements = sqliteTable(
       .references(() => creditCards.id, { onDelete: "cascade" }),
     statementDate: text("statement_date").notNull(),
     dueDate: text("due_date").notNull(),
+    /**
+     * Set when the user edits dueDate by hand — Plaid liability syncs then
+     * stop overwriting it (manual wins, same principle as paid records).
+     */
+    dueDateUserOverride: integer("due_date_user_override", { mode: "boolean" })
+      .notNull()
+      .default(false),
     statementBalanceCents: integer("statement_balance_cents").notNull(),
     minimumPaymentCents: integer("minimum_payment_cents"),
     paidAmountCents: integer("paid_amount_cents"),
