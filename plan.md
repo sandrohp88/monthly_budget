@@ -1,4 +1,12 @@
-# FINANCE_OS Accuracy & Multi-Theme Plan
+# FINANCE_OS Accuracy & Multi-Theme Plan — ARCHIVED 2026-07-09
+
+> **ARCHIVED.** This plan is from 2026-05-07 and most of it shipped long ago; the status
+> markers below are stale (e.g. P2-6 bill↔transaction matching shipped differently as
+> `lib/bill-reconciliation.ts` + manual links in PR #62; P2-7's lookback mode shipped in
+> projection-server). Still genuinely open as of archiving: **P2-5** (preserve user-edited
+> statement dueDate on Plaid sync), **P3-3** (per-card grace days), **P2-1** (provenance,
+> low ROI), **P3-2** (paycheck regen replace mode), **T-5** (WCAG contrast test), **T-6**
+> (theme cookie SSR). Do not trust anything else below without checking the code.
 
 Working document for the accuracy/automation/theme refactor. Each item has a status marker and enough context to be picked up by another agent (Codex, Claude, etc.) without conversation history.
 
