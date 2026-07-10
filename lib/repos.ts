@@ -739,11 +739,97 @@ export async function updatePaycheck(
 
 export async function deletePaycheck(userId: string, id: string): Promise<void> {
   const db = getDb();
+  // Archiving releases the deposit draft that auto-reconciled this row (if
+  // any) — an archived paycheck is out of the projection, so keeping the
+  // draft consumed would only stop that deposit from settling the paycheck
+  // the user actually meant (e.g. after deleting a duplicate row).
   await db
     .update(paychecks)
-    .set({ isActive: false })
+    .set({ isActive: false, settledByDraftId: null })
     .where(and(eq(paychecks.userId, userId), eq(paychecks.id, id)))
     .run();
+}
+
+/**
+ * Paychecks awaiting reconciliation — active, not yet received — with payDate
+ * in [startIso, endIso]. Feed for the deposit matcher in lib/plaid-sync.ts.
+ */
+export async function listUnreconciledPaychecksInRange(
+  userId: string,
+  startIso: string,
+  endIso: string,
+): Promise<PaycheckRow[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(paychecks)
+    .where(
+      and(
+        eq(paychecks.userId, userId),
+        eq(paychecks.isActive, true),
+        eq(paychecks.actualReceived, false),
+        gte(paychecks.payDate, startIso),
+        lte(paychecks.payDate, endIso),
+      ),
+    )
+    .orderBy(asc(paychecks.payDate))
+    .all();
+}
+
+/**
+ * Draft ids already consumed by SOME paycheck (any status, archived included
+ * until the archive path releases them). The matcher must never see these —
+ * a spent draft winning an assignment would starve a free one.
+ */
+export async function listConsumedPaycheckDraftIds(userId: string): Promise<Set<string>> {
+  const db = getDb();
+  const rows = await db
+    .select({ draftId: paychecks.settledByDraftId })
+    .from(paychecks)
+    .where(and(eq(paychecks.userId, userId), isNotNull(paychecks.settledByDraftId)))
+    .all();
+  return new Set(rows.map((r) => r.draftId).filter((d): d is string => d != null));
+}
+
+/**
+ * Consume a deposit draft against a scheduled paycheck — the ONLY path that
+ * may mark a paycheck received from a Plaid draft. Mirrors
+ * settleStatementWithDraft's contract:
+ *
+ * 1. Draft already consumed by any paycheck (globally) → no-op. Backed by the
+ *    partial UNIQUE index from migration 0029, so a double-spend is a
+ *    constraint violation even if a future code path skips this check.
+ * 2. Fires ONLY on the not-received → received edge: a paycheck that is
+ *    already received (manually or by a previous sync) is never touched —
+ *    manual reconciliation always wins, and re-syncs are no-ops.
+ *
+ * Returns the updated row, or null when nothing was settled.
+ */
+export async function settlePaycheckWithDraft(
+  userId: string,
+  input: { paycheckId: string; draftId: string; amountCents: number; date: string },
+): Promise<PaycheckRow | null> {
+  if (input.amountCents <= 0) return null;
+
+  const consumed = await listConsumedPaycheckDraftIds(userId);
+  if (consumed.has(input.draftId)) return null;
+
+  const existing = await getPaycheck(userId, input.paycheckId);
+  if (!existing || !existing.isActive) return null;
+  // The not-received → received edge — never overwrite a reconciled row.
+  if (existing.actualReceived || existing.settledByDraftId != null) return null;
+
+  const db = getDb();
+  await db
+    .update(paychecks)
+    .set({
+      actualReceived: true,
+      actualAmountCents: input.amountCents,
+      settledByDraftId: input.draftId,
+    })
+    .where(and(eq(paychecks.userId, userId), eq(paychecks.id, input.paycheckId)))
+    .run();
+  return (await getPaycheck(userId, input.paycheckId)) ?? null;
 }
 
 export async function listExtras(userId: string, includeArchived = false): Promise<OneTimeExpenseRow[]> {
@@ -2360,7 +2446,7 @@ export async function exportAll(userId: string) {
   ]);
   return {
     exportedAt: new Date().toISOString(),
-    schemaVersion: 8,
+    schemaVersion: 9,
     settings: s,
     bills: b,
     billPaymentOverrides: bo,
@@ -2705,6 +2791,7 @@ function importInsideTransaction(
       note: p.note ?? null,
       actualReceived: p.actualReceived ?? false,
       actualAmountCents: p.actualAmountCents ?? null,
+      settledByDraftId: p.settledByDraftId ?? null,
       isActive: p.isActive ?? true,
     }).run();
   }

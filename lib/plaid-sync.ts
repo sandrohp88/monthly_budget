@@ -25,9 +25,17 @@ import {
   updatePlaidDraft,
   deletePlaidDraft,
   listStatements,
+  listConsumedPaycheckDraftIds,
+  listStartingBalanceDraftsInRange,
+  listUnreconciledPaychecksInRange,
+  settlePaycheckWithDraft,
 } from "./repos";
 import type { PlaidTransactionDraftRow } from "./db/schema";
-import { todayIso } from "./dates";
+import { addDaysIso, todayIso } from "./dates";
+import {
+  matchPaycheckDeposits,
+  PAYCHECK_MATCH_WINDOW_DAYS,
+} from "./paycheck-reconciliation";
 import { dueDateFromStatement, isStatementOpen } from "./credit-cards";
 import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
 import { classifyDraftKind, looksLikeCardPayment, looksLikeReversal } from "./plaid-transaction-kind";
@@ -55,6 +63,8 @@ export interface SyncResult {
   statementsCreated: number;
   /** Open statements auto-marked paid from a matching LOAN_PAYMENTS draft. */
   statementsReconciled: number;
+  /** Scheduled paychecks auto-marked received from a matching deposit draft. */
+  paychecksReconciled: number;
 }
 
 type PlaidTransactionWithOriginalDescription = {
@@ -362,6 +372,65 @@ async function seedPayPalSpecialFinancingPromos(
 }
 
 /**
+ * How far back a posted deposit can be from today and still settle a
+ * paycheck. Mirrors the projection's bill-reconcile lookback so both sides
+ * of the ledger see the same slice of transaction history.
+ */
+const PAYCHECK_RECONCILE_LOOKBACK_DAYS = 45;
+
+/**
+ * Match posted deposits on the starting-balance accounts against scheduled
+ * paychecks and PERSIST the result (actualReceived + actualAmountCents) —
+ * the income-side analog of reconcileCardPaymentDraft. Runs once per sync at
+ * user level: deposits and paychecks aren't tied to a single Plaid item.
+ *
+ * All invariants live in settlePaycheckWithDraft (consume-once draft gate +
+ * the not-received→received edge), so a re-sync is a no-op and a manually
+ * reconciled paycheck is never overwritten. This function just assembles the
+ * matcher's inputs: unreconciled paychecks near the lookback window and
+ * approved unconsumed deposit drafts inside it.
+ *
+ * Returns the number of paychecks newly marked received.
+ */
+async function reconcilePaycheckDeposits(userId: string, today: string): Promise<number> {
+  const windowStart = addDaysIso(today, -PAYCHECK_RECONCILE_LOOKBACK_DAYS);
+  const [pendingPaychecks, consumed] = await Promise.all([
+    // A deposit at either end of the draft window can settle a paycheck up
+    // to the match window away — pad the paycheck range accordingly.
+    listUnreconciledPaychecksInRange(
+      userId,
+      addDaysIso(windowStart, -PAYCHECK_MATCH_WINDOW_DAYS),
+      addDaysIso(today, PAYCHECK_MATCH_WINDOW_DAYS),
+    ),
+    listConsumedPaycheckDraftIds(userId),
+  ]);
+  if (pendingPaychecks.length === 0) return 0;
+
+  const drafts = (await listStartingBalanceDraftsInRange(userId, windowStart, today)).filter(
+    (d) => !consumed.has(d.id),
+  );
+  if (drafts.length === 0) return 0;
+
+  let settled = 0;
+  for (const m of matchPaycheckDeposits(pendingPaychecks, drafts)) {
+    const row = await settlePaycheckWithDraft(userId, {
+      paycheckId: m.paycheckId,
+      draftId: m.draftId,
+      amountCents: m.depositAmountCents,
+      date: m.depositDate,
+    });
+    if (!row) continue;
+    settled++;
+    log.info(
+      `plaid-sync: reconciled deposit ${m.draftId} ` +
+        `($${(m.depositAmountCents / 100).toFixed(2)} on ${m.depositDate}) ` +
+        `→ paycheck ${row.id} scheduled ${row.payDate} (marked received)`,
+    );
+  }
+  return settled;
+}
+
+/**
  * Pulls new/modified transactions from Plaid for the user's active items.
  * Upserts drafts and advances each item's cursor.
  * This is polling-only — no webhook required.
@@ -651,6 +720,11 @@ export async function syncPlaidTransactions(
     log.info(`plaid-sync: archived ${archived} expired promo(s) for user ${userId}`);
   }
 
+  // Income side: match freshly-synced deposits to scheduled paychecks.
+  // Idempotent (consume-once + not-received→received edge), so it's safe to
+  // run on every sync, including single-item ones.
+  const paychecksReconciled = await reconcilePaycheckDeposits(userId, today);
+
   return {
     added: totalAdded,
     modified: totalModified,
@@ -658,6 +732,7 @@ export async function syncPlaidTransactions(
     cardsUpdated: totalCardsUpdated,
     statementsCreated: totalStatementsCreated,
     statementsReconciled: totalStatementsReconciled,
+    paychecksReconciled,
   };
 }
 

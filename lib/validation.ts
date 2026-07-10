@@ -507,6 +507,10 @@ const importPaycheckSchema = z.object({
   note: z.string().max(120).nullable().optional(),
   actualReceived: z.boolean().optional(),
   actualAmountCents: cents.nullable().optional(),
+  // Plaid transaction_id of the deposit that settled this paycheck. Must
+  // round-trip through backup/restore or every deposit becomes re-spendable
+  // after an import (same rule as the statement settledByDraftId below).
+  settledByDraftId: z.string().min(1).max(128).nullable().optional(),
   isActive: z.boolean().optional(),
 });
 
