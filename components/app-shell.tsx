@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 import { Sidebar, type SidebarSummary } from "@/components/sidebar";
 import { MobileNav } from "@/components/mobile-nav";
+import { MobileTabBar } from "@/components/mobile-tab-bar";
 import { Toaster } from "sonner";
 import { CurrencyProvider } from "@/components/currency-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -81,8 +82,9 @@ export function AppShell({
               <ThemeToggle />
             </div>
           </header>
-          <main className="min-h-0 flex-1 overflow-auto px-4 pt-7 pb-16 md:px-9">{children}</main>
+          <main className="min-h-0 flex-1 overflow-auto px-4 pt-7 pb-28 md:px-9 md:pb-16">{children}</main>
         </div>
+        <MobileTabBar />
       </div>
       <Toaster
         position="top-right"
