@@ -469,6 +469,13 @@ from `/opt/budget/backups/`. Note: the backup container is read-only —
 one-off prod data fixes go through the `budget-app` container's node +
 better-sqlite3 instead.
 
+**Offsite copies**: `scripts/pull-backups.ps1` (committed, no secrets — uses
+the `pve7050` ssh alias) mirrors the server's backups to
+`Z:\backups\monthly-budget` with 60-day retention, so a dead LXC no longer
+takes the app and every backup with it. Schedule it on the workstation
+(one-time, run as the user):
+`schtasks /Create /TN "MonthlyBudget backup pull" /TR "pwsh -NoProfile -File E:\code\monthly_budget\scripts\pull-backups.ps1" /SC DAILY /ST 07:00`
+
 ### TLS / trust
 Budget is served through the Cloudflare Tunnel with a public cert — no local
 CA trust is needed for `budget.sherrera.dev`. (The old `tls internal` +
