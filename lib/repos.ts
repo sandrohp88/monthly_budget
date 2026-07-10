@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
 import { statementCashDueCents } from "./credit-cards";
 import {
@@ -2145,6 +2145,7 @@ export async function listStartingBalanceDraftsInRange(
     description: string;
     merchantName: string | null;
     amountCents: number;
+    linkedBillId: string | null;
   }>
 > {
   const db = getDb();
@@ -2168,6 +2169,7 @@ export async function listStartingBalanceDraftsInRange(
       description: plaidTransactionDrafts.description,
       merchantName: plaidTransactionDrafts.merchantName,
       amountCents: plaidTransactionDrafts.amountCents,
+      linkedBillId: plaidTransactionDrafts.linkedBillId,
     })
     .from(plaidTransactionDrafts)
     .where(
@@ -2181,6 +2183,56 @@ export async function listStartingBalanceDraftsInRange(
     )
     .orderBy(asc(plaidTransactionDrafts.date))
     .all();
+}
+
+/**
+ * Set (or clear, with null) the manual bill link on a draft. The bill
+ * reconciliation treats a linked draft as paying that bill, and its
+ * descriptor becomes a learned alias for future months.
+ */
+export async function setPlaidDraftBillLink(
+  userId: string,
+  id: string,
+  billId: string | null,
+): Promise<PlaidTransactionDraftRow | undefined> {
+  const db = getDb();
+  await db
+    .update(plaidTransactionDrafts)
+    .set({ linkedBillId: billId })
+    .where(
+      and(
+        eq(plaidTransactionDrafts.userId, userId),
+        eq(plaidTransactionDrafts.id, id),
+      ),
+    )
+    .run();
+  return getPlaidDraft(userId, id);
+}
+
+/**
+ * Descriptors of every draft the user manually linked to a bill — the
+ * reconciliation's learned-alias source. Small by construction (one row per
+ * manual link ever made), so no pagination.
+ */
+export async function listBillLinkDescriptors(
+  userId: string,
+): Promise<Array<{ billId: string; description: string; merchantName: string | null }>> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      billId: plaidTransactionDrafts.linkedBillId,
+      description: plaidTransactionDrafts.description,
+      merchantName: plaidTransactionDrafts.merchantName,
+    })
+    .from(plaidTransactionDrafts)
+    .where(
+      and(
+        eq(plaidTransactionDrafts.userId, userId),
+        isNotNull(plaidTransactionDrafts.linkedBillId),
+      ),
+    )
+    .all();
+  return rows.filter((r): r is typeof r & { billId: string } => r.billId != null);
 }
 
 /**

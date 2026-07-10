@@ -166,6 +166,100 @@ describe("matchPaidBillOccurrences", () => {
     ]);
   });
 
+  it("manual link matches a bill whose name never appears in the draft text", () => {
+    // Two houses split into two bills. The bank posts both pulls under the
+    // same wording, so "NV Energy North House" can't match by name — the
+    // manual link assigns it anyway.
+    const northHouse = { id: "nv-north", name: "NV Energy North House", amountCents: 120_00, intervalMonths: 1, anchorDate: "2026-07-01" };
+    const matches = matchPaidBillOccurrences(
+      [northHouse],
+      [draft({ id: "north", date: "2026-07-02", amountCents: 120_61, linkedBillId: "nv-north" })],
+    );
+    expect(matches).toEqual([
+      expect.objectContaining({ billId: "nv-north", draftIds: ["north"], paidAmountCents: 120_61 }),
+    ]);
+  });
+
+  it("manual link keeps two same-descriptor payments on their own bills", () => {
+    // Both pulls post as "NV Energy"; only bill A matches by name. Without
+    // links, phase 2 would fold both onto A. Linking each pull pins it.
+    const houseA = { id: "nv-a", name: "NV Energy", amountCents: 130_00, intervalMonths: 1, anchorDate: "2026-07-01" };
+    const houseB = { id: "nv-b", name: "NV Energy Second House", amountCents: 70_00, intervalMonths: 1, anchorDate: "2026-07-01" };
+    const matches = matchPaidBillOccurrences(
+      [houseA, houseB],
+      [
+        draft({ id: "big", date: "2026-07-02", amountCents: 120_61, description: "NV Energy", linkedBillId: "nv-a" }),
+        draft({ id: "small", date: "2026-07-02", amountCents: 61_31, description: "NV Energy", linkedBillId: "nv-b" }),
+      ],
+    );
+    expect(matches).toEqual([
+      expect.objectContaining({ billId: "nv-a", draftIds: ["big"] }),
+      expect.objectContaining({ billId: "nv-b", draftIds: ["small"] }),
+    ]);
+  });
+
+  it("a linked draft wins its occurrence over a closer-amount heuristic draft", () => {
+    const bill = { ...nvEnergy, anchorDate: "2026-07-01" };
+    const matches = matchPaidBillOccurrences(
+      [bill],
+      [
+        // Heuristic draft is a perfect amount fit; the linked one is not —
+        // the user's assignment still takes the occurrence.
+        draft({ id: "heuristic", date: "2026-07-02", amountCents: 120_00 }),
+        draft({ id: "pinned", date: "2026-07-02", amountCents: 90_00, description: "ACH WITHDRAWAL 8841", linkedBillId: "bill-nv" }),
+      ],
+    );
+    expect(matches[0]).toEqual(
+      expect.objectContaining({ billId: "bill-nv", draftIds: ["heuristic", "pinned"] }),
+    );
+    // pinned holds the phase-1 slot; the heuristic draft folds in via phase 2.
+  });
+
+  it("a draft linked to an unknown bill matches nothing (no heuristic fallback)", () => {
+    const matches = matchPaidBillOccurrences(
+      [nvEnergy],
+      [draft({ linkedBillId: "archived-bill" })],
+    );
+    expect(matches).toEqual([]);
+  });
+
+  it("learned aliases match future months' identically-worded drafts", () => {
+    // Last month the user linked "ACH WITHDRAWAL SPPC 8841" to the bill; this
+    // month's draft posts the same wording and matches without a new link.
+    const bill = { id: "nv-north", name: "NV Energy North House", amountCents: 120_00, intervalMonths: 1, anchorDate: "2026-07-01" };
+    const matches = matchPaidBillOccurrences(
+      [bill],
+      [draft({ id: "aug", date: "2026-08-02", amountCents: 118_00, description: "ACH WITHDRAWAL SPPC 8841", merchantName: null })],
+      { aliasesByBill: new Map([["nv-north", ["ACH WITHDRAWAL SPPC 8841"]]]) },
+    );
+    expect(matches).toEqual([
+      expect.objectContaining({ billId: "nv-north", occurrenceDate: "2026-08-01", draftIds: ["aug"] }),
+    ]);
+  });
+
+  it("aliases on both bills let amount fit split same-descriptor twins", () => {
+    // Both houses' pulls post identically; after one manual link each, both
+    // bills carry the alias — phase 1 best-amount-fit splits them correctly.
+    const houseA = { id: "nv-a", name: "House A Power", amountCents: 130_00, intervalMonths: 1, anchorDate: "2026-08-01" };
+    const houseB = { id: "nv-b", name: "House B Power", amountCents: 70_00, intervalMonths: 1, anchorDate: "2026-08-01" };
+    const aliases = new Map([
+      ["nv-a", ["NVENERGY PAYMENTS C/S"]],
+      ["nv-b", ["NVENERGY PAYMENTS C/S"]],
+    ]);
+    const matches = matchPaidBillOccurrences(
+      [houseA, houseB],
+      [
+        draft({ id: "big", date: "2026-08-02", amountCents: 120_61, merchantName: null }),
+        draft({ id: "small", date: "2026-08-02", amountCents: 61_31, merchantName: null }),
+      ],
+      { aliasesByBill: aliases },
+    );
+    expect(matches).toEqual([
+      expect.objectContaining({ billId: "nv-a", draftIds: ["big"] }),
+      expect.objectContaining({ billId: "nv-b", draftIds: ["small"] }),
+    ]);
+  });
+
   it("uses the per-occurrence override amount for the settle threshold", () => {
     const withOverride = {
       ...nvEnergy,

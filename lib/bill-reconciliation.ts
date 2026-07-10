@@ -12,6 +12,14 @@
  * hide future cash out of the projection.
  *   - name: normalized bill name must appear in the draft's description /
  *     merchant text (or vice versa), e.g. "NV Energy" ↔ "NVENERGY PAYMENTS".
+ *     A per-bill alias list (descriptors of drafts the user manually linked
+ *     to the bill in the past) widens this gate: banks post the same wording
+ *     every month, so one manual link teaches all future cycles.
+ *   - manual link: a draft with `linkedBillId` set pairs ONLY with that
+ *     bill's occurrences and skips the name gate entirely — the user's
+ *     explicit assignment beats the heuristic. Linked pairs are assigned
+ *     before heuristic pairs so a same-day heuristic match can't steal the
+ *     occurrence.
  *   - date: draft within ±MATCH_WINDOW_DAYS of the occurrence.
  *   - assignment: two phases. Phase 1 gives each occurrence its single
  *     best-amount-fit draft (one draft per occurrence, one occurrence per
@@ -43,6 +51,8 @@ export type ReconcilableDraft = {
   description: string;
   merchantName: string | null;
   amountCents: number; // positive = money out (Plaid convention)
+  /** Manual user assignment: this draft pays that bill (see module docs). */
+  linkedBillId?: string | null;
 };
 
 export type ReconcilableBill = Pick<
@@ -114,6 +124,26 @@ export function draftNamesBill(
 }
 
 /**
+ * Does the draft's text match any learned alias — the descriptor of a draft
+ * the user previously linked to this bill by hand? Same containment rules as
+ * draftNamesBill, applied alias-by-alias.
+ */
+export function draftMatchesAlias(
+  aliases: ReadonlyArray<string> | undefined,
+  draft: Pick<ReconcilableDraft, "description" | "merchantName">,
+): boolean {
+  if (!aliases || aliases.length === 0) return false;
+  const haystacks = [draft.description, draft.merchantName ?? ""]
+    .map(normalize)
+    .filter((h) => h.length >= 3);
+  return aliases.some((alias) => {
+    const a = normalize(alias);
+    if (a.length < 3) return false;
+    return haystacks.some((h) => h.includes(a) || a.includes(h));
+  });
+}
+
+/**
  * Find bill occurrences settled by posted drafts. `drafts` should already be
  * limited to real money-out rows on the accounts whose balance feeds the
  * projection (approved, positive amounts).
@@ -121,7 +151,11 @@ export function draftNamesBill(
 export function matchPaidBillOccurrences(
   bills: ReadonlyArray<ReconcilableBill>,
   drafts: ReadonlyArray<ReconcilableDraft>,
-  opts: { windowDays?: number } = {},
+  opts: {
+    windowDays?: number;
+    /** Learned descriptor aliases per bill id (from past manual links). */
+    aliasesByBill?: ReadonlyMap<string, ReadonlyArray<string>>;
+  } = {},
 ): PaidBillOccurrence[] {
   const windowDays = Math.max(1, opts.windowDays ?? MATCH_WINDOW_DAYS);
   if (bills.length === 0 || drafts.length === 0) return [];
@@ -156,22 +190,32 @@ export function matchPaidBillOccurrences(
   }
   if (occurrences.length === 0) return [];
 
-  // Eligible (occurrence, draft) pairs: same name, within the date window.
+  // Eligible (occurrence, draft) pairs within the date window. A manually
+  // linked draft pairs only with its bill and skips the name gate; heuristic
+  // drafts need a name or learned-alias match.
   type Pair = {
     occ: Occurrence;
     draft: ReconcilableDraft;
+    linked: boolean;
     distanceDays: number;
     amountGapCents: number;
   };
   const pairs: Pair[] = [];
   for (const occ of occurrences) {
+    const aliases = opts.aliasesByBill?.get(occ.billId);
     for (const draft of spendDrafts) {
       const distance = Math.abs(daysBetween(occ.occurrenceDate, draft.date));
       if (distance > windowDays) continue;
-      if (!draftNamesBill(occ.billName, draft)) continue;
+      const linked = draft.linkedBillId != null;
+      if (linked) {
+        if (draft.linkedBillId !== occ.billId) continue;
+      } else if (!draftNamesBill(occ.billName, draft) && !draftMatchesAlias(aliases, draft)) {
+        continue;
+      }
       pairs.push({
         occ,
         draft,
+        linked,
         distanceDays: distance,
         amountGapCents: Math.abs(draft.amountCents - occ.expectedCents),
       });
@@ -190,10 +234,13 @@ export function matchPaidBillOccurrences(
   // Phase 1 — best amount fit, ONE draft per occurrence and ONE occurrence per
   // draft. This keeps two bills billed on the same day separate (e.g. NV Energy
   // for two houses): each takes the posted amount closest to its estimate,
-  // instead of both being summed onto one bill.
+  // instead of both being summed onto one bill. Manually linked pairs go
+  // first regardless of fit — the user's assignment must not lose its
+  // occurrence to a heuristic draft with a closer amount.
   const occupiedOccs = new Set<string>();
   const byAmountFit = [...pairs].sort(
     (a, b) =>
+      Number(b.linked) - Number(a.linked) ||
       a.amountGapCents - b.amountGapCents ||
       a.distanceDays - b.distanceDays ||
       a.occ.key.localeCompare(b.occ.key) ||
