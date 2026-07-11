@@ -1761,14 +1761,16 @@ export async function setCreditCardPlaidLink(
   const db = getDb();
   const card = await getCreditCard(userId, cardId);
   if (!card) return { ok: false, error: "Card not found" };
+  let linkedAccountBalance: number | null | undefined;
 
   if (plaidAccountId !== null) {
     const owned = await db
-      .select({ id: plaidAccounts.id })
+      .select({ id: plaidAccounts.id, balanceCents: plaidAccounts.balanceCents })
       .from(plaidAccounts)
       .where(and(eq(plaidAccounts.userId, userId), eq(plaidAccounts.id, plaidAccountId)))
       .get();
     if (!owned) return { ok: false, error: "Plaid account not found" };
+    linkedAccountBalance = owned.balanceCents;
 
     const conflict = await db
       .select({ id: creditCards.id, name: creditCards.name })
@@ -1787,7 +1789,13 @@ export async function setCreditCardPlaidLink(
 
   await db
     .update(creditCards)
-    .set({ plaidAccountId, updatedAt: Date.now() })
+    .set({
+      plaidAccountId,
+      ...(linkedAccountBalance != null
+        ? { currentBalanceCents: Math.max(0, linkedAccountBalance) }
+        : {}),
+      updatedAt: Date.now(),
+    })
     .where(and(eq(creditCards.userId, userId), eq(creditCards.id, cardId)))
     .run();
   return { ok: true, card: (await getCreditCard(userId, cardId))! };

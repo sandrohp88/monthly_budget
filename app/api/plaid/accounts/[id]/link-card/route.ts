@@ -61,6 +61,8 @@ export async function POST(
       autoPay: false,
       isActive: true,
       plaidAccountId,
+      currentBalanceCents:
+        plaidAccount.balanceCents != null ? Math.max(0, plaidAccount.balanceCents) : null,
     });
     cardId = card.id;
   } else if (typeof body.creditCardId === "string") {

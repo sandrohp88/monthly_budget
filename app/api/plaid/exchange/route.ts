@@ -78,6 +78,8 @@ export async function POST(req: Request) {
         autoPay: false,
         isActive: true,
         plaidAccountId: acct.account_id,
+        currentBalanceCents:
+          acct.balances.current != null ? Math.max(0, Math.round(acct.balances.current * 100)) : null,
       });
     }
 

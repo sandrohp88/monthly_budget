@@ -656,9 +656,23 @@ What populates from Plaid Liabilities (`liabilitiesGet`) on every sync:
 - **Most recent statement** — upserted into `credit_card_statements` keyed by `(cardId, statementDate)` (unique index from migration 0005). If `last_payment_date >= last_statement_issue_date` and the payment amount covers the statement, it's marked paid.
 - A statement that already has `paidAmountCents` set manually is NEVER overwritten by a Plaid sync — manual reconciliation wins. Cycle dates are still updated.
 
+Every linked card also tracks the Plaid account's non-negative current balance in
+`credit_cards.current_balance_cents`. This cached value refreshes on sync and is
+initialized immediately when a card is created or linked. The linked card uses
+an `interval_days` statement cycle once history can support an inference:
+
+- Prefer the median 26–35-day gap between stored issuer statement dates.
+- Otherwise require at least three posted `card_payment` transactions and use
+  the median 26–35-day payment gap.
+- Anchor to the latest issuer statement. If none exists, estimate the statement
+  anchor by subtracting the configured grace period from the latest payment.
+- Ignore shorter partial-payment gaps and longer missing-history gaps rather
+  than manufacturing an unreliable cycle.
+
 If the bank doesn't support Liabilities (most non-credit-card-issuing banks),
 `liabilitiesGet` errors and we log + continue — the link still exists, the
-user just keeps editing cycle days manually.
+cached balance still refreshes, and transaction history can still infer the
+cycle once enough recurring payments have posted.
 
 ### Why we DON'T auto-create a card on link
 Earlier versions auto-created a `credit_cards` row whenever a credit-type
