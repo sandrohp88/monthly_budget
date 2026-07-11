@@ -345,7 +345,7 @@ export const creditCardPaymentOverrides = sqliteTable(
 );
 
 /**
- * Promotional financing on a credit card (e.g. 0% APR for 12 months).
+ * Deferred-interest promotional financing on a credit card.
  * One row per promo. The card's statement balance reported by the issuer
  * INCLUDES the unbilled promo principal — we model the promo separately so
  * the projection can spread its monthly chunks over future cycles instead of
@@ -357,7 +357,7 @@ export const creditCardPaymentOverrides = sqliteTable(
  *     inside the statement cash the user already entered.
  *   - For future cycles with no positive statement cash, the projection injects
  *     one debit per cycle on the cycle's due date (chunk = override or
- *     remaining/months_left). This keeps $0-due 0% APR statements from hiding
+ *     remaining/months_left). This keeps $0-due promotional statements from hiding
  *     a desired monthly paydown.
  *   - Plaid open-cycle estimate subtracts `remainingAmountCents` so the
  *     unbilled promo principal isn't projected as a single lump.
@@ -374,7 +374,7 @@ export const creditCardPromos = sqliteTable(
       .references(() => creditCards.id, { onDelete: "cascade" }),
     description: text("description").notNull(),
     originalAmountCents: integer("original_amount_cents").notNull(),
-    /** Decremented automatically when a statement on this card is marked paid. */
+    /** Updated only from issuer reconciliation or an explicit manual edit. */
     remainingAmountCents: integer("remaining_amount_cents").notNull(),
     startDate: text("start_date").notNull(),
     /** Last day interest-free; the projection stops scheduling chunks after this. */
@@ -412,9 +412,8 @@ export const creditCardPromos = sqliteTable(
  * User-defined manual payment plan for a promo. When any rows exist for a
  * promo, the projection IGNORES the auto-spread / `monthlyPaymentCents`
  * logic and uses these payments verbatim. The schedule is purely a projection
- * input — `remainingAmountCents` on the promo is still the source of truth
- * for what's owed, and is decremented by the unpaid→paid statement edge as
- * before.
+ * input — `remainingAmountCents` on the promo remains the issuer-reconciled
+ * source of truth for what's owed.
  */
 export const creditCardPromoPayments = sqliteTable(
   "credit_card_promo_payments",

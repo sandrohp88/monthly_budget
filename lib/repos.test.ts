@@ -32,7 +32,7 @@ import {
   listCreditCards,
   listPromos,
   archivePromo,
-  archiveExpiredPromos,
+  getNetWorthComponents,
   // plaid items / accounts
   createPlaidItem,
   upsertPlaidAccount,
@@ -51,8 +51,6 @@ import {
   upsertCreditCardStatementByDate,
   listStatements,
   updateStatement,
-  applyPromoChunksForPaidStatement,
-  replacePromoPayments,
   getPromo,
 } from "./repos";
 
@@ -594,50 +592,6 @@ describe("repos / upsertCreditCardStatementByDate", () => {
   });
 });
 
-describe("repos / archiveExpiredPromos", () => {
-  it("archives active promos whose end date has passed", async () => {
-    const user = await makeUser();
-    const card = await createCreditCard(user.id, {
-      name: "Promo Card",
-      statementDay: 15,
-      dueDay: 5,
-      autoPay: false,
-      isActive: true,
-    });
-    const expired = await createPromo(user.id, card.id, {
-      description: "Expired",
-      originalAmountCents: 200_00,
-      remainingAmountCents: 200_00,
-      startDate: "2025-01-01",
-      endDate: "2026-05-03",
-      monthlyPaymentCents: null,
-      notes: null,
-      isActive: true,
-    });
-    const current = await createPromo(user.id, card.id, {
-      description: "Current",
-      originalAmountCents: 300_00,
-      remainingAmountCents: 300_00,
-      startDate: "2026-01-01",
-      endDate: "2026-05-04",
-      monthlyPaymentCents: null,
-      notes: null,
-      isActive: true,
-    });
-
-    expect(await archiveExpiredPromos(user.id, "2026-05-04")).toBe(1);
-
-    const promos = await listPromos(user.id, true);
-    const archivedExpired = promos.find((promo) => promo.id === expired.id);
-    expect(archivedExpired?.isActive).toBe(false);
-    // Archiving must also zero remaining so it stops polluting promo totals.
-    expect(archivedExpired?.remainingAmountCents).toBe(0);
-    const stillCurrent = promos.find((promo) => promo.id === current.id);
-    expect(stillCurrent?.isActive).toBe(true);
-    expect(stillCurrent?.remainingAmountCents).toBe(300_00);
-  });
-});
-
 describe("repos / archivePromo", () => {
   it("zeroes remaining when a promo is manually archived", async () => {
     const user = await makeUser();
@@ -665,6 +619,76 @@ describe("repos / archivePromo", () => {
     const archived = promos.find((p) => p.id === promo.id);
     expect(archived?.isActive).toBe(false);
     expect(archived?.remainingAmountCents).toBe(0);
+  });
+});
+
+describe("repos / getNetWorthComponents", () => {
+  it("does not count promo principal twice when it is embedded in a card balance", async () => {
+    const user = await makeUser();
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_paypal",
+      institutionName: "PayPal",
+      accessTokenEnc: "00",
+      accessTokenIv: "00",
+      accessTokenTag: "00",
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "paypal_credit",
+      itemId: item.id,
+      userId: user.id,
+      name: "PayPal Credit",
+      mask: "1234",
+      type: "credit",
+      subtype: "paypal",
+      balanceCents: 1_000_00,
+      updatedAt: Date.now(),
+    });
+    const linkedBalanceCard = await createCreditCard(user.id, {
+      name: "PayPal Credit",
+      statementDay: 15,
+      dueDay: 5,
+      currentBalanceCents: 900_00,
+      autoPay: false,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, linkedBalanceCard.id, "paypal_credit");
+    await createPromo(user.id, linkedBalanceCard.id, {
+      description: "Deferred-interest purchase",
+      originalAmountCents: 300_00,
+      remainingAmountCents: 300_00,
+      startDate: "2026-01-01",
+      endDate: "2026-12-31",
+      monthlyPaymentCents: null,
+      notes: null,
+      isActive: true,
+    });
+
+    const manualCard = await createCreditCard(user.id, {
+      name: "Manual promo card",
+      statementDay: 10,
+      dueDay: 1,
+      currentBalanceCents: null,
+      autoPay: false,
+      isActive: true,
+    });
+    await createPromo(user.id, manualCard.id, {
+      description: "Manual deferred-interest purchase",
+      originalAmountCents: 200_00,
+      remainingAmountCents: 200_00,
+      startDate: "2026-01-01",
+      endDate: "2026-12-31",
+      monthlyPaymentCents: null,
+      notes: null,
+      isActive: true,
+    });
+
+    const components = await getNetWorthComponents(user.id);
+    expect(components.creditCardDebtCents).toBe(700_00);
+    expect(components.promoDebtCents).toBe(500_00);
+    expect(components.netWorthCents).toBe(-1_200_00);
   });
 });
 
@@ -996,10 +1020,10 @@ describe("repos / listPlaidAccountsByItem", () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// Statement paid transitions + promo decrement (§17a edge contract)
+// Statement paid transitions never infer promotional allocation
 // ────────────────────────────────────────────────────────────────────────────
-describe("repos / statement paid transitions + promo decrement", () => {
-  it("upsert reports becamePaid only on an existing unpaid→paid update", async () => {
+describe("repos / statement paid transitions", () => {
+  it("statement payment updates never mutate issuer-tracked promo balances", async () => {
     const user = await makeUser();
     const card = await createCreditCard(user.id, {
       name: "Card",
@@ -1017,7 +1041,7 @@ describe("repos / statement paid transitions + promo decrement", () => {
       paidAmountCents: 100_00,
       paidDate: "2026-02-01",
     });
-    expect(inserted).toEqual({ changed: true, becamePaid: false });
+    expect(inserted).toEqual({ changed: true });
 
     // Insert unpaid, then update to paid: the edge fires exactly once.
     await upsertCreditCardStatementByDate(card.id, {
@@ -1025,36 +1049,8 @@ describe("repos / statement paid transitions + promo decrement", () => {
       dueDate: "2026-03-05",
       statementBalanceCents: 200_00,
     });
-    const paidNow = await upsertCreditCardStatementByDate(card.id, {
-      statementDate: "2026-02-10",
-      dueDate: "2026-03-05",
-      statementBalanceCents: 200_00,
-      paidAmountCents: 200_00,
-      paidDate: "2026-03-01",
-    });
-    expect(paidNow).toEqual({ changed: true, becamePaid: true });
-
-    const resave = await upsertCreditCardStatementByDate(card.id, {
-      statementDate: "2026-02-10",
-      dueDate: "2026-03-05",
-      statementBalanceCents: 200_00,
-      paidAmountCents: 200_00,
-      paidDate: "2026-03-01",
-    });
-    expect(resave).toEqual({ changed: true, becamePaid: false });
-  });
-
-  it("promo decrement follows the manual payment schedule when one exists", async () => {
-    const user = await makeUser();
-    const card = await createCreditCard(user.id, {
-      name: "Card",
-      statementDay: 10,
-      dueDay: 5,
-      autoPay: false,
-      isActive: true,
-    });
     const promo = await createPromo(user.id, card.id, {
-      description: "Sofa",
+      description: "Issuer-tracked promo",
       originalAmountCents: 600_00,
       remainingAmountCents: 600_00,
       startDate: "2026-01-01",
@@ -1063,45 +1059,24 @@ describe("repos / statement paid transitions + promo decrement", () => {
       notes: null,
       isActive: true,
     });
-    await replacePromoPayments(user.id, promo.id, [
-      { dueDate: "2026-03-05", amountCents: 250_00 },
-      { dueDate: "2026-04-05", amountCents: 350_00 },
-    ]);
+    const paidNow = await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-02-10",
+      dueDate: "2026-03-05",
+      statementBalanceCents: 200_00,
+      paidAmountCents: 200_00,
+      paidDate: "2026-03-01",
+    });
+    expect(paidNow).toEqual({ changed: true });
+    expect((await getPromo(user.id, promo.id))?.remainingAmountCents).toBe(600_00);
 
-    // Statement closing 2026-02-10 → next scheduled payment (03-05) is the chunk.
-    await applyPromoChunksForPaidStatement(user.id, card.id, "2026-02-10");
-    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(350_00);
-
-    // A statement past the schedule's last payment decrements nothing — the
-    // user's explicit plan has no cash in that cycle.
-    await replacePromoPayments(user.id, promo.id, [
-      { dueDate: "2026-03-05", amountCents: 250_00 },
-    ]);
-    await applyPromoChunksForPaidStatement(user.id, card.id, "2026-05-10");
-    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(350_00);
+    const resave = await upsertCreditCardStatementByDate(card.id, {
+      statementDate: "2026-02-10",
+      dueDate: "2026-03-05",
+      statementBalanceCents: 200_00,
+      paidAmountCents: 200_00,
+      paidDate: "2026-03-01",
+    });
+    expect(resave).toEqual({ changed: true });
   });
 
-  it("promo decrement falls back to auto-spread math without a schedule", async () => {
-    const user = await makeUser();
-    const card = await createCreditCard(user.id, {
-      name: "Card",
-      statementDay: 10,
-      dueDay: 5,
-      autoPay: false,
-      isActive: true,
-    });
-    const promo = await createPromo(user.id, card.id, {
-      description: "TV",
-      originalAmountCents: 600_00,
-      remainingAmountCents: 600_00,
-      startDate: "2026-01-01",
-      endDate: "2026-12-31",
-      monthlyPaymentCents: 100_00,
-      notes: null,
-      isActive: true,
-    });
-
-    await applyPromoChunksForPaidStatement(user.id, card.id, "2026-02-10");
-    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(500_00);
-  });
 });

@@ -59,6 +59,8 @@ import {
   nextStatementDateOnOrAfter,
   paidWithoutInterest,
   previousStatementDateOnOrBefore,
+  promoFullBalancePayment,
+  promoScheduledPayments,
   promoMonthlyChunkAt,
   promoWhatIf,
   statementCashDueCents,
@@ -263,7 +265,7 @@ export function CreditCardsClient({
                 ) : null}
               </>
             ) : (
-              "no 0% promos"
+              "no deferred-interest promos"
             )
           }
           variant={totalPromoRemainingCents > 0 ? "mint" : "default"}
@@ -1410,7 +1412,7 @@ function ActualVsEstimate({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Promotional financing (0% APR for X months) — list + summary inside a card tile
+// Deferred-interest financing — list + summary inside a card tile
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PromosSection({
@@ -1444,7 +1446,7 @@ function PromosSection({
       <div className="mb-2 flex items-center justify-between text-[9px] uppercase tracking-[0.18em] text-[var(--text-3)]">
         <span className="flex items-center gap-1.5">
           <Sparkles className="h-3 w-3 text-[var(--cyan)]" />
-          {`// 0% PROMOS (${active.length})`}
+          {`// DEFERRED-INTEREST PROMOS (${active.length})`}
         </span>
         <span className="flex items-center">
           <Button size="sm" variant="ghost" onClick={onReconcile} title="Reconcile from a pasted PayPal promo list">
@@ -1455,10 +1457,14 @@ function PromosSection({
           </Button>
         </span>
       </div>
+      <div className="mb-2 text-[10px] tracking-wide text-[var(--text-2)]">
+        No interest only when paid in full by each deadline. Missing a deadline may trigger
+        interest back to the purchase date.
+      </div>
 
       {active.length === 0 ? (
         <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-          No active promos. Track 0% financing to spread it across cycles.
+          No active promos. Track no-interest-if-paid-in-full financing across cycles.
         </div>
       ) : (
         <>
@@ -1668,7 +1674,7 @@ function PromoDialog({
       <DialogContent>
         <DialogHeader>
           <CardSubTag>{`${card.name.toUpperCase()} // ${editing ? "EDIT_PROMO" : "NEW_PROMO"}`}</CardSubTag>
-          <DialogTitle>{editing ? "EDIT PROMO" : "ADD 0% PROMO"}</DialogTitle>
+          <DialogTitle>{editing ? "EDIT PROMO" : "ADD DEFERRED-INTEREST PROMO"}</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4 pt-2">
           <div className="space-y-1.5">
@@ -2003,6 +2009,37 @@ function PromoScheduleSheet({
     );
   };
 
+  const planFullBalance = () => {
+    if (promo.endDate < today) {
+      toast.error("This deadline has passed — reconcile the actual PayPal balance first");
+      return;
+    }
+    setDrafts(
+      promoFullBalancePayment(promo).map((payment) => ({
+        key: makeDraftKey(),
+        dueDate: payment.dueDate,
+        amountCents: payment.amountCents,
+        note: "Full promotional balance by deadline",
+      })),
+    );
+  };
+
+  const planMonthlyPayments = () => {
+    if (promo.endDate < today) {
+      toast.error("This deadline has passed — reconcile the actual PayPal balance first");
+      return;
+    }
+    const schedule = promoScheduledPayments(promo, card, today);
+    setDrafts(
+      schedule.map((payment) => ({
+        key: makeDraftKey(),
+        dueDate: payment.dueDate,
+        amountCents: payment.amountCents,
+        note: "Scheduled promotional payoff",
+      })),
+    );
+  };
+
   const save = async () => {
     // Validate: dates required, amounts > 0
     for (const d of sorted) {
@@ -2014,6 +2051,14 @@ function PromoScheduleSheet({
         toast.error("Every row needs a positive amount");
         return;
       }
+      if (d.dueDate > promo.endDate) {
+        toast.error(`Every payment must be on or before ${promo.endDate}`);
+        return;
+      }
+    }
+    if (sorted.length > 0 && gap !== 0) {
+      toast.error("Schedule must exactly equal the remaining promotional balance");
+      return;
     }
     setSaving(true);
     try {
@@ -2085,8 +2130,43 @@ function PromoScheduleSheet({
           </div>
 
           <div className="text-[11px] tracking-wide text-[var(--text-2)]">
-            Pick exact dates and amounts. While any rows exist, the projection uses
-            them verbatim instead of auto-spread.
+            Pick exact dates and amounts through the deadline. The schedule must
+            cover the full remaining balance; actual balances change only when reconciled.
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={planFullBalance}
+              disabled={promo.endDate < today}
+              className="border border-[var(--border-raw)] bg-[var(--bg-1)] p-3 text-left transition-colors hover:border-[var(--cyan)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--cyan)]">
+                PAY FULL BY DEADLINE
+              </div>
+              <div className="mt-1 text-[16px] font-bold tabular text-[var(--text-0)]">
+                <Money cents={remaining} />
+              </div>
+              <div className="mt-1 text-[10px] text-[var(--text-2)]">
+                One planned payment on <DateLabel iso={promo.endDate} format="short" />.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={planMonthlyPayments}
+              disabled={promo.endDate < today}
+              className="border border-[var(--border-raw)] bg-[var(--bg-1)] p-3 text-left transition-colors hover:border-[var(--cyan)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--cyan)]">
+                SCHEDULE THROUGH PROMO
+              </div>
+              <div className="mt-1 text-[16px] font-bold tabular text-[var(--text-0)]">
+                MONTHLY
+              </div>
+              <div className="mt-1 text-[10px] text-[var(--text-2)]">
+                Auto-fill card-cycle payments through the promotional deadline.
+              </div>
+            </button>
           </div>
 
           {sorted.length === 0 ? (

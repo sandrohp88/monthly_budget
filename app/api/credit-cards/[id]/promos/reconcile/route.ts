@@ -42,15 +42,18 @@ export async function POST(req: Request, ctx: Ctx) {
     await updatePromo(auth.userId, promoId, {
       remainingAmountCents: row.remainingCents,
       endDate: row.endDate,
-      isActive: row.remainingCents > 0 && row.endDate >= today,
+      // A past deadline does not prove the balance was paid. Keep any
+      // issuer-reported remainder active until PayPal reports zero/removes it.
+      isActive: row.remainingCents > 0,
       authoritativeSource: "paypal_promo_list",
     });
   }
 
   let created = 0;
   for (const row of plan.creates) {
-    // Zero-balance or already-expired rows carry no future cash — skip.
-    if (row.remainingCents <= 0 || row.endDate < today) continue;
+    // Zero-balance rows carry no debt. Expired rows with a reported remainder
+    // must stay visible because deferred interest may already have triggered.
+    if (row.remainingCents <= 0) continue;
     await createPromo(auth.userId, id, {
       description: row.description,
       // The list shows the current balance, not the original purchase —

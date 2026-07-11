@@ -104,7 +104,7 @@ async function seedPromoProjection(statementBalanceCents: number | null) {
     });
   }
   await createPromo(user.id, card.id, {
-    description: "0% APR purchase",
+    description: "deferred-interest purchase",
     originalAmountCents: 1_000_00,
     remainingAmountCents: 1_000_00,
     startDate: "2026-05-01",
@@ -121,13 +121,13 @@ async function seedPromoProjection(statementBalanceCents: number | null) {
 describe("buildProjection promo statement reconciliation", () => {
   it("does not project a promo payment when the statement due amount is zero", async () => {
     const row = await seedPromoProjection(0);
-    expect(row?.events.some((event) => event.label === "PayPal promo (0% APR purchase)")).toBe(false);
+    expect(row?.events.some((event) => event.label === "PayPal promo (deferred-interest purchase)")).toBe(false);
   });
 
   it("does not double-count a promo payment when a positive statement already covers the cycle", async () => {
     const row = await seedPromoProjection(125_00);
     expect(
-      row?.events.some((event) => event.label === "PayPal promo (0% APR purchase)"),
+      row?.events.some((event) => event.label === "PayPal promo (deferred-interest purchase)"),
     ).toBe(false);
     expect(row?.events).toEqual(
       expect.arrayContaining([
@@ -254,7 +254,7 @@ describe("buildProjection promo statement reconciliation", () => {
       notes: null,
     });
     await createPromo(user.id, card.id, {
-      description: "0% APR purchase",
+      description: "deferred-interest purchase",
       originalAmountCents: 1_000_00,
       remainingAmountCents: 1_000_00,
       startDate: "2026-05-01",
@@ -266,7 +266,7 @@ describe("buildProjection promo statement reconciliation", () => {
 
     const row = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-06-10");
 
-    expect(row?.events.some((event) => event.label === "PayPal promo (0% APR purchase)")).toBe(false);
+    expect(row?.events.some((event) => event.label === "PayPal promo (deferred-interest purchase)")).toBe(false);
     expect(row?.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -282,7 +282,7 @@ describe("buildProjection promo statement reconciliation", () => {
     expect(row?.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          label: "PayPal promo (0% APR purchase)",
+          label: "PayPal promo (deferred-interest purchase)",
           amountCents: 125_00,
           originalAmountCents: 125_00,
           paymentDueCents: 125_00,
@@ -311,7 +311,7 @@ describe("buildProjection promo statement reconciliation", () => {
       notes: null,
     });
     await createPromo(user.id, card.id, {
-      description: "0% APR purchase",
+      description: "deferred-interest purchase",
       originalAmountCents: 1_000_00,
       remainingAmountCents: 1_000_00,
       startDate: "2026-05-01",

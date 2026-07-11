@@ -3,8 +3,6 @@ import { CountryCode, Products } from "plaid";
 import { getPlaidClient } from "./plaid-client";
 import { decryptToken } from "./plaid-crypto";
 import {
-  applyPromoChunksForPaidStatement,
-  archiveExpiredPromos,
   getSettings,
   listCreditCards,
   listPlaidItems,
@@ -320,8 +318,8 @@ async function autoCreatePromosFromExistingDrafts(
  * amount reconciliation from transactions (the old FIFO heuristic) was
  * systematically wrong — every promo-drift incident traced back to it.
  * Amount/date corrections come from the paste-the-PayPal-promo-list
- * reconcile flow (`authoritativeSource = paypal_promo_list`) or the
- * unpaid→paid statement decrement edge.
+ * reconcile flow (`authoritativeSource = paypal_promo_list`) or an explicit
+ * manual reconciliation.
  */
 async function seedPayPalSpecialFinancingPromos(
   userId: string,
@@ -711,14 +709,9 @@ export async function syncPlaidTransactions(
     }
   }
 
-  // Sweep expired promos once per sync. Reads the user's timezone from
-  // settings so the cutoff matches what the projection page treats as "today".
+  // Use the user's timezone for the reconciliation cutoff.
   const settings = await getSettings(userId);
   const today = todayIso(settings?.timezone);
-  const archived = await archiveExpiredPromos(userId, today);
-  if (archived > 0) {
-    log.info(`plaid-sync: archived ${archived} expired promo(s) for user ${userId}`);
-  }
 
   // Income side: match freshly-synced deposits to scheduled paychecks.
   // Idempotent (consume-once + not-received→received edge), so it's safe to
@@ -843,12 +836,6 @@ export async function syncCreditCardLiabilitiesForItem(
           liveBalanceCents: liveBalanceByAccountId.get(plaidAccountId) ?? card.currentBalanceCents,
         });
         if (upsertResult.changed) statementsCreated++;
-        // Same unpaid→paid edge contract as the statements PATCH route
-        // (§17a): a statement Plaid observed transitioning to paid carries
-        // each active promo's chunk for that cycle.
-        if (upsertResult.becamePaid) {
-          await applyPromoChunksForPaidStatement(userId, card.id, stmtDate);
-        }
       }
     }
   } catch (err) {

@@ -34,6 +34,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
     ...(data.authoritativeSource !== undefined
       ? { authoritativeSource: data.authoritativeSource ?? null }
       : {}),
+    ...((data.originalAmountCents !== undefined ||
+      data.remainingAmountCents !== undefined ||
+      data.endDate !== undefined) &&
+    data.authoritativeSource === undefined
+      ? { authoritativeSource: "manual_reconciliation" as const }
+      : {}),
   });
   return NextResponse.json({ promo: updated });
 }

@@ -53,10 +53,8 @@ import { syncCreditCardLiabilitiesForItem, syncPlaidTransactions } from "./plaid
 import { addDaysIso, todayIso } from "./dates";
 import { addMonthsClampedIso } from "./paypal-special-financing";
 
-// Fixture dates are computed relative to today so the tests don't rot as real
-// time passes: `archiveExpiredPromos` runs on every sync and zeroes any active
-// promo whose endDate (purchase + 6 months) is behind the real clock, which
-// silently broke the original hard-coded 2026 dates.
+// Fixture dates are computed relative to today so six-month promo windows stay
+// meaningful regardless of when the suite runs.
 const TODAY = todayIso();
 
 let dbDir: string;
@@ -258,11 +256,10 @@ describe("syncPlaidTransactions PayPal special financing", () => {
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_paypal_credit");
 
-    // Recent purchases so the auto-created 6-month promos are still active
-    // when the sweep runs; the authoritative endDates below are then set
-    // relative to today (one future, one already past + paid off).
+    // Reconcile one expired promo with a remaining issuer balance and one
+    // expired paid-off promo. A later sync must preserve both actual states.
     const storeOneDate = addDaysIso(TODAY, -30);
-    const storeOneEnd = addDaysIso(TODAY, 20);
+    const storeOneEnd = addDaysIso(TODAY, -5);
     const storeTwoEnd = addDaysIso(TODAY, -10);
 
     __plaidMock.transactionsSync.mockResolvedValue({
@@ -344,7 +341,7 @@ describe("syncPlaidTransactions PayPal special financing", () => {
 });
 
 describe("syncPlaidTransactions card-payment reconciliation", () => {
-  it("marks the matching open statement paid and decrements promos from a LOAN_PAYMENTS draft", async () => {
+  it("marks the matching statement paid without inferring promo allocation", async () => {
     const user = await makeUser();
     const token = encryptToken("access-token");
     const item = await createPlaidItem(user.id, {
@@ -433,13 +430,14 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
     expect(settled.paidAmountCents).toBe(300_00);
     expect(settled.paidDate).toBe(today);
 
-    // Promo decremented once by its monthly chunk ($100), not double-counted.
-    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(500_00);
+    // Plaid identifies the card payment, but not the amount allocated to this
+    // promo, so the issuer-reconciled balance stays unchanged.
+    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(600_00);
 
     // Re-sync is idempotent: the now-paid statement won't re-match.
     const again = await syncPlaidTransactions(user.id, item.id);
     expect(again.statementsReconciled).toBe(0);
-    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(500_00);
+    expect((await getPromo(user.id, promo.id))!.remainingAmountCents).toBe(600_00);
   });
 
   it("does not reconcile a payment that matches no open statement", async () => {
