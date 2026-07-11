@@ -789,6 +789,21 @@ payment must be on or before `endDate`; the payments API enforces both rules.
 The projection also ignores post-deadline legacy rows and adds a deadline/today
 catch-up for any uncovered legacy balance.
 
+The promo schedule sheet exposes two presets: one full-balance payment on the
+issuer payoff deadline, or card-cycle payments through the promotional window.
+Both are planning inputs and must still total the issuer-reconciled remaining
+balance.
+
+### Calendar card-payment planning
+Calendar credit-card events surface `paymentDueCents` as the statement amount
+needed to avoid interest, while estimated and deferred-interest events are
+labeled as such. Future card events open a payment planner backed by
+`credit_card_payment_overrides`; a payment may move earlier but the calendar
+flow will not save it after the issuer due date. Moved plans use paired
+`moved-to:YYYY-MM-DD` / `moved-from:YYYY-MM-DD` notes, matching the ledger
+planner. This only changes Finance_OS cash-flow projections — it never submits
+a payment to PayPal or another issuer.
+
 ### What-if helpers
 `promoWhatIf(promo, card, today)` and `cardPromoWhatIf(promos, card, today)`
 both return `{ payOffNow, continueSchedule }`. Both totals **always equal the

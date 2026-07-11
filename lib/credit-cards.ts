@@ -421,6 +421,14 @@ export type PromoCycleScheduleWithBalance = PromoCycleSchedule & {
   balanceBeforeCents: number;
 };
 
+/** One-payment option: clear the issuer-reconciled balance by the promo deadline. */
+export function promoFullBalancePayment(
+  promo: Pick<CreditCardPromoRow, "remainingAmountCents" | "endDate">,
+): PromoCycleSchedule[] {
+  if (promo.remainingAmountCents <= 0) return [];
+  return [{ dueDate: promo.endDate, amountCents: promo.remainingAmountCents }];
+}
+
 export function promoPaymentScheduleError(
   promo: Pick<CreditCardPromoRow, "remainingAmountCents" | "endDate">,
   payments: ReadonlyArray<{ dueDate: string; amountCents: number }>,
@@ -469,6 +477,15 @@ export function projectPromoSchedule(
     skipDueDates,
     scheduledPayments,
   ).map(({ dueDate, amountCents }) => ({ dueDate, amountCents }));
+}
+
+/** Installment option: card-cycle payments that converge to zero by the deadline. */
+export function promoScheduledPayments(
+  promo: CreditCardPromoRow,
+  card: StatementCycleConfig & { dueDay: number; gracePeriodDays?: number },
+  fromIso: string,
+): PromoCycleSchedule[] {
+  return projectPromoSchedule(promo, card, fromIso, new Set());
 }
 
 export function projectPromoScheduleWithBalances(

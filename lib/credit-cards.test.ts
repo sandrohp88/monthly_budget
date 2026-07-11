@@ -12,7 +12,9 @@ import {
   paidWithoutInterest,
   previousStatementDateOnOrBefore,
   projectPromoSchedule,
+  promoFullBalancePayment,
   promoPaymentScheduleError,
+  promoScheduledPayments,
   promoMonthlyChunkAt,
   promoWhatIf,
   summarizeStatementBalances,
@@ -798,6 +800,28 @@ describe("promoPaymentScheduleError", () => {
         { dueDate: "2027-01-01", amountCents: 100_00 },
       ]),
     ).toContain("after the promo deadline");
+  });
+});
+
+describe("PayPal payoff options", () => {
+  const tracked = promo({
+    remainingAmountCents: 600_00,
+    startDate: "2026-05-01",
+    endDate: "2026-10-31",
+  });
+  const card = { statementDay: 15, dueDay: 10 };
+
+  it("offers one full-balance payment on the promo deadline", () => {
+    expect(promoFullBalancePayment(tracked)).toEqual([
+      { dueDate: "2026-10-31", amountCents: 600_00 },
+    ]);
+  });
+
+  it("offers card-cycle payments that fully cover the balance by the deadline", () => {
+    const payments = promoScheduledPayments(tracked, card, "2026-05-03");
+    expect(payments.length).toBeGreaterThan(1);
+    expect(payments.reduce((sum, payment) => sum + payment.amountCents, 0)).toBe(600_00);
+    expect(payments.every((payment) => payment.dueDate <= tracked.endDate)).toBe(true);
   });
 });
 

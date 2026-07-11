@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, CreditCard, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -10,10 +10,14 @@ import { CardSubTag } from "@/components/ui/page-head";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Money } from "@/components/money";
+import { MoneyInput } from "@/components/money-input";
 import { DateLabel } from "@/components/date-label";
 import { cn } from "@/lib/cn";
 import { balanceToneClass, balanceSurfaceClass } from "@/lib/balance-tone";
@@ -28,6 +32,26 @@ const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 const MAX_CHIPS_PER_DAY = 3;
 
 type EventTone = "income" | "card" | "expense" | "settled" | "posted";
+
+type CardPaymentPlan = {
+  cardId: string;
+  label: string;
+  dueDate: string;
+  relatedDate?: string;
+  amountCents: number;
+  originalAmountCents: number;
+  paymentDueCents: number;
+  paymentBalanceCents?: number;
+  dueLabel: string;
+};
+
+function cardPaymentDueLabel(label: string): string {
+  const normalized = label.toLowerCase();
+  if (normalized.includes("promo")) return "Deferred-interest payoff plan";
+  if (normalized.includes("est")) return "Estimated amount due";
+  if (normalized.includes("planned")) return "Planned card payment";
+  return "Full statement to avoid interest";
+}
 
 function daysInMonth(year: number, month: number): number {
   // month is 1..12
@@ -93,8 +117,10 @@ export function CalendarClient({
   const [month, setMonth] = React.useState(() => Number(today.slice(5, 7)));
   const [selectedDate, setSelectedDate] = React.useState<string | null>(null);
   const [addBillFor, setAddBillFor] = React.useState<string | null>(null);
+  const [planningCardPayment, setPlanningCardPayment] = React.useState<CardPaymentPlan | null>(null);
   const [categoriesState, setCategoriesState] = React.useState<string[]>(() => [...categories]);
   const [submitting, setSubmitting] = React.useState(false);
+  const [savingCardPayment, setSavingCardPayment] = React.useState(false);
 
   const rowByDate = React.useMemo(() => {
     const map = new Map<string, ProjectionRow>();
@@ -150,6 +176,86 @@ export function CalendarClient({
     }
   };
 
+  const putCardPaymentOverride = async (
+    plan: CardPaymentPlan,
+    dueDate: string,
+    amountCents: number,
+    notes?: string | null,
+  ) => {
+    const res = await fetch(`/api/credit-cards/${plan.cardId}/payment-overrides`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dueDate, amountCents, notes }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error ?? "save failed");
+  };
+
+  const deleteCardPaymentOverride = async (plan: CardPaymentPlan, dueDate: string) => {
+    const qs = new URLSearchParams({ dueDate });
+    const res = await fetch(
+      `/api/credit-cards/${plan.cardId}/payment-overrides?${qs}`,
+      { method: "DELETE" },
+    );
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error ?? "reset failed");
+  };
+
+  const saveCardPaymentPlan = async (
+    plan: CardPaymentPlan,
+    amountCents: number,
+    plannedDate: string,
+  ) => {
+    setSavingCardPayment(true);
+    try {
+      const originalDate = plan.relatedDate ?? plan.dueDate;
+      const moved = plannedDate !== originalDate;
+      if (moved) {
+        await putCardPaymentOverride(plan, originalDate, 0, `moved-to:${plannedDate}`);
+        await putCardPaymentOverride(plan, plannedDate, amountCents, `moved-from:${originalDate}`);
+        if (plan.dueDate !== originalDate && plan.dueDate !== plannedDate) {
+          await deleteCardPaymentOverride(plan, plan.dueDate);
+        }
+      } else if (amountCents === plan.originalAmountCents) {
+        await deleteCardPaymentOverride(plan, plan.dueDate);
+        if (plan.relatedDate && plan.relatedDate !== plan.dueDate) {
+          await deleteCardPaymentOverride(plan, plan.relatedDate);
+        }
+      } else {
+        await putCardPaymentOverride(plan, plannedDate, amountCents, null);
+        if (plan.dueDate !== plannedDate) {
+          await deleteCardPaymentOverride(plan, plan.dueDate);
+        }
+      }
+      toast.success("Card payment plan saved");
+      setPlanningCardPayment(null);
+      setSelectedDate(null);
+      router.refresh();
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSavingCardPayment(false);
+    }
+  };
+
+  const resetCardPaymentPlan = async (plan: CardPaymentPlan) => {
+    setSavingCardPayment(true);
+    try {
+      const dates = new Set(
+        [plan.dueDate, plan.relatedDate].filter((date): date is string => Boolean(date)),
+      );
+      for (const date of dates) await deleteCardPaymentOverride(plan, date);
+      toast.success("Card payment plan reset");
+      setPlanningCardPayment(null);
+      setSelectedDate(null);
+      router.refresh();
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSavingCardPayment(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -192,7 +298,7 @@ export function CalendarClient({
         <p className="text-[12px] text-[var(--text-3)]">
           This month is outside the projection window (
           <DateLabel iso={startDate} format="short" /> – <DateLabel iso={endDate} format="short" />
-          ) — no scheduled events to show, but you can still click a day to add a bill.
+          ) — no scheduled events to show, but you can still click a day to add a bill or plan a card payment.
         </p>
       ) : null}
 
@@ -258,6 +364,8 @@ export function CalendarClient({
                     {events.slice(0, MAX_CHIPS_PER_DAY).map((ev, j) => {
                       const tone = toneOf(ev, isPast);
                       const credit = isCredit(ev);
+                      const cardDue =
+                        ev.sourceType === "creditCardPayment" && (ev.paymentDueCents ?? 0) > 0;
                       return (
                         <div
                           key={`${iso}-${j}`}
@@ -266,7 +374,9 @@ export function CalendarClient({
                             TONE_CLASSES[tone],
                           )}
                         >
-                          <span className="min-w-0 truncate">{ev.label}</span>
+                          <span className="min-w-0 truncate">
+                            {cardDue ? `CARD DUE · ${ev.label}` : ev.label}
+                          </span>
                           <span className="tabular shrink-0">
                             {credit ? "+" : "−"}
                             <Money
@@ -311,7 +421,10 @@ export function CalendarClient({
       </div>
 
       {/* day detail */}
-      <Dialog open={selectedDate !== null && addBillFor === null} onOpenChange={(o) => !o && setSelectedDate(null)}>
+      <Dialog
+        open={selectedDate !== null && addBillFor === null && planningCardPayment === null}
+        onOpenChange={(o) => !o && setSelectedDate(null)}
+      >
         <DialogContent>
           {selectedDate ? (
             <>
@@ -329,10 +442,16 @@ export function CalendarClient({
                     const isPastDay = selectedDate < today;
                     const tone = toneOf(ev, isPastDay);
                     const credit = isCredit(ev);
+                    const isCardPayment =
+                      ev.sourceType === "creditCardPayment" && Boolean(ev.sourceId);
+                    const paymentDueCents =
+                      ev.paymentDueCents ?? ev.originalAmountCents ?? ev.amountCents;
+                    const originalDueDate = ev.relatedDate ?? selectedDate;
+                    const dueLabel = cardPaymentDueLabel(ev.label);
                     return (
                       <div
                         key={i}
-                        className="flex items-center justify-between gap-3 border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2"
+                        className="flex flex-wrap items-center justify-between gap-3 border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2"
                       >
                         <div className="min-w-0 flex-1">
                           <div className="break-words text-[13px] text-[var(--text-0)]">{ev.label}</div>
@@ -342,17 +461,55 @@ export function CalendarClient({
                               ev.isPaid ? "font-semibold text-[var(--mint)]" : "text-[var(--text-3)]",
                             )}
                           >
-                            {ev.isPaid ? "paid" : isPastDay ? "posted" : ev.kind}
+                            {ev.isPaid
+                              ? "paid"
+                              : isPastDay
+                                ? "posted"
+                                : isCardPayment
+                                  ? paymentDueCents > 0
+                                    ? "card due"
+                                    : "card plan"
+                                  : ev.kind}
                           </div>
+                          {isCardPayment && paymentDueCents > 0 ? (
+                            <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--amber)]">
+                              {dueLabel} · due <DateLabel iso={originalDueDate} format="short" /> ·{" "}
+                              <Money cents={paymentDueCents} />
+                            </div>
+                          ) : null}
                         </div>
-                        <span className={cn("tabular text-[13px] font-semibold", TONE_TEXT[tone])}>
-                          {credit ? "+" : "−"}
-                          <Money
-                            cents={Math.abs(
-                              ev.amountCents !== 0 ? ev.amountCents : (ev.originalAmountCents ?? 0),
-                            )}
-                          />
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={cn("tabular text-[13px] font-semibold", TONE_TEXT[tone])}>
+                            {credit ? "+" : "−"}
+                            <Money
+                              cents={Math.abs(
+                                ev.amountCents !== 0 ? ev.amountCents : (ev.originalAmountCents ?? 0),
+                              )}
+                            />
+                          </span>
+                          {isCardPayment && !ev.isPaid && !isPastDay ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                setPlanningCardPayment({
+                                  cardId: ev.sourceId!,
+                                  label: ev.label,
+                                  dueDate: selectedDate,
+                                  relatedDate: ev.relatedDate,
+                                  amountCents: ev.amountCents,
+                                  originalAmountCents:
+                                    ev.originalAmountCents ?? paymentDueCents,
+                                  paymentDueCents,
+                                  paymentBalanceCents: ev.paymentBalanceCents,
+                                  dueLabel,
+                                })
+                              }
+                            >
+                              <CreditCard className="mr-1 h-3.5 w-3.5" /> PROGRAM PAYMENT
+                            </Button>
+                          ) : null}
+                        </div>
                       </div>
                     );
                   })
@@ -379,6 +536,17 @@ export function CalendarClient({
         </DialogContent>
       </Dialog>
 
+      {planningCardPayment ? (
+        <CardPaymentPlanDialog
+          plan={planningCardPayment}
+          today={today}
+          saving={savingCardPayment}
+          onClose={() => setPlanningCardPayment(null)}
+          onSave={saveCardPaymentPlan}
+          onReset={resetCardPaymentPlan}
+        />
+      ) : null}
+
       {/* add bill on the clicked day */}
       <Dialog open={addBillFor !== null} onOpenChange={(o) => !o && setAddBillFor(null)}>
         <DialogContent>
@@ -404,5 +572,178 @@ export function CalendarClient({
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function CardPaymentPlanDialog({
+  plan,
+  today,
+  saving,
+  onClose,
+  onSave,
+  onReset,
+}: {
+  plan: CardPaymentPlan;
+  today: string;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (plan: CardPaymentPlan, amountCents: number, plannedDate: string) => Promise<void>;
+  onReset: (plan: CardPaymentPlan) => Promise<void>;
+}) {
+  const [amountCents, setAmountCents] = React.useState(plan.amountCents);
+  const [plannedDate, setPlannedDate] = React.useState(plan.dueDate);
+  const originalDueDate = plan.relatedDate ?? plan.dueDate;
+  const shortfallCents = Math.max(0, plan.paymentDueCents - amountCents);
+  const afterDueDate = plannedDate > originalDueDate;
+  const beforeToday = plannedDate < today;
+  const exceedsBalance =
+    plan.paymentBalanceCents != null && amountCents > plan.paymentBalanceCents;
+  const hasPlan =
+    plan.relatedDate != null ||
+    plan.dueDate !== originalDueDate ||
+    plan.amountCents !== plan.originalAmountCents;
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <CardSubTag>CARD_PAYMENT_PLAN</CardSubTag>
+          <DialogTitle>{plan.label.toUpperCase()}</DialogTitle>
+        </DialogHeader>
+        <form
+          className="space-y-4 pt-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onSave(plan, amountCents, plannedDate);
+          }}
+        >
+          <div className="grid gap-3 border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-[10px] uppercase tracking-[0.14em] text-[var(--text-2)]">
+            <div className="flex items-center justify-between gap-3">
+              <span>Card due date</span>
+              <span className="text-[var(--amber)]">
+                <DateLabel iso={originalDueDate} format="short" />
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span>{plan.dueLabel}</span>
+              <span className="font-bold tabular text-[var(--text-0)]">
+                <Money cents={plan.paymentDueCents} />
+              </span>
+            </div>
+            {plan.paymentBalanceCents != null ? (
+              <div className="flex items-center justify-between gap-3">
+                <span>Displayed card balance</span>
+                <span className="tabular text-[var(--text-0)]">
+                  <Money cents={plan.paymentBalanceCents} />
+                </span>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="calendar-card-payment-date">PROGRAMMED PAYMENT DATE</Label>
+            <Input
+              id="calendar-card-payment-date"
+              type="date"
+              min={today}
+              max={originalDueDate}
+              value={plannedDate}
+              onChange={(event) => setPlannedDate(event.target.value)}
+              disabled={saving}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="calendar-card-payment-amount">PROGRAMMED PAYMENT AMOUNT</Label>
+            <MoneyInput
+              id="calendar-card-payment-amount"
+              valueCents={amountCents}
+              onChangeCents={setAmountCents}
+              disabled={saving}
+            />
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setAmountCents(plan.paymentDueCents)}
+                disabled={saving}
+              >
+                PAY AMOUNT DUE
+              </Button>
+              {plan.paymentBalanceCents != null ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setAmountCents(plan.paymentBalanceCents!)}
+                  disabled={saving}
+                >
+                  PAY CARD BALANCE
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          {shortfallCents > 0 ? (
+            <div className="flex gap-2 border border-[var(--red)]/50 bg-[var(--red)]/10 p-3 text-[11px] text-[var(--red)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                This plan is short <Money cents={shortfallCents} /> of the full statement amount
+                needed to avoid interest.
+              </span>
+            </div>
+          ) : null}
+          {afterDueDate || beforeToday ? (
+            <div className="flex gap-2 border border-[var(--red)]/50 bg-[var(--red)]/10 p-3 text-[11px] text-[var(--red)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>Choose a future date on or before the card due date.</span>
+            </div>
+          ) : null}
+          {exceedsBalance ? (
+            <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--red)]">
+              Programmed payment exceeds the displayed card balance.
+            </div>
+          ) : null}
+
+          <p className="text-[11px] text-[var(--text-3)]">
+            This updates the Finance_OS cash-flow plan. It does not submit a payment to PayPal or
+            the card issuer.
+          </p>
+
+          <DialogFooter>
+            {hasPlan ? (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => void onReset(plan)}
+                disabled={saving}
+              >
+                RESET PLAN
+              </Button>
+            ) : (
+              <span />
+            )}
+            <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+              CANCEL
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={
+                saving ||
+                amountCents <= 0 ||
+                !plannedDate ||
+                afterDueDate ||
+                beforeToday ||
+                exceedsBalance
+              }
+            >
+              {saving ? "SAVING…" : "SAVE PAYMENT PLAN"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

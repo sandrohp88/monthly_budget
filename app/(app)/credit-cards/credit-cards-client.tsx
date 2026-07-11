@@ -59,6 +59,8 @@ import {
   nextStatementDateOnOrAfter,
   paidWithoutInterest,
   previousStatementDateOnOrBefore,
+  promoFullBalancePayment,
+  promoScheduledPayments,
   promoMonthlyChunkAt,
   promoWhatIf,
   statementCashDueCents,
@@ -2007,6 +2009,37 @@ function PromoScheduleSheet({
     );
   };
 
+  const planFullBalance = () => {
+    if (promo.endDate < today) {
+      toast.error("This deadline has passed — reconcile the actual PayPal balance first");
+      return;
+    }
+    setDrafts(
+      promoFullBalancePayment(promo).map((payment) => ({
+        key: makeDraftKey(),
+        dueDate: payment.dueDate,
+        amountCents: payment.amountCents,
+        note: "Full promotional balance by deadline",
+      })),
+    );
+  };
+
+  const planMonthlyPayments = () => {
+    if (promo.endDate < today) {
+      toast.error("This deadline has passed — reconcile the actual PayPal balance first");
+      return;
+    }
+    const schedule = promoScheduledPayments(promo, card, today);
+    setDrafts(
+      schedule.map((payment) => ({
+        key: makeDraftKey(),
+        dueDate: payment.dueDate,
+        amountCents: payment.amountCents,
+        note: "Scheduled promotional payoff",
+      })),
+    );
+  };
+
   const save = async () => {
     // Validate: dates required, amounts > 0
     for (const d of sorted) {
@@ -2099,6 +2132,41 @@ function PromoScheduleSheet({
           <div className="text-[11px] tracking-wide text-[var(--text-2)]">
             Pick exact dates and amounts through the deadline. The schedule must
             cover the full remaining balance; actual balances change only when reconciled.
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={planFullBalance}
+              disabled={promo.endDate < today}
+              className="border border-[var(--border-raw)] bg-[var(--bg-1)] p-3 text-left transition-colors hover:border-[var(--cyan)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--cyan)]">
+                PAY FULL BY DEADLINE
+              </div>
+              <div className="mt-1 text-[16px] font-bold tabular text-[var(--text-0)]">
+                <Money cents={remaining} />
+              </div>
+              <div className="mt-1 text-[10px] text-[var(--text-2)]">
+                One planned payment on <DateLabel iso={promo.endDate} format="short" />.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={planMonthlyPayments}
+              disabled={promo.endDate < today}
+              className="border border-[var(--border-raw)] bg-[var(--bg-1)] p-3 text-left transition-colors hover:border-[var(--cyan)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--cyan)]">
+                SCHEDULE THROUGH PROMO
+              </div>
+              <div className="mt-1 text-[16px] font-bold tabular text-[var(--text-0)]">
+                MONTHLY
+              </div>
+              <div className="mt-1 text-[10px] text-[var(--text-2)]">
+                Auto-fill card-cycle payments through the promotional deadline.
+              </div>
+            </button>
           </div>
 
           {sorted.length === 0 ? (

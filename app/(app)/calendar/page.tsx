@@ -30,7 +30,7 @@ export default async function CalendarPage() {
           Calendar
         </div>
         <p className="mt-2 text-[14px] text-[var(--text-2)]">
-          Upcoming bills, paychecks, and card payments — click a day for detail or to add a bill
+          See every card due date and the full statement amount needed to avoid interest
         </p>
       </div>
       <CalendarClient
