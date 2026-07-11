@@ -16,6 +16,7 @@ import {
   createPromo,
   updatePlaidDraftStatus,
   updateCardCycleDays,
+  updateCreditCard,
   upsertCreditCardStatementByDate,
   updateStatement,
   settleStatementWithDraft,
@@ -44,6 +45,7 @@ import {
   toPayPalFinancingPurchase,
 } from "./paypal-special-financing";
 import { log } from "./log";
+import { inferLinkedCardCycle } from "./linked-card-cycle";
 
 // Pure helpers live in plaid-helpers.ts so they don't drag in "server-only"
 // when imported from tests. Re-exported here for callers that already import
@@ -843,5 +845,75 @@ export async function syncCreditCardLiabilitiesForItem(
     log.warn(`plaid-liabilities: skipped item ${itemId}: ${(err as Error).message}`);
   }
 
+  // Balance tracking and transaction-derived cycle inference do not depend on
+  // the Liabilities product. Keep linked cards useful even when an issuer only
+  // exposes Accounts + Transactions through Plaid.
+  cardsUpdated += await reconcileLinkedCardTrackingForItem(userId, itemId);
+
   return { cardsUpdated, statementsCreated };
+}
+
+async function reconcileLinkedCardTrackingForItem(
+  userId: string,
+  itemId: string,
+): Promise<number> {
+  const [accounts, cards, drafts] = await Promise.all([
+    listPlaidAccountsByItem(itemId),
+    listCreditCards(userId, false),
+    listPlaidDrafts(userId, "all"),
+  ]);
+  const accountById = new Map(accounts.map((account) => [account.id, account] as const));
+  const linkedCards = cards.filter(
+    (card) => card.plaidAccountId != null && accountById.has(card.plaidAccountId),
+  );
+  let changed = 0;
+
+  for (const card of linkedCards) {
+    const account = accountById.get(card.plaidAccountId!)!;
+    const statements = await listStatements(card.id);
+    const paymentDates = drafts
+      .filter(
+        (draft) =>
+          draft.accountId === card.plaidAccountId &&
+          draft.status === "approved" &&
+          !draft.pending &&
+          draft.kind === "card_payment",
+      )
+      .map((draft) => draft.date);
+    const inferred = inferLinkedCardCycle({
+      statementDates: statements.map((statement) => statement.statementDate),
+      paymentDates,
+      gracePeriodDays: card.gracePeriodDays,
+    });
+
+    const currentBalanceCents =
+      account.balanceCents == null ? card.currentBalanceCents : Math.max(0, account.balanceCents);
+    const needsBalanceUpdate = currentBalanceCents !== card.currentBalanceCents;
+    const needsCycleUpdate =
+      inferred != null &&
+      (card.statementCycleMode !== "interval_days" ||
+        card.statementCycleAnchorDate !== inferred.anchorDate ||
+        card.statementCycleIntervalDays !== inferred.intervalDays);
+    if (!needsBalanceUpdate && !needsCycleUpdate) continue;
+
+    await updateCreditCard(userId, card.id, {
+      ...(needsBalanceUpdate ? { currentBalanceCents } : {}),
+      ...(needsCycleUpdate
+        ? {
+            statementCycleMode: "interval_days",
+            statementCycleAnchorDate: inferred!.anchorDate,
+            statementCycleIntervalDays: inferred!.intervalDays,
+          }
+        : {}),
+    });
+    changed++;
+    if (needsCycleUpdate) {
+      log.info(
+        `plaid-sync: inferred ${inferred!.intervalDays}-day cycle for linked card ${card.id} ` +
+          `from ${inferred!.source}; anchor ${inferred!.anchorDate}`,
+      );
+    }
+  }
+
+  return changed;
 }

@@ -246,7 +246,10 @@ describe("repos / setCreditCardPlaidLink", () => {
     });
     const result = await setCreditCardPlaidLink(user.id, card.id, accountId);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.card.plaidAccountId).toBe(accountId);
+    if (result.ok) {
+      expect(result.card.plaidAccountId).toBe(accountId);
+      expect(result.card.currentBalanceCents).toBe(50_00);
+    }
     expect((await getCreditCardByPlaidAccountId(user.id, accountId))?.id).toBe(card.id);
   });
 

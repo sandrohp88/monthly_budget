@@ -1331,6 +1331,67 @@ async function seedLinkedCard(userId: string, plaidAccountId = "acct_cc") {
 }
 
 describe("syncCreditCardLiabilitiesForItem (mocked Plaid + real SQLite)", () => {
+  it("tracks the linked balance and infers an interval cycle from payment transactions", async () => {
+    const user = await makeUser();
+    const { item, card, plaidAccountId } = await seedLinkedCard(user.id);
+    await upsertPlaidAccount({
+      id: plaidAccountId,
+      itemId: item.id,
+      userId: user.id,
+      name: "Test Credit",
+      mask: "1234",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 987_65,
+      updatedAt: Date.now(),
+    });
+    for (const [id, date] of [
+      ["payment-1", "2025-01-05"],
+      ["payment-2", "2025-02-04"],
+      ["payment-3", "2025-03-06"],
+    ] as const) {
+      await upsertPlaidDraft({
+        id,
+        userId: user.id,
+        accountId: plaidAccountId,
+        date,
+        description: "CARD PAYMENT",
+        originalDescription: null,
+        amountCents: -100_00,
+        plaidCategory: "LOAN_PAYMENTS",
+        merchantName: null,
+        pending: false,
+        status: "approved",
+        kind: "card_payment",
+        linkedExpenseId: null,
+        linkedPromoId: null,
+      });
+    }
+    __plaidMock.liabilitiesGet.mockResolvedValue({
+      data: {
+        liabilities: {
+          credit: [
+            {
+              account_id: plaidAccountId,
+              last_statement_issue_date: "2025-03-15",
+              next_payment_due_date: "2025-04-05",
+              last_statement_balance: 500,
+            },
+          ],
+        },
+      },
+    });
+
+    await syncCreditCardLiabilitiesForItem(user.id, item.id, "tok");
+
+    expect(await getCreditCard(user.id, card.id)).toMatchObject({
+      currentBalanceCents: 987_65,
+      statementCycleMode: "interval_days",
+      statementCycleAnchorDate: "2025-03-15",
+      statementCycleIntervalDays: 30,
+    });
+  });
+
   it("updates cycle days + creates a statement from a liabilities response", async () => {
     const user = await makeUser();
     const { item, card, plaidAccountId } = await seedLinkedCard(user.id);
