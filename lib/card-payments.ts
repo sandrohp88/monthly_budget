@@ -75,6 +75,17 @@ function movedFromDate(notes: string | null | undefined): string | undefined {
   return match?.[1];
 }
 
+/**
+ * Scheduled paydown marker: `pays-down:<dueDate>` in an override's notes means
+ * "this planned payment reduces whatever the projection charges on that card
+ * due date" — statement, open-cycle estimate, or promo chunk. Written by the
+ * calendar's PLAN CARD PAYMENT flow.
+ */
+export function paydownTargetDate(notes: string | null | undefined): string | undefined {
+  const match = notes?.match(/(?:^|\s)pays-down:(\d{4}-\d{2}-\d{2})(?:\s|$)/);
+  return match?.[1];
+}
+
 export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCardPaymentsResult {
   const { today, endDate, activeCards, statements, promos, variableBills } = input;
 
@@ -90,8 +101,28 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     promoPaymentsByPromoId.set(pp.promoId, list);
   }
 
+  // Scheduled paydowns (`pays-down:<date>` notes) are NOT slot overrides:
+  // they always emit their own planned-payment debit on their date, and they
+  // reduce the amount the projection charges at the target due date instead
+  // of replacing it.
+  const paydowns: Array<{
+    cardId: string;
+    date: string;
+    amountCents: number;
+    targetDate: string;
+  }> = [];
   const cardOverridesByCard = new Map<string, Map<string, { amountCents: number; notes: string | null }>>();
   for (const override of input.cardPaymentOverrides) {
+    const target = paydownTargetDate(override.notes);
+    if (target) {
+      paydowns.push({
+        cardId: override.cardId,
+        date: override.dueDate,
+        amountCents: override.amountCents,
+        targetDate: target,
+      });
+      continue;
+    }
     let byDate = cardOverridesByCard.get(override.cardId);
     if (!byDate) {
       byDate = new Map<string, { amountCents: number; notes: string | null }>();
@@ -99,6 +130,29 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     }
     byDate.set(override.dueDate, { amountCents: override.amountCents, notes: override.notes });
   }
+  // Only PENDING paydowns (dated today or later) reduce their target slot.
+  // Once the date passes, reality is expected to carry the effect instead —
+  // posted payments shrink the live balance and statement paid amounts — so
+  // a stale plan must not keep discounting the due date forever.
+  const paydownRemainingByKey = new Map<string, number>();
+  for (const p of paydowns) {
+    if (p.date < today || p.amountCents <= 0) continue;
+    const key = overrideKey(p.cardId, p.targetDate);
+    paydownRemainingByKey.set(key, (paydownRemainingByKey.get(key) ?? 0) + p.amountCents);
+  }
+  // Several generators can land on the same (card, dueDate) — e.g. an
+  // open-cycle estimate plus a promo chunk. Consuming from a shared remaining
+  // pool guarantees a paydown is subtracted from the date's combined total
+  // exactly once, never once per generator.
+  const consumePaydown = (cardId: string, dueDate: string, baseCents: number): number => {
+    if (baseCents <= 0) return 0;
+    const key = overrideKey(cardId, dueDate);
+    const remaining = paydownRemainingByKey.get(key) ?? 0;
+    if (remaining <= 0) return 0;
+    const consumed = Math.min(baseCents, remaining);
+    paydownRemainingByKey.set(key, remaining - consumed);
+    return consumed;
+  };
   const appliedCardOverrideKeys = new Set<string>();
 
   // Open-cycle estimate per Plaid-linked active card: the live card balance
@@ -169,16 +223,17 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   for (const group of statementDueByCardDate.values()) {
     const override = cardOverridesByCard.get(group.cardId)?.get(group.dueDate);
     appliedCardOverrideKeys.add(overrideKey(group.cardId, group.dueDate));
-    const amountCents = override?.amountCents ?? group.remainingCents;
+    const baseCents = override?.amountCents ?? group.remainingCents;
+    const consumed = consumePaydown(group.cardId, group.dueDate, baseCents);
     ccExtras.push({
       date: group.dueDate,
       description: `${group.cardName} payment`,
-      amountCents,
+      amountCents: baseCents - consumed,
       sourceId: group.cardId,
       sourceType: "creditCardPayment" as const,
       originalAmountCents: group.remainingCents,
       relatedDate: movedFromDate(override?.notes),
-      paymentDueCents: group.remainingCents,
+      paymentDueCents: Math.max(0, group.remainingCents - consumed),
       paymentBalanceCents: displayBalanceForCard(group.cardId, group.remainingCents),
     });
   }
@@ -228,7 +283,9 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     if (recordedDueDatesByCard.get(card.id)?.has(dueDate)) continue;
     const override = cardOverridesByCard.get(card.id)?.get(dueDate);
     appliedCardOverrideKeys.add(overrideKey(card.id, dueDate));
-    const amountCents = override?.amountCents ?? openCycleCents;
+    const baseCents = override?.amountCents ?? openCycleCents;
+    const consumed = consumePaydown(card.id, dueDate, baseCents);
+    const amountCents = baseCents - consumed;
     if (amountCents > 0) {
       openCycleExtras.push({
         date: dueDate,
@@ -238,7 +295,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
         sourceType: "creditCardPayment",
         originalAmountCents: openCycleCents,
         relatedDate: movedFromDate(override?.notes),
-        paymentDueCents: openCycleCents,
+        paymentDueCents: Math.max(0, openCycleCents - consumed),
         paymentBalanceCents: Math.max(liveBalance, openCycleCents),
       });
     }
@@ -290,7 +347,9 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   for (const chunk of promoChunksByCardDate.values()) {
     const override = cardOverridesByCard.get(chunk.cardId)?.get(chunk.dueDate);
     appliedCardOverrideKeys.add(overrideKey(chunk.cardId, chunk.dueDate));
-    const amountCents = override?.amountCents ?? chunk.amountCents;
+    const baseCents = override?.amountCents ?? chunk.amountCents;
+    const consumed = consumePaydown(chunk.cardId, chunk.dueDate, baseCents);
+    const amountCents = baseCents - consumed;
     if (amountCents <= 0) continue;
     const descLabel = chunk.descriptions.join(", ");
     promoExtras.push({
@@ -301,7 +360,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       sourceType: "creditCardPayment",
       originalAmountCents: chunk.amountCents,
       relatedDate: movedFromDate(override?.notes),
-      paymentDueCents: chunk.amountCents,
+      paymentDueCents: Math.max(0, chunk.amountCents - consumed),
       paymentBalanceCents: chunk.balanceCents,
     });
   }
@@ -373,6 +432,23 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
         paymentBalanceCents: displayBalanceForCard(cardId, 0),
       });
     }
+  }
+  // Scheduled paydowns always cash out on their own date — the reduction they
+  // bought at the target due date happened in stages 1–3 above.
+  for (const p of paydowns) {
+    const card = cardById.get(p.cardId);
+    if (!card || p.amountCents <= 0) continue;
+    plannedCardExtras.push({
+      date: p.date,
+      description: `${card.name} planned payment`,
+      amountCents: p.amountCents,
+      sourceId: p.cardId,
+      sourceType: "creditCardPayment",
+      originalAmountCents: 0,
+      paymentDueCents: 0,
+      paymentBalanceCents: displayBalanceForCard(p.cardId, 0),
+      paydownTargetDate: p.targetDate,
+    });
   }
 
   const variableBillCategoriesByKey: Record<string, string[]> = {};

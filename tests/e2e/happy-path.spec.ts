@@ -37,6 +37,6 @@ test("app boots: /setup or /login renders", async ({ page }) => {
   await page.goto("/");
   // Middleware redirects unauth users; we should land on /setup or /login.
   await page.waitForURL(/\/(setup|login)/);
-  // Ledger branding is on every entry screen.
-  await expect(page.getByText(/^Ledger$/).first()).toBeVisible();
+  // Bluefalls branding is on every entry screen (login and setup).
+  await expect(page.getByText(/Bluefalls finance/i).first()).toBeVisible();
 });

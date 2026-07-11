@@ -144,6 +144,13 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   const cashBills = bills.filter(
     (b) => b.paidViaCardId == null || !activeCardIds.has(b.paidViaCardId),
   );
+  // Card-charged bills still show up as zero-cash markers so the calendar can
+  // say "this lands on card X today" without double-counting the cash (the
+  // card's payment already carries it).
+  const cardNameById = new Map(activeCards.map((c) => [c.id, c.name] as const));
+  const cardChargedBills = bills.filter(
+    (b) => b.paidViaCardId != null && activeCardIds.has(b.paidViaCardId),
+  );
 
   // All credit-card cash-out (statements, open-cycle estimate, promo chunks,
   // variable spend, planned payments) is computed in one place. The
@@ -310,17 +317,28 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
         settledBeforeDate: settleBefore,
         showSettledBeforeDate: lookback,
       })),
-    bills: cashBills.map((b) => ({
-      id: b.id,
-      name: b.name,
-      amountCents: b.amountCents,
-      intervalMonths: b.intervalMonths,
-      anchorDate: b.anchorDate,
-      paymentOverrides: billOverridesByBill.get(b.id) ?? [],
-      paidOccurrences: paidOccurrencesByBill.get(b.id) ?? [],
-      settledBeforeDate: settleBefore,
-      showSettledBeforeDate: lookback || (linked && b.autoPay),
-    })),
+    bills: [
+      ...cashBills.map((b) => ({
+        id: b.id,
+        name: b.name,
+        amountCents: b.amountCents,
+        intervalMonths: b.intervalMonths,
+        anchorDate: b.anchorDate,
+        paymentOverrides: billOverridesByBill.get(b.id) ?? [],
+        paidOccurrences: paidOccurrencesByBill.get(b.id) ?? [],
+        settledBeforeDate: settleBefore,
+        showSettledBeforeDate: lookback || (linked && b.autoPay),
+      })),
+      ...cardChargedBills.map((b) => ({
+        id: b.id,
+        name: b.name,
+        amountCents: b.amountCents,
+        intervalMonths: b.intervalMonths,
+        anchorDate: b.anchorDate,
+        paymentOverrides: billOverridesByBill.get(b.id) ?? [],
+        chargedToCardName: cardNameById.get(b.paidViaCardId!),
+      })),
+    ],
     extras: [
       ...extras
         .filter((e) => onOrAfterStart(e.date))
@@ -331,6 +349,17 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
           amountCents: e.amountCents,
           settledBeforeDate: settleBefore,
           showSettledBeforeDate: lookback,
+        })),
+      // Card-charged one-time expenses: zero-cash markers (see cardChargedBills).
+      ...extras
+        .filter((e) => onOrAfterStart(e.date))
+        .filter((e) => e.paidViaCardId != null && activeCardIds.has(e.paidViaCardId))
+        .map((e) => ({
+          date: e.date,
+          description: e.description,
+          amountCents: 0,
+          originalAmountCents: e.amountCents,
+          chargedToCardName: cardNameById.get(e.paidViaCardId!),
         })),
       ...cardPayments.extras.filter((e) => onOrAfterStart(e.date)).map(decorateScheduledExtra),
       ...historicalExtras,

@@ -52,6 +52,12 @@ export type Bill = {
   settledBeforeDate?: string;
   /** Show settled past occurrences as paid rows instead of hiding them. */
   showSettledBeforeDate?: boolean;
+  /**
+   * Card name when the bill is charged to a credit card. Occurrences render
+   * as zero-cash informational markers — the card's statement payment carries
+   * the cash, so the marker never moves the running balance.
+   */
+  chargedToCardName?: string;
 };
 
 export type OneTimeExpense = {
@@ -73,6 +79,13 @@ export type OneTimeExpense = {
   settledBeforeDate?: string;
   /** Show settled past occurrences as paid rows instead of hiding them. */
   showSettledBeforeDate?: boolean;
+  /** Card name when the expense is charged to a credit card (zero-cash marker). */
+  chargedToCardName?: string;
+  /**
+   * Scheduled card paydown: the generated card-payment due date this planned
+   * payment reduces (see lib/card-payments.ts).
+   */
+  paydownTargetDate?: string;
 };
 
 export type ProjectionEventKind = "paycheck" | "bill" | "extra";
@@ -89,6 +102,11 @@ export type ProjectionEvent = {
   paymentDueCents?: number;
   paymentBalanceCents?: number;
   isPaid?: boolean;
+  /** Set when the underlying bill/expense is charged to a credit card — the
+   *  event is a zero-cash marker (the card's payment carries the cash). */
+  chargedToCardName?: string;
+  /** Set on scheduled card paydowns: the due date this payment reduces. */
+  paydownTargetDate?: string;
 };
 
 export type ProjectionRow = {
@@ -257,6 +275,8 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
       paymentDueCents: e.paymentDueCents,
       paymentBalanceCents: e.paymentBalanceCents,
       isPaid: e.isPaid,
+      chargedToCardName: e.chargedToCardName,
+      paydownTargetDate: e.paydownTargetDate,
     });
   }
 
@@ -294,6 +314,21 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
       const occ = addMonthsClamped(anchorY, anchorM, anchorD, k * b.intervalMonths);
       const date = `${String(occ.year).padStart(4, "0")}-${String(occ.month).padStart(2, "0")}-${String(occ.day).padStart(2, "0")}`;
       const override = overrides.get(date);
+      // Card-charged bills never move cash — the card's statement payment
+      // carries them. Emit a zero-amount marker so the day still shows the
+      // charge landing on the card.
+      if (b.chargedToCardName) {
+        addEvent(date, {
+          kind: "bill",
+          label: b.name,
+          amountCents: 0,
+          sourceId: b.id,
+          sourceType: "bill",
+          originalAmountCents: override ?? b.amountCents,
+          chargedToCardName: b.chargedToCardName,
+        });
+        continue;
+      }
       // A reconciled payment beats the generic settled-before hiding: the
       // occurrence renders as an explicit paid marker showing the amount
       // that actually posted, even when it falls before the settle pivot.

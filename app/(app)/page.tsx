@@ -100,14 +100,17 @@ export default async function DashboardPage() {
     balanceDeltaCents != null && Math.abs(balanceDeltaCents) > 50_00; // > $50 drift
 
   // Horizontal agenda: the next two weeks, one card per day that has
-  // something scheduled. Settled/paid zero-amount markers are calendar
-  // detail — skip them here so the strip only shows cash still in motion.
+  // something scheduled. Settled/paid zero-amount markers and card-charged
+  // bills are calendar detail — skip them here so the strip only shows cash
+  // still in motion.
   const agendaEnd = addDaysIso(today, AGENDA_DAYS);
   const agendaDays = rows
     .filter((r) => r.date >= today && r.date <= agendaEnd)
     .map((r) => ({
       ...r,
-      events: r.events.filter((e) => !(e.isPaid && e.amountCents === 0)),
+      events: r.events.filter(
+        (e) => !(e.isPaid && e.amountCents === 0) && !e.chargedToCardName,
+      ),
     }))
     .filter((r) => r.events.length > 0)
     .slice(0, AGENDA_MAX_CARDS);

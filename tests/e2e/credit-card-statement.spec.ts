@@ -1,8 +1,20 @@
 import { test, expect } from "@playwright/test";
 import { ensureAuth } from "./auth";
 
+function addDaysIso(iso: string, days: number): string {
+  const date = new Date(`${iso}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 test("create card -> enter statement -> mark paid -> verify paid state", async ({ page }) => {
   await ensureAuth(page);
+
+  // Dates are relative to today so "mark paid now" always lands on/before the
+  // due date (hardcoded dates rotted once the calendar passed them).
+  const today = new Date().toISOString().slice(0, 10);
+  const statementDate = addDaysIso(today, -7);
+  const dueDate = addDaysIso(today, 7);
 
   // ── create a credit card ──────────────────────────────────────────────
   await page.goto("/credit-cards");
@@ -10,8 +22,8 @@ test("create card -> enter statement -> mark paid -> verify paid state", async (
 
   const cardDialog = page.getByRole("dialog");
   await cardDialog.locator("#cc-name").fill("Test Visa");
-  await cardDialog.locator("#cc-stmt").fill("15");
-  await cardDialog.locator("#cc-due").fill("10");
+  await cardDialog.locator("#cc-stmt").fill(String(Number(statementDate.slice(8, 10))));
+  await cardDialog.locator("#cc-due").fill(String(Number(dueDate.slice(8, 10))));
   await cardDialog.getByRole("button", { name: /add card/i }).click();
 
   await expect(page.getByText("Test Visa").first()).toBeVisible();
@@ -20,8 +32,8 @@ test("create card -> enter statement -> mark paid -> verify paid state", async (
   await page.getByRole("button", { name: /enter statement/i }).first().click();
 
   const stmtDialog = page.getByRole("dialog");
-  await stmtDialog.locator("#stmt-date").fill("2026-05-15");
-  await stmtDialog.locator("#due-date").fill("2026-06-10");
+  await stmtDialog.locator("#stmt-date").fill(statementDate);
+  await stmtDialog.locator("#due-date").fill(dueDate);
   // MoneyInput: type dollar amount (500 = $500.00)
   await stmtDialog.locator("input[inputmode='decimal']").fill("500");
   await stmtDialog.getByRole("button", { name: /save statement/i }).click();
