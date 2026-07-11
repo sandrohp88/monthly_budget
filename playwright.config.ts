@@ -1,5 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// Default port 3000 matches local .env / AUTH_URL. On machines where 3000 is
+// unusable (e.g. inside a Windows WinNAT excluded port range), run with
+// E2E_PORT=3200 — AUTH_URL below follows the port so the Host-header guard
+// (middleware 421) keeps passing.
+const PORT = Number(process.env.E2E_PORT ?? 3000);
+const BASE_URL = `http://localhost:${PORT}`;
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
@@ -9,7 +16,7 @@ export default defineConfig({
   reporter: "list",
   globalSetup: "./tests/e2e/global-setup.ts",
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: BASE_URL,
     trace: "on-first-retry",
   },
   projects: [
@@ -19,14 +26,14 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npx next build && npx next start -p 3000 -H localhost",
-    url: "http://localhost:3000",
+    command: `npx next build && npx next start -p ${PORT} -H localhost`,
+    url: BASE_URL,
     reuseExistingServer: false,
     timeout: 180_000,
     env: {
       DATABASE_URL: "file:./data/test.db",
       AUTH_SECRET: "test-secret-test-secret-test-secret-test",
-      AUTH_URL: "http://localhost:3000",
+      AUTH_URL: BASE_URL,
       NODE_ENV: "production",
     },
   },
