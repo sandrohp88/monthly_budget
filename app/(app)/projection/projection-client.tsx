@@ -119,6 +119,8 @@ type PaymentAdjustment = {
   paymentDueCents?: number;
   paymentBalanceCents?: number;
   promoSummaries?: PromoPaymentSummary[];
+  /** Scheduled paydown rows keep reducing their target — preserve the link on save. */
+  paydownTargetDate?: string;
 };
 
 type PromoPaymentSummary = {
@@ -338,7 +340,24 @@ export function ProjectionClient({
       const originalDate = adjustment.relatedDate ?? adjustment.dueDate;
       const movedCardPayment =
         adjustment.targetType === "creditCardPayment" && plannedDate !== originalDate;
-      if (movedCardPayment) {
+      if (adjustment.paydownTargetDate) {
+        // Scheduled paydown row: keep the pays-down link so the target due
+        // date stays reduced. Moving it is a plain move of this row — no
+        // moved-to/moved-from pair, the target slot was never overridden.
+        if (amountCents <= 0) {
+          await deleteOverride(adjustment, adjustment.dueDate);
+        } else {
+          await putOverride(
+            adjustment,
+            plannedDate,
+            amountCents,
+            `pays-down:${adjustment.paydownTargetDate}`,
+          );
+          if (adjustment.dueDate !== plannedDate) {
+            await deleteOverride(adjustment, adjustment.dueDate);
+          }
+        }
+      } else if (movedCardPayment) {
         await putOverride(adjustment, originalDate, 0, `moved-to:${plannedDate}`);
         await putOverride(adjustment, plannedDate, amountCents, `moved-from:${originalDate}`);
         if (adjustment.dueDate !== originalDate && adjustment.dueDate !== plannedDate) {
@@ -649,6 +668,10 @@ export function ProjectionClient({
                               {event.isPaid ? (
                                 <span className="font-semibold text-[var(--phosphor)]">
                                   Paid <Money cents={event.originalAmountCents ?? 0} />
+                                </span>
+                              ) : event.chargedToCardName ? (
+                                <span className="text-[var(--text-3)]">
+                                  On card · <Money cents={event.originalAmountCents ?? 0} />
                                 </span>
                               ) : isExpenseEvent ? (
                                 <span className="font-semibold text-[var(--red)]">
@@ -1151,6 +1174,23 @@ function ProjectionEventItem({
   variableBillCategories?: Record<string, string[]>;
   onAdjustPayment: (adjustment: PaymentAdjustment) => void;
 }) {
+  // Charged to a credit card: informational marker — the card's payment
+  // carries the cash, so there is nothing to adjust here.
+  if (event.chargedToCardName) {
+    return (
+      <div key={`${event.kind}-${event.label}-${eventIndex}`} className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <SoftPill tone="neutral">On card</SoftPill>
+          <span className="truncate text-[14px] font-medium text-[var(--text-0)]">
+            {event.label}
+          </span>
+        </div>
+        <span className="mt-0.5 block text-[12px] text-[var(--text-3)]">
+          Charged to {event.chargedToCardName} — carried by that card&apos;s payment
+        </span>
+      </div>
+    );
+  }
   const targetType =
     event.kind === "bill" && event.sourceType === "bill"
       ? "bill"
@@ -1211,6 +1251,7 @@ function ProjectionEventItem({
                 targetType === "creditCardPayment"
                   ? (promoSummariesByCard[event.sourceId!] ?? [])
                   : [],
+              paydownTargetDate: event.paydownTargetDate,
             })
           }
           className="min-w-0 truncate rounded-full px-1.5 py-1 text-left text-[14px] font-medium text-[var(--text-0)] transition-colors hover:bg-[var(--bg-2)]"
@@ -1226,9 +1267,15 @@ function ProjectionEventItem({
         ) : null}
         {targetType === "creditCardPayment" ? (
           <>
-            <span>
-              Due <Money cents={paymentDueCents} />
-            </span>
+            {event.paydownTargetDate ? (
+              <span>
+                Pays down <DateLabel iso={event.paydownTargetDate} format="short" />
+              </span>
+            ) : (
+              <span>
+                Due <Money cents={paymentDueCents} />
+              </span>
+            )}
             {paymentBalanceCents != null ? (
               <span>
                 Balance <Money cents={paymentBalanceCents} />

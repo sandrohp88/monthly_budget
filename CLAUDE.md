@@ -429,8 +429,8 @@ If anything matches that isn't intentional (`.env.example` placeholders are OK),
 ### Where it lives (since the 2026-06-23 cluster consolidation)
 - **Server**: **LXC 125 `budget`** (`10.10.88.25`) on the proxmox cluster (pve-7050) — migrated off `plex`
 - **Deploy directory**: `/opt/budget`
-- **Public URL**: **`https://budget.sherrera.dev`** via the cluster **Cloudflare Tunnel** (`cloudflared` in LXC 125 → `http://127.0.0.1:3000`). **Tunnel-only**: the loopback app rejects other Host headers, so the old `budget.bluefalls.home` LAN vhost was dropped by design.
-- **Containers**: `budget-app` (loopback `:3000`, healthcheck `/api/health`) + `budget-backup` (VACUUM cron). The LXC-125 Caddy at `/opt/budget/Caddyfile` is a shared front door for *other* `*.bluefalls.home` vhosts — budget itself is served by the tunnel.
+- **Public URL**: **`https://budget.sherrera.dev`** via the **`bluefalls-public` Cloudflare Tunnel**, whose connector moved to **LXC 139 `bluefalls-edge`** on 2026-07-06 (it originally ran in LXC 125). Path: tunnel (LXC 139) → `https://10.10.88.25` (LXC 125 Caddy) → loopback app. **Tunnel-only**: the loopback app rejects other Host headers, so the old `budget.bluefalls.home` LAN vhost was dropped by design. See `Z:\llm-wiki\wiki\projects\bluefalls-edge\index.md`.
+- **Containers**: `budget-app` (loopback `:3000`, healthcheck `/api/health`) + `budget-backup` (VACUUM cron). The LXC-125 Caddy at `/opt/budget/Caddyfile` fronts budget for the tunnel hop AND the other `*.bluefalls.home` LAN vhosts — never rebuild/restart it casually.
 - Full host detail: `Z:\llm-wiki\wiki\entities\proxmox-cluster.md`
 
 ### How to deploy
@@ -560,7 +560,8 @@ These bit us before. Don't repeat:
 20. **Plaid promo detection needs raw transaction text at sync time** — drafts only persist a small subset of Plaid's transaction payload. If you need issuer-specific promo clues, inspect nested fields from the live Transaction object (`payment_meta`, `counterparties`, category, location, etc.) before storing the draft; don't infer a promo from generic PayPal `LOAN_PAYMENTS` rows.
 21. **PayPal Credit special financing is split across two Plaid accounts** — qualifying purchases appear on the PayPal wallet account (`depository/paypal`), while payments appear on the linked PayPal Credit account (`credit/paypal`) as `LOAN_PAYMENTS`. Purchases at or above `PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS` (`lib/paypal-special-financing.ts`, currently PayPal's published $149 minimum) can seed promo rows, but Plaid payment rows do not expose PayPal's targeted promo allocation.
 22. **PayPal's promo list beats transaction FIFO** — PayPal's issuer UI exposes actual promotional balances, payoff dates, and targeted paid-off promos that Plaid transaction history does not. When a promo row's `authoritativeSource` column is non-null (introduced in migration `0018`), do not overwrite its amount/date from transaction FIFO; an inactive zero-balance PayPal promo must also stay paid off on later syncs. Legacy rows used a sentinel string `"PayPal authoritative promo data"` in `notes` — `0018` backfills the typed column from that and the sync logic now reads only `authoritativeSource`.
-23. **Playwright must use a host allowed by `AUTH_URL`** — middleware rejects unknown `Host` headers with 421. The E2E config builds and serves on `localhost:3000` to match local `.env`; changing the test port/host also requires updating the auth URL used at build time.
+23. **Playwright must use a host allowed by `AUTH_URL`** — middleware rejects unknown `Host` headers with 421. The E2E config builds and serves on `localhost:3000` to match local `.env`; `playwright.config.ts` derives `AUTH_URL` from the port, so on machines where 3000 is unusable (Windows WinNAT excluded port range) run `E2E_PORT=3200 npx playwright test`.
+24. **E2E specs share one test DB per suite run** (wiped once in `global-setup.ts`) — most specs are order-independent, but `credit-card-statement.spec.ts` still assumes a lone card; run it standalone until specs are fully scoped. Keep spec dates relative to today (hardcoded dates rot once the calendar passes them).
 
 ---
 
@@ -817,6 +818,27 @@ flow will not save it after the issuer due date. Moved plans use paired
 `moved-to:YYYY-MM-DD` / `moved-from:YYYY-MM-DD` notes, matching the ledger
 planner. This only changes Finance_OS cash-flow projections — it never submits
 a payment to PayPal or another issuer.
+
+**Scheduled paydowns (`pays-down:` notes).** Any calendar day can also open
+PLAN CARD PAYMENT: pick a card + amount + date, saved as an override row whose
+notes carry `pays-down:YYYY-MM-DD` (the card's next projected due date).
+Unlike a slot override, a paydown is never a replacement: it always debits its
+own date as a planned payment, and `projectCardPayments` subtracts it from
+whatever the projection charges at the target date (statement, open-cycle
+estimate, promo chunk), consumed once per `(card, dueDate)` across generators
+so colliding sources never double-subtract. Only paydowns dated **today or
+later** reduce their target — once the date passes, reality (posted payments,
+statement paid amounts, live balances) is expected to carry the effect, so a
+stale plan can't discount a due date forever. Partial amounts split the
+obligation: the remainder stays on the due date.
+
+### Card-charged bills on the calendar
+Bills/extras with `paidViaCardId` pointing at an ACTIVE card are still skipped
+as cash, but the projection now emits them as **zero-cash markers**
+(`chargedToCardName` on the event, amount 0, original amount preserved) so the
+calendar/ledger can show "this lands on card X today" without double-counting.
+The dashboard agenda filters them out (cash-in-motion only). Don't give these
+events a nonzero `amountCents` — the card's statement payment carries the cash.
 
 ### What-if helpers
 `promoWhatIf(promo, card, today)` and `cardPromoWhatIf(promos, card, today)`

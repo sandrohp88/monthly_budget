@@ -211,3 +211,134 @@ describe("projectCardPayments", () => {
     if (est >= 0) expect(cc).toBeLessThan(est);
   });
 });
+
+describe("scheduled paydowns (pays-down overrides)", () => {
+  it("a pending paydown reduces the statement slot and debits its own date", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ statementBalanceCents: 200_00, dueDate: "2026-06-10" })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 80_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    const slot = r.extras.find((e) => e.date === "2026-06-10");
+    expect(slot).toMatchObject({ amountCents: 120_00, paymentDueCents: 120_00 });
+    const planned = r.extras.find((e) => e.date === "2026-05-20");
+    expect(planned).toMatchObject({
+      amountCents: 80_00,
+      description: "Card planned payment",
+      paydownTargetDate: "2026-06-10",
+    });
+    // Cash conservation: total out equals the statement balance.
+    const total = r.extras.reduce((s, e) => s + e.amountCents, 0);
+    expect(total).toBe(200_00);
+  });
+
+  it("a paydown covering the whole statement zeroes the due-date slot", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ statementBalanceCents: 200_00, dueDate: "2026-06-10" })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 200_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    const slot = r.extras.find((e) => e.date === "2026-06-10");
+    expect(slot).toMatchObject({ amountCents: 0, paymentDueCents: 0 });
+    const total = r.extras.reduce((s, e) => s + e.amountCents, 0);
+    expect(total).toBe(200_00);
+  });
+
+  it("a PAST-dated paydown no longer reduces the target slot", () => {
+    // today in EMPTY is 2026-05-04; the paydown is dated before that. Reality
+    // (posted payments, statement paid amounts) carries the effect instead.
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ statementBalanceCents: 200_00, dueDate: "2026-06-10" })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-01", amountCents: 80_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    const slot = r.extras.find((e) => e.date === "2026-06-10");
+    expect(slot).toMatchObject({ amountCents: 200_00, paymentDueCents: 200_00 });
+  });
+
+  it("consumes a paydown once across colliding generators on the same due date", () => {
+    // Live balance 300 with promo remaining 100 → open-cycle estimate 200 on
+    // 2026-06-10; the promo's 50/mo chunk lands on the same date. A 220
+    // paydown must reduce the combined 250, never fire once per generator.
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+      promos: [promo({ remainingAmountCents: 100_00, monthlyPaymentCents: 50_00 })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 220_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    const onDue = r.extras.filter((e) => e.date === "2026-06-10");
+    expect(onDue.reduce((s, e) => s + e.amountCents, 0)).toBe(30_00);
+    // Cash conservation: everything still totals the live balance.
+    const total = r.extras.reduce((s, e) => s + e.amountCents, 0);
+    expect(total).toBe(300_00);
+  });
+
+  it("a paydown with no matching slot is a plain extra planned payment", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 50_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    expect(r.extras).toHaveLength(1);
+    expect(r.extras[0]).toMatchObject({
+      date: "2026-05-20",
+      amountCents: 50_00,
+      paydownTargetDate: "2026-06-10",
+    });
+  });
+
+  it("a paydown scheduled ON the due date merges into one row with unchanged total", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ statementBalanceCents: 200_00, dueDate: "2026-06-10" })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-06-10", amountCents: 80_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    const onDue = r.extras.filter((e) => e.date === "2026-06-10");
+    expect(onDue).toHaveLength(1);
+    expect(onDue[0]!.amountCents).toBe(200_00);
+    expect(onDue[0]!.description).toBe("Card payment (statement + planned)");
+  });
+
+  it("does not treat a pays-down override as a slot replacement", () => {
+    // The paydown targets a DIFFERENT date than its own; the statement slot on
+    // its own date must not be replaced by the paydown amount.
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [
+        stmt({ id: "s1", statementBalanceCents: 200_00, dueDate: "2026-06-10" }),
+        stmt({
+          id: "s2",
+          statementDate: "2026-06-15",
+          statementBalanceCents: 400_00,
+          dueDate: "2026-07-10",
+        }),
+      ],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-06-10", amountCents: 80_00, notes: "pays-down:2026-07-10" }),
+      ],
+    });
+    // June slot: full statement + the paydown extra, merged.
+    const june = r.extras.filter((e) => e.date === "2026-06-10");
+    expect(june.reduce((s, e) => s + e.amountCents, 0)).toBe(280_00);
+    // July slot: reduced by the paydown.
+    const july = r.extras.find((e) => e.date === "2026-07-10");
+    expect(july).toMatchObject({ amountCents: 320_00, paymentDueCents: 320_00 });
+  });
+});

@@ -653,3 +653,65 @@ describe("paid occurrences (bank-draft reconciliation)", () => {
     expect(rows[rows.length - 1]!.balanceCents).toBe(-120_00);
   });
 });
+
+describe("card-charged bill and extra markers", () => {
+  it("emits zero-cash markers for a card-charged bill without moving the balance", () => {
+    const rows = computeProjection({
+      startingBalanceCents: 100_00,
+      startDate: "2026-07-01",
+      endDate: "2026-08-31",
+      paychecks: [],
+      extras: [],
+      bills: [
+        {
+          id: "b1",
+          name: "Netflix",
+          amountCents: 15_99,
+          intervalMonths: 1,
+          anchorDate: "2026-07-12",
+          chargedToCardName: "Amex",
+        },
+      ],
+    });
+    const jul = rows.find((r) => r.date === "2026-07-12")!;
+    expect(jul.events).toEqual([
+      expect.objectContaining({
+        kind: "bill",
+        label: "Netflix",
+        amountCents: 0,
+        originalAmountCents: 15_99,
+        chargedToCardName: "Amex",
+      }),
+    ]);
+    expect(jul.expenseCents).toBe(0);
+    // Every occurrence is a marker; the running balance never moves.
+    expect(rows[rows.length - 1]!.balanceCents).toBe(100_00);
+  });
+
+  it("passes chargedToCardName through on extras and keeps them cash-neutral", () => {
+    const rows = computeProjection({
+      startingBalanceCents: 50_00,
+      startDate: "2026-07-01",
+      endDate: "2026-07-31",
+      paychecks: [],
+      bills: [],
+      extras: [
+        {
+          date: "2026-07-20",
+          description: "Concert tickets",
+          amountCents: 0,
+          originalAmountCents: 80_00,
+          chargedToCardName: "Visa",
+        },
+      ],
+    });
+    const day = rows.find((r) => r.date === "2026-07-20")!;
+    expect(day.events[0]).toMatchObject({
+      label: "Concert tickets",
+      amountCents: 0,
+      originalAmountCents: 80_00,
+      chargedToCardName: "Visa",
+    });
+    expect(rows[rows.length - 1]!.balanceCents).toBe(50_00);
+  });
+});
