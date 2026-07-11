@@ -166,7 +166,7 @@ export function PlaidDraftApproveDialog({
                     : "text-[var(--text-2)] hover:text-[var(--text-0)]",
                 )}
               >
-                0% PROMO
+                DEFERRED-INTEREST PROMO
               </button>
               <button
                 type="button"

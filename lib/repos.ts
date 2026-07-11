@@ -57,7 +57,6 @@ import {
 } from "./db/schema";
 import { newId } from "./ids";
 import { hashPassword } from "./auth";
-import { promoMonthlyChunkAt } from "./credit-cards";
 import { calculateMonthlyHistoryAverage } from "./variable-bills";
 import { log } from "./log";
 
@@ -1384,9 +1383,6 @@ export async function settleStatementWithDraft(
     })
     .where(eq(creditCardStatements.id, match.id))
     .run();
-  // The match was unpaid, so this is always the unpaid→paid edge — decrement
-  // promos exactly once (§17a).
-  await applyPromoChunksForPaidStatement(userId, input.cardId, match.statementDate);
   return {
     ...match,
     cardId: input.cardId,
@@ -1542,32 +1538,6 @@ export async function archivePromo(userId: string, id: string): Promise<void> {
   await updatePromo(userId, id, { isActive: false, remainingAmountCents: 0 });
 }
 
-/**
- * Archive every still-active promo whose endDate has passed. The auto-decrement
- * edge that normally clears promos only fires on unpaid→paid statement
- * transitions, which never fire for issuers Plaid doesn't return payment data
- * for (PayPal Credit being the canonical example). Without this sweep, expired
- * promos sit at full `remainingAmountCents` forever and the projection treats
- * them as a still-owed lump that never existed in reality.
- */
-export async function archiveExpiredPromos(userId: string, todayIso: string): Promise<number> {
-  const db = getDb();
-  const result = await db
-    .update(creditCardPromos)
-    // Zero remaining alongside archiving (see archivePromo): an expired promo
-    // sitting at full remaining is a phantom lump the projection never owed.
-    .set({ isActive: false, remainingAmountCents: 0, updatedAt: Date.now() })
-    .where(
-      and(
-        eq(creditCardPromos.userId, userId),
-        eq(creditCardPromos.isActive, true),
-        lt(creditCardPromos.endDate, todayIso),
-      ),
-    )
-    .run();
-  return result.changes;
-}
-
 // ── credit card promo payment schedule ──────────────────────────────────────
 
 export async function listPromoPayments(
@@ -1635,56 +1605,6 @@ export async function replacePromoPayments(
     }
   });
   return listPromoPayments(userId, promoId);
-}
-
-/**
- * Decrement remaining balances on a card's active promos by the chunk amount
- * the projection assumes was inside the just-paid statement balance. Called
- * when a statement transitions from unpaid → paid (PATCH on /statements/[id]).
- *
- * The chunk per promo is `monthlyPaymentCents` if set, otherwise
- * `remaining / months_left_at_statement_close`. We clamp at zero and auto-
- * archive a promo when its remaining hits zero so it stops contributing to
- * future projections.
- *
- * Idempotency: we DON'T track which statements have been applied, so calling
- * this twice for the same statement will double-decrement. The PATCH route
- * only invokes it on the unpaid→paid transition to avoid that.
- */
-export async function applyPromoChunksForPaidStatement(
-  userId: string,
-  cardId: string,
-  statementDate: string,
-): Promise<void> {
-  const db = getDb();
-  const promos = await listPromosForCard(userId, cardId, false);
-  if (promos.length === 0) return;
-  for (const promo of promos) {
-    if (promo.remainingAmountCents <= 0) continue;
-    // Skip promos whose window doesn't include this statement.
-    if (statementDate < promo.startDate) continue;
-    // Manual schedule wins: the cash assumed inside this statement is the
-    // next scheduled payment on/after the close date. An exhausted schedule
-    // means the user's plan has nothing in this cycle — don't decrement by
-    // auto-spread math the user explicitly opted out of.
-    const scheduled = await listPromoPayments(userId, promo.id);
-    const chunk =
-      scheduled.length > 0
-        ? Math.min(
-            scheduled.find((p) => p.dueDate >= statementDate)?.amountCents ?? 0,
-            promo.remainingAmountCents,
-          )
-        : promoMonthlyChunkAt(promo, statementDate);
-    if (chunk <= 0) continue;
-    const newRemaining = Math.max(0, promo.remainingAmountCents - chunk);
-    const patch: Partial<CreditCardPromoRow> = { remainingAmountCents: newRemaining };
-    if (newRemaining === 0) patch.isActive = false;
-    await db
-      .update(creditCardPromos)
-      .set({ ...patch, updatedAt: Date.now() })
-      .where(eq(creditCardPromos.id, promo.id))
-      .run();
-  }
 }
 
 // ── plaid ──────────────────────────────────────────────────────────────────
@@ -1917,14 +1837,6 @@ export async function updateCardCycleDays(
 export type StatementUpsertResult = {
   /** A row was inserted or updated (drives sync progress counters). */
   changed: boolean;
-  /**
-   * An EXISTING statement transitioned unpaid → paid with a positive amount.
-   * This is the edge the promo auto-decrement fires on (§17a in CLAUDE.md).
-   * Deliberately false for insert-already-paid: a statement first imported in
-   * its paid state is history, not an observed transition — user-entered promo
-   * remainings already reflect it, and decrementing again would double-count.
-   */
-  becamePaid: boolean;
 };
 
 /**
@@ -1934,9 +1846,8 @@ export type StatementUpsertResult = {
  * are idempotent. Will not overwrite a paid record with empty paid fields —
  * manual reconciliation wins over Plaid's read-only snapshot.
  *
- * The caller owns the promo decrement: when `becamePaid` is true, route the
- * statement through `applyPromoChunksForPaidStatement` (same contract as the
- * statements PATCH route — the edge guard stays at the caller by design).
+ * Statement paid state never changes promotional balances. Issuer
+ * reconciliation is the only reliable source for actual promo allocation.
  */
 export async function upsertCreditCardStatementByDate(
   cardId: string,
@@ -1999,7 +1910,7 @@ export async function upsertCreditCardStatementByDate(
       log.warn(
         `plaid-liabilities: ignored $0 statement for card ${cardId} on ${data.statementDate}; prior unpaid carryover ${priorUnpaidCents} cents with live balance ${data.liveBalanceCents} cents`,
       );
-      return { changed: false, becamePaid: false };
+      return { changed: false };
     }
   }
 
@@ -2017,12 +1928,11 @@ export async function upsertCreditCardStatementByDate(
         paidDate: data.paidDate ?? null,
       })
       .run();
-    return { changed: true, becamePaid: false };
+    return { changed: true };
   }
 
   // Don't clobber a manual paid record with Plaid-only data.
   const keepPaid = existing.paidAmountCents != null && (data.paidAmountCents ?? null) == null;
-  const becamePaid = existing.paidAmountCents == null && (data.paidAmountCents ?? 0) > 0;
   await db
     .update(creditCardStatements)
     .set({
@@ -2038,7 +1948,7 @@ export async function upsertCreditCardStatementByDate(
     })
     .where(eq(creditCardStatements.id, existing.id))
     .run();
-  return { changed: true, becamePaid };
+  return { changed: true };
 }
 
 
@@ -2372,7 +2282,11 @@ export async function getNetWorthComponents(userId: string): Promise<NetWorthCom
 
   // Sum Plaid depository balances
   const allAccounts = await db
-    .select({ type: plaidAccounts.type, balanceCents: plaidAccounts.balanceCents })
+    .select({
+      id: plaidAccounts.id,
+      type: plaidAccounts.type,
+      balanceCents: plaidAccounts.balanceCents,
+    })
     .from(plaidAccounts)
     .where(and(eq(plaidAccounts.userId, userId), eq(plaidAccounts.syncEnabled, true)))
     .all();
@@ -2380,19 +2294,36 @@ export async function getNetWorthComponents(userId: string): Promise<NetWorthCom
     .filter((a) => a.type === "depository")
     .reduce((s, a) => s + (a.balanceCents ?? 0), 0);
 
-  // Sum credit card currentBalanceCents
+  // Split card debt into standard and promotional portions without counting
+  // promo principal twice. A card's current balance already includes its promo
+  // purchases; promo rows remain useful for the report breakdown and for cards
+  // without a current balance.
   const cards = await listCreditCards(userId, false);
-  const creditCardDebtCents = cards.reduce(
-    (s, c) => s + (c.currentBalanceCents ?? 0),
-    0,
-  );
-
-  // Sum active promo remaining
   const promos = await listPromos(userId, false);
+  const promoRemainingByCard = new Map<string, number>();
+  for (const promo of promos) {
+    promoRemainingByCard.set(
+      promo.cardId,
+      (promoRemainingByCard.get(promo.cardId) ?? 0) + promo.remainingAmountCents,
+    );
+  }
   const promoDebtCents = promos.reduce(
     (s, p) => s + p.remainingAmountCents,
     0,
   );
+  const linkedBalanceByAccountId = new Map(
+    allAccounts
+      .filter((account) => account.type === "credit")
+      .map((account) => [account.id, account.balanceCents] as const),
+  );
+  const creditCardDebtCents = cards.reduce((sum, card) => {
+    const linkedBalance = card.plaidAccountId
+      ? linkedBalanceByAccountId.get(card.plaidAccountId)
+      : null;
+    const balance = linkedBalance ?? card.currentBalanceCents ?? 0;
+    const embeddedPromo = promoRemainingByCard.get(card.id) ?? 0;
+    return sum + Math.max(0, balance - embeddedPromo);
+  }, 0);
 
   const netWorthCents =
     assetsCents + depositoryBalanceCents - creditCardDebtCents - promoDebtCents;

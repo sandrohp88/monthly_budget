@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { ensureAuth } from "./auth";
 
-test("create card -> add 0% promo -> verify promo chunk in projection", async ({ page }) => {
+test("create card -> add deferred-interest promo -> verify promo chunk in projection", async ({ page }) => {
   await ensureAuth(page);
 
   // ── create a credit card ──────────────────────────────────────────────
@@ -16,12 +16,12 @@ test("create card -> add 0% promo -> verify promo chunk in projection", async ({
 
   await expect(page.getByText("Promo Card").first()).toBeVisible();
 
-  // ── add a 0% promo ────────────────────────────────────────────────────
-  // The promo action is the add button in the card's 0% promos section.
+  // ── add a deferred-interest promo ─────────────────────────────────────
+  // The promo action is the add button in the card's promo section.
   await page.getByRole("button", { name: /^add$/i }).first().click();
 
   const promoDialog = page.getByRole("dialog");
-  await expect(promoDialog.getByText(/ADD 0% PROMO/i)).toBeVisible();
+  await expect(promoDialog.getByText(/ADD DEFERRED-INTEREST PROMO/i)).toBeVisible();
 
   await promoDialog.locator("#promo-desc").fill("MacBook Pro Installments");
 

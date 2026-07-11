@@ -369,7 +369,7 @@ export function estimateCurrentCycle(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Promotional financing (0% APR for X months)
+// Deferred-interest promotional financing
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Whole-month count from `from` to `to` (inclusive of both endpoints' months). */
@@ -381,10 +381,9 @@ function monthsBetweenInclusive(fromIso: string, toIso: string): number {
 }
 
 /**
- * The cash chunk a promo demands at a given as-of date. Used both by the
- * projection (to inject monthly debits for future cycles) and by the
- * statement-payment auto-decrement (to know how much to subtract from
- * `remainingAmountCents`).
+ * The planned cash chunk for a promo at a given as-of date. This affects the
+ * projection only; actual remaining principal comes from issuer reconciliation
+ * or an explicit manual balance edit.
  *
  * Rules:
  *   - explicit `monthlyPaymentCents` override wins, clamped to remaining
@@ -422,15 +421,31 @@ export type PromoCycleScheduleWithBalance = PromoCycleSchedule & {
   balanceBeforeCents: number;
 };
 
+export function promoPaymentScheduleError(
+  promo: Pick<CreditCardPromoRow, "remainingAmountCents" | "endDate">,
+  payments: ReadonlyArray<{ dueDate: string; amountCents: number }>,
+): string | null {
+  if (payments.length === 0) return null;
+  const afterDeadline = payments.find((payment) => payment.dueDate > promo.endDate);
+  if (afterDeadline) {
+    return `Payment date ${afterDeadline.dueDate} is after the promo deadline ${promo.endDate}.`;
+  }
+  const total = payments.reduce((sum, payment) => sum + payment.amountCents, 0);
+  if (total !== promo.remainingAmountCents) {
+    const diff = promo.remainingAmountCents - total;
+    const direction = diff > 0 ? "short" : "over";
+    return `Schedule total ${total} cents is ${direction} by ${Math.abs(diff)} cents — must equal remaining principal of ${promo.remainingAmountCents} cents.`;
+  }
+  return null;
+}
+
 /**
  * Project a promo's payment schedule. Two modes:
  *
- *   1. **Manual schedule** — when `scheduledPayments` is non-empty, use those
- *      verbatim (filtered to `>= fromIso` and not in `skipDueDates`). The user
- *      has opted into custom control: no auto-spread, no convergence math,
- *      no end-date lump. This is purely a projection input — if the schedule
- *      doesn't sum to `remainingAmountCents`, the UI surfaces the gap but
- *      the projection just uses what the user wrote.
+ *   1. **Manual schedule** — when `scheduledPayments` is non-empty, use valid
+ *      future rows through the deadline. A defensive catch-up places any
+ *      uncovered legacy balance on the deadline (or today when already
+ *      expired), so an old invalid schedule can never hide debt.
  *
  *   2. **Auto-spread** (default) — chunks land on each future cycle's due
  *      date through the promo's `endDate`. Iterates one chunk at a time,
@@ -468,22 +483,48 @@ export function projectPromoScheduleWithBalances(
     let virtualRemaining = promo.remainingAmountCents;
     const out: PromoCycleScheduleWithBalance[] = [];
     const payments = scheduledPayments
-      .filter((p) => p.amountCents > 0 && p.dueDate >= fromIso)
+      .filter(
+        (p) => p.amountCents > 0 && p.dueDate >= fromIso && p.dueDate <= promo.endDate,
+      )
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
     for (const payment of payments) {
+      if (virtualRemaining <= 0) break;
+      const amountCents = Math.min(payment.amountCents, virtualRemaining);
       if (!skipDueDates.has(payment.dueDate)) {
         out.push({
           dueDate: payment.dueDate,
-          amountCents: payment.amountCents,
+          amountCents,
           balanceBeforeCents: virtualRemaining,
         });
       }
-      virtualRemaining = Math.max(0, virtualRemaining - payment.amountCents);
+      virtualRemaining -= amountCents;
     }
-    return out;
+    if (virtualRemaining > 0) {
+      const catchUpDate = promo.endDate >= fromIso ? promo.endDate : fromIso;
+      if (!skipDueDates.has(catchUpDate)) {
+        const existing = out.find((payment) => payment.dueDate === catchUpDate);
+        if (existing) {
+          existing.amountCents += virtualRemaining;
+        } else {
+          out.push({
+            dueDate: catchUpDate,
+            amountCents: virtualRemaining,
+            balanceBeforeCents: virtualRemaining,
+          });
+        }
+      }
+    }
+    return out.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   }
   if (promo.remainingAmountCents <= 0) return [];
   if (!promo.isActive) return [];
+  if (fromIso > promo.endDate) {
+    return [{
+      dueDate: fromIso,
+      amountCents: promo.remainingAmountCents,
+      balanceBeforeCents: promo.remainingAmountCents,
+    }];
+  }
 
   const out: PromoCycleScheduleWithBalance[] = [];
   const scheduleChunk = (dueDate: string, asOfIso: string): void => {

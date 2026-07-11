@@ -10,7 +10,7 @@
  *   2. Open-cycle estimate  — live balance − unpaid − promo, on the next due
  *                             date, ONLY when that date has no recorded
  *                             statement (the statement is authoritative).
- *   3. Promo chunks         — 0% financing monthly chunks on future due dates
+ *   3. Promo chunks         — deferred-interest payoff chunks on future due dates
  *                             (skipping dates with a recorded statement).
  *   4. Variable spend       — forecast variable-bill charges landed on card
  *                             due dates.
@@ -145,7 +145,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   // projection deducts them from the running balance. Paid statements are
   // already reflected in the starting balance and are skipped. These events
   // also carry card-balance metadata so a user can plan paying above the
-  // statement due amount when a 0% promo balance is present.
+  // statement due amount when a deferred-interest promo balance is present.
   const statementDueByCardDate = new Map<
     string,
     { cardId: string; cardName: string; dueDate: string; remainingCents: number }
@@ -206,8 +206,8 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     if (liveBalance == null || liveBalance <= 0) continue;
     const unpaid = unpaidByCard.get(card.id) ?? 0;
     // Promo records can drift higher than the issuer's actual unbilled promo
-    // principal (especially on PayPal, where Plaid doesn't return per-payment
-    // data so our auto-decrement edge rarely fires). Cap the subtraction at
+    // principal (especially on PayPal, where Plaid doesn't return per-promo
+    // payment allocation). Cap the subtraction at
     // what's actually owed minus unpaid statements, otherwise a $5k drifted
     // promo total would wipe out a $3k open-cycle estimate to $0. Record the
     // overflow so the UI can prompt the user to reconcile.

@@ -64,10 +64,10 @@ describe("detectPromoPayoffDate", () => {
     ).toBe(true);
   });
 
-  it("does not flag PayPal purchases at or below the threshold", () => {
+  it("does not flag PayPal purchases below the threshold", () => {
     expect(
       isSpecialFinancingCandidate({
-        amountCents: PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS,
+        amountCents: PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS - 1,
         linkedCreditCardId: "card_1",
         linkedPromoId: null,
         promoPayoffDate: null,

@@ -172,5 +172,5 @@ export function isSpecialFinancingCandidate(txn: PromoCandidateInput): boolean {
   // Credit card exists; sync reconciles these rows idempotently with FIFO
   // payment allocation. The threshold constant is shared with the sync-side
   // auto-seeding in lib/paypal-special-financing.ts.
-  return isPayPalCredit && txn.amountCents > PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS;
+  return isPayPalCredit && txn.amountCents >= PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS;
 }

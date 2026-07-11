@@ -310,7 +310,7 @@ weird gets emitted before merging.
 - `0004_add_plaid` — `plaid_items`, `plaid_accounts`, `plaid_transaction_drafts` (see §17)
 - `0005_link_card_to_plaid` — `credit_cards.plaid_account_id` (nullable, unique) + unique index on `(card_id, statement_date)` for idempotent statement upsert
 - `0006_flexible_bill_intervals` — replaces `bills.frequency` / `due_day` / `due_month` with `interval_months` (any positive int: 1=monthly, 3=quarterly, 12=annual, etc.) + `anchor_date` (one ISO occurrence; the projection engine generates the rest from there). Table-rebuild migration; backfills monthly→`(1, '2024-01-DD')` and annual→`(12, '2024-MM-DD')` with day clamped to month length.
-- `0007_add_credit_card_promos` — `credit_card_promos` table for 0% APR promotional financing on credit cards (description, original/remaining cents, start/end dates, optional monthly payment override). See §17a.
+- `0007_add_credit_card_promos` — `credit_card_promos` table for promotional financing on credit cards (description, original/remaining cents, start/end dates, optional monthly payment override). See §17a.
 - `0008_credit_card_statement_cycles` — `statement_cycle_mode` (`calendar_day | interval_days`) + anchor date + interval days on `credit_cards` for rolling statement cycles.
 - `0009_bill_payment_overrides` — `bill_payment_overrides` table, unique `(bill_id, due_date)`: per-occurrence planned amounts.
 - `0010_credit_card_payment_overrides` — `credit_card_payment_overrides` table, unique `(card_id, due_date)`.
@@ -555,10 +555,10 @@ These bit us before. Don't repeat:
 15. **Re-linking required to enable Liabilities on existing items** — Plaid bakes products into the access token. Items linked before `Liabilities` was added to `optional_products` won't return liability data. To fix, the user removes and re-adds the institution.
 16. **`credit_cards.plaid_account_id` has no DB-level FK** — SQLite ALTER TABLE can't add foreign keys, so referential cleanup is enforced in `deactivatePlaidItem` (nulls the column on linked cards before deactivating). If you add another path that deletes Plaid accounts, mirror that null-out logic.
 17. **Statement upsert preserves manual paid records** — `upsertCreditCardStatementByDate` will not overwrite `paidAmountCents`/`paidDate` when Plaid returns no payment data. Cycle date updates still apply. Don't "simplify" this away.
-18. **Promo auto-decrement only fires on unpaid→paid edge** — `applyPromoChunksForPaidStatement` is idempotency-by-edge: the route checks `wasUnpaid && isNowPaid` before calling it. Re-saving an already-paid statement won't double-decrement. Don't move the call into the repo or strip the guard. See §17a.
+18. **Never infer promo allocation from a statement payment** — PayPal/Plaid payment rows do not identify which deferred-interest purchase received principal. Promo remaining changes only through issuer-list reconciliation or an explicit manual balance edit. See §17a.
 19. **Promo chunks never get added to a cycle that has a recorded statement** — the statement balance entered by the user is assumed to already include any promo principal billed in that cycle. `projectPromoSchedule` takes a `skipDueDates` set fed from `recordedDueDatesByCard` in `projection-server.ts`. Skip the skip-set and you double-count.
 20. **Plaid promo detection needs raw transaction text at sync time** — drafts only persist a small subset of Plaid's transaction payload. If you need issuer-specific promo clues, inspect nested fields from the live Transaction object (`payment_meta`, `counterparties`, category, location, etc.) before storing the draft; don't infer a promo from generic PayPal `LOAN_PAYMENTS` rows.
-21. **PayPal Credit special financing is split across two Plaid accounts** — qualifying purchases appear on the PayPal wallet account (`depository/paypal`), while payments appear on the linked PayPal Credit account (`credit/paypal`) as `LOAN_PAYMENTS`. Purchases strictly above `PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS` (`lib/paypal-special-financing.ts`, currently $170 per this account's PayPal Credit terms — PayPal's published standard is $149+) can seed promo rows, but Plaid payment rows do not expose PayPal's targeted promo allocation.
+21. **PayPal Credit special financing is split across two Plaid accounts** — qualifying purchases appear on the PayPal wallet account (`depository/paypal`), while payments appear on the linked PayPal Credit account (`credit/paypal`) as `LOAN_PAYMENTS`. Purchases at or above `PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS` (`lib/paypal-special-financing.ts`, currently PayPal's published $149 minimum) can seed promo rows, but Plaid payment rows do not expose PayPal's targeted promo allocation.
 22. **PayPal's promo list beats transaction FIFO** — PayPal's issuer UI exposes actual promotional balances, payoff dates, and targeted paid-off promos that Plaid transaction history does not. When a promo row's `authoritativeSource` column is non-null (introduced in migration `0018`), do not overwrite its amount/date from transaction FIFO; an inactive zero-balance PayPal promo must also stay paid off on later syncs. Legacy rows used a sentinel string `"PayPal authoritative promo data"` in `notes` — `0018` backfills the typed column from that and the sync logic now reads only `authoritativeSource`.
 23. **Playwright must use a host allowed by `AUTH_URL`** — middleware rejects unknown `Host` headers with 421. The E2E config builds and serves on `localhost:3000` to match local `.env`; changing the test port/host also requires updating the auth URL used at build time.
 
@@ -728,13 +728,13 @@ AUTO pill next to RECEIVED.
 
 ---
 
-## 17a. Credit-card promotional financing (0% APR for X months)
+## 17a. Credit-card deferred-interest promotional financing
 
-A `credit_card_promos` row models a chunk of a card's balance that's on a 0%
-APR promotion with a deadline (Apple Card monthly installments, Affirm, store
-cards, etc.). The projection spreads the promo's principal over its remaining
-months instead of treating it as a single lump payment, and a what-if comparison
-visualises pay-off-now vs. continue-the-schedule cash impact.
+A `credit_card_promos` row models a promotional balance with a payoff deadline.
+PayPal's "No interest if paid in full" offer is deferred interest, not a true
+0% APR installment plan: missing the deadline can cause interest to be charged
+back to the purchase date. The projection spreads principal across the remaining
+window, and a what-if comparison visualises pay-off-now vs. schedule timing.
 
 ### Authoritative-statement rule (READ BEFORE TOUCHING THE PROJECTION)
 The whole design hinges on this. **Recorded statements are authoritative for the
@@ -756,16 +756,19 @@ The math is in `projectPromoSchedule()` and `promoMonthlyChunkAt()` (both in
 `lib/credit-cards.ts`); the projection wiring is in `lib/projection-server.ts`
 right after the open-cycle-estimate block.
 
-### Auto-decrement on statement payment
-When a statement transitions **unpaid → paid** via PATCH on
-`/api/credit-cards/statements/[id]`, the route calls
-`applyPromoChunksForPaidStatement(userId, cardId, statementDate)` which
-subtracts each active promo's chunk-at-statement-close from
-`remainingAmountCents` and auto-archives the promo when remaining hits zero.
-The route only fires this on the unpaid→paid edge, NOT on every PATCH, so
-re-saving a paid statement won't double-decrement. If you add another path
-that marks statements paid (a Plaid sync that flips paid based on Liabilities,
-say), wire it through the same helper or replicate the unpaid→paid guard.
+### Authoritative promo balances
+Statement payments never decrement `remainingAmountCents`. PayPal controls
+payment allocation, and Plaid does not expose the amount applied to each
+promotional purchase. The only trustworthy balance mutations are:
+
+- The PayPal Promotional Purchases paste/reconcile flow
+  (`authoritativeSource = paypal_promo_list`).
+- An explicit user edit (`authoritativeSource = manual_reconciliation`).
+- Archiving after issuer reconciliation confirms the promo is gone.
+
+Expired promos remain active with their last known balance until one of those
+actions occurs. The projection places an expired unreconciled balance on today
+instead of deleting it. Never restore an automatic expiration sweep.
 
 ### Monthly chunk math
 `promoMonthlyChunkAt(promo, asOfIso)` returns the cash amount due in the cycle
@@ -781,6 +784,11 @@ a time decrements `virtualRemaining` to exactly zero by the deadline (no
 overshoot, no shortfall). There's a unit test for this in
 `lib/credit-cards.test.ts` ("converges to zero by the deadline").
 
+Manual schedules must total the current remaining balance exactly and every
+payment must be on or before `endDate`; the payments API enforces both rules.
+The projection also ignores post-deadline legacy rows and adds a deadline/today
+catch-up for any uncovered legacy balance.
+
 ### What-if helpers
 `promoWhatIf(promo, card, today)` and `cardPromoWhatIf(promos, card, today)`
 both return `{ payOffNow, continueSchedule }`. Both totals **always equal the
@@ -790,9 +798,9 @@ spells out. **Do not turn these into recommendations** ("you should pay X")
 — financial advice is off-limits per the action policy. Keep it to the math.
 
 ### Don't
-- ❌ Don't auto-decrement promo remaining anywhere except in the unpaid→paid
-  statement transition. Other paths (Plaid sync, re-save of an already-paid
-  statement) would silently double-count.
+- ❌ Don't infer or auto-decrement promo remaining from statement/card payments.
+  Reconcile from the issuer list or an explicit user-entered actual balance.
+- ❌ Don't archive or zero a promo merely because its deadline passed.
 - ❌ Don't add a promo's monthly chunk to the projection for a cycle that
   already has a recorded statement. The statement is authoritative.
 - ❌ Don't render prescriptive advice ("pay this off now to save $X") in the

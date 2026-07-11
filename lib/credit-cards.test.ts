@@ -12,6 +12,7 @@ import {
   paidWithoutInterest,
   previousStatementDateOnOrBefore,
   projectPromoSchedule,
+  promoPaymentScheduleError,
   promoMonthlyChunkAt,
   promoWhatIf,
   summarizeStatementBalances,
@@ -689,7 +690,7 @@ describe("projectPromoSchedule", () => {
     ]);
   });
 
-  it("manual schedule filters out past payments before fromIso", () => {
+  it("manual schedule ignores past plan rows and catches up unreconciled remaining", () => {
     const schedule = projectPromoSchedule(
       promo({ remainingAmountCents: 100_00, endDate: "2027-12-31" }),
       card,
@@ -700,7 +701,10 @@ describe("projectPromoSchedule", () => {
         { dueDate: "2026-07-15", amountCents: 80_00 },
       ],
     );
-    expect(schedule).toEqual([{ dueDate: "2026-07-15", amountCents: 80_00 }]);
+    expect(schedule).toEqual([
+      { dueDate: "2026-07-15", amountCents: 80_00 },
+      { dueDate: "2027-12-31", amountCents: 20_00 },
+    ]);
   });
 
   it("manual schedule still respects skipDueDates (recorded statements)", () => {
@@ -717,9 +721,7 @@ describe("projectPromoSchedule", () => {
     expect(schedule).toEqual([{ dueDate: "2026-07-10", amountCents: 30_00 }]);
   });
 
-  it("manual schedule short-circuits the auto-spread end-date lump", () => {
-    // Manual rows total less than remaining → projection just uses what's
-    // there. No "force the rest onto endDate" lump like auto-spread does.
+  it("adds a deadline catch-up for an incomplete legacy manual schedule", () => {
     const schedule = projectPromoSchedule(
       promo({ remainingAmountCents: 100_00, endDate: "2026-12-31" }),
       card,
@@ -727,9 +729,22 @@ describe("projectPromoSchedule", () => {
       new Set(),
       [{ dueDate: "2026-06-01", amountCents: 25_00 }],
     );
-    expect(schedule).toEqual([{ dueDate: "2026-06-01", amountCents: 25_00 }]);
+    expect(schedule).toEqual([
+      { dueDate: "2026-06-01", amountCents: 25_00 },
+      { dueDate: "2026-12-31", amountCents: 75_00 },
+    ]);
     const total = schedule.reduce((s, c) => s + c.amountCents, 0);
-    expect(total).toBe(25_00);
+    expect(total).toBe(100_00);
+  });
+
+  it("keeps an expired unreconciled promo visible as due today", () => {
+    const schedule = projectPromoSchedule(
+      promo({ remainingAmountCents: 100_00, endDate: "2026-05-01" }),
+      card,
+      "2026-05-04",
+      new Set(),
+    );
+    expect(schedule).toEqual([{ dueDate: "2026-05-04", amountCents: 100_00 }]);
   });
 
   it("never schedules a chunk after the promo endDate", () => {
@@ -760,6 +775,29 @@ describe("projectPromoSchedule", () => {
     );
     const total = schedule.reduce((s, c) => s + c.amountCents, 0);
     expect(total).toBe(1001_00);
+  });
+});
+
+describe("promoPaymentScheduleError", () => {
+  const tracked = promo({ remainingAmountCents: 100_00, endDate: "2026-12-31" });
+
+  it("requires exact payoff by the promo deadline", () => {
+    expect(
+      promoPaymentScheduleError(tracked, [
+        { dueDate: "2026-06-01", amountCents: 40_00 },
+        { dueDate: "2026-12-31", amountCents: 60_00 },
+      ]),
+    ).toBeNull();
+    expect(
+      promoPaymentScheduleError(tracked, [
+        { dueDate: "2026-06-01", amountCents: 40_00 },
+      ]),
+    ).toContain("short by 6000 cents");
+    expect(
+      promoPaymentScheduleError(tracked, [
+        { dueDate: "2027-01-01", amountCents: 100_00 },
+      ]),
+    ).toContain("after the promo deadline");
   });
 });
 
