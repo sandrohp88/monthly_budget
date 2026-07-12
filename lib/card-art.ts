@@ -32,6 +32,7 @@ const ART_RULES: Array<{ match: RegExp; src: string }> = [
   { match: /blue cash/i, src: "/cards/amex-blue-cash-everyday.png" },
   { match: /everyday/i, src: "/cards/amex-everyday.png" },
   { match: /discover/i, src: "/cards/discover-it.png" },
+  { match: /prime visa/i, src: "/cards/chase-prime-visa.webp" },
   { match: /prime store/i, src: "/cards/amazon-prime-store-card.png" },
 ];
 
