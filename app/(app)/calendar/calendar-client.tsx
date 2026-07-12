@@ -89,6 +89,38 @@ function isoOf(year: number, month: number, day: number): string {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+const DAY_MS = 86_400_000;
+
+function utcOfIso(iso: string): number {
+  return Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)));
+}
+
+function isoFromUtc(ms: number): string {
+  const dt = new Date(ms);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    dt.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+function addDaysIso(iso: string, days: number): string {
+  return isoFromUtc(utcOfIso(iso) + days * DAY_MS);
+}
+
+function weekdayOfIso(iso: string): number {
+  return new Date(utcOfIso(iso)).getUTCDay();
+}
+
+/** Inclusive range of calendar days from `startIso` to `endInclusiveIso`. */
+function eachDayIso(startIso: string, endInclusiveIso: string): string[] {
+  const out: string[] = [];
+  const end = utcOfIso(endInclusiveIso);
+  for (let t = utcOfIso(startIso); t <= end; t += DAY_MS) out.push(isoFromUtc(t));
+  return out;
+}
+
+/** A single pay cycle: the days from one payday up to (not incl.) the next. */
+type PaycheckCycle = { start: string; endInclusive: string; nextPay?: string };
+
 function isCredit(ev: ProjectionEvent): boolean {
   return ev.kind === "paycheck" || (ev.kind === "extra" && ev.amountCents < 0);
 }
@@ -135,6 +167,157 @@ const TONE_TEXT: Record<EventTone, string> = {
   onCard: "text-[var(--olive)]",
 };
 
+function WeekdayHeader() {
+  return (
+    <div className="grid grid-cols-7 border-b border-[var(--border-raw)]">
+      {WEEKDAYS.map((d) => (
+        <div
+          key={d}
+          className="px-2 py-2 text-center text-[10px] font-semibold tracking-[0.2em] text-[var(--text-3)]"
+        >
+          {d}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BlankCell({ minHeightClass }: { minHeightClass: string }) {
+  return (
+    <div
+      className={cn(
+        minHeightClass,
+        "border-b border-r border-[var(--border-raw)] bg-[var(--bg-0)]",
+      )}
+    />
+  );
+}
+
+/**
+ * One day in a calendar grid — shared by the month and paycheck-cycle views.
+ * `maxChips` caps the event chips (month view); `null` shows every event
+ * (paycheck view, where the taller cells have room and hiding an obligation
+ * behind "+N MORE" would defeat the point of the cycle breakdown).
+ */
+function DayCell({
+  iso,
+  row,
+  today,
+  maxChips,
+  minHeightClass,
+  onSelect,
+}: {
+  iso: string;
+  row: ProjectionRow | undefined;
+  today: string;
+  maxChips: number | null;
+  minHeightClass: string;
+  onSelect: (iso: string) => void;
+}) {
+  const events = row?.events ?? [];
+  const isToday = iso === today;
+  const isPast = iso < today;
+  const shown = maxChips == null ? events : events.slice(0, maxChips);
+  const overflow = maxChips == null ? 0 : events.length - maxChips;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(iso)}
+      className={cn(
+        minHeightClass,
+        "cursor-pointer border-b border-r border-[var(--border-raw)] p-1.5 text-left align-top transition-colors",
+        "hover:bg-[var(--bg-2)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--mint)]",
+        isToday ? "bg-[var(--mint-glow)]" : "bg-[var(--bg-1)]",
+        isPast && !isToday ? "opacity-60" : "",
+      )}
+    >
+      <div className="mb-1 flex items-center justify-between">
+        <span
+          className={cn(
+            "tabular text-[11px] font-semibold",
+            isToday
+              ? "rounded-[2px] bg-[var(--mint)] px-1 text-[var(--bg-0)]"
+              : "text-[var(--text-2)]",
+          )}
+        >
+          {Number(iso.slice(8, 10))}
+        </span>
+        {row ? (
+          <span
+            className={cn(
+              "tabular rounded-[2px] px-1 text-[10px] font-semibold",
+              balanceToneClass(row.balanceCents),
+              balanceSurfaceClass(row.balanceCents),
+            )}
+            title="Balance left after this day"
+          >
+            <Money cents={row.balanceCents} />
+          </span>
+        ) : null}
+      </div>
+      <div className="space-y-1">
+        {shown.map((ev, j) => {
+          const tone = toneOf(ev, isPast);
+          const credit = isCredit(ev);
+          const onCard = Boolean(ev.chargedToCardName);
+          const cardDue =
+            ev.sourceType === "creditCardPayment" && (ev.paymentDueCents ?? 0) > 0;
+          return (
+            <div
+              key={`${iso}-${j}`}
+              className={cn(
+                "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-[10px] leading-tight",
+                TONE_CLASSES[tone],
+              )}
+              title={onCard ? `Charged to ${ev.chargedToCardName}` : undefined}
+            >
+              <span className="min-w-0 truncate">
+                {cardDue ? `CARD DUE · ${ev.label}` : ev.label}
+              </span>
+              <span className="tabular shrink-0">
+                {onCard ? "" : credit ? "+" : "−"}
+                <Money cents={displayCents(ev)} />
+              </span>
+            </div>
+          );
+        })}
+        {overflow > 0 ? (
+          <div className="text-[10px] text-[var(--text-3)]">+{overflow} MORE</div>
+        ) : null}
+      </div>
+    </button>
+  );
+}
+
+/** A labeled figure in the paycheck-cycle summary strip. */
+function CycleSummaryTile({
+  label,
+  value,
+  valueClass,
+  sub,
+}: {
+  label: string;
+  value: React.ReactNode;
+  valueClass?: string;
+  sub?: React.ReactNode;
+}) {
+  return (
+    <div className="bg-[var(--bg-1)] px-3 py-2.5">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-3)]">
+        {label}
+      </div>
+      <div className={cn("tabular mt-1 text-[16px] font-semibold text-[var(--text-0)]", valueClass)}>
+        {value}
+      </div>
+      {sub ? (
+        <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+          {sub}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function CalendarClient({
   rows,
   today,
@@ -151,8 +334,11 @@ export function CalendarClient({
   cards: ReadonlyArray<{ id: string; name: string; isActive: boolean }>;
 }) {
   const router = useRouter();
+  const [view, setView] = React.useState<"month" | "paycheck">("month");
   const [year, setYear] = React.useState(() => Number(today.slice(0, 4)));
   const [month, setMonth] = React.useState(() => Number(today.slice(5, 7)));
+  // null = follow the cycle that contains today; a number pins a chosen cycle.
+  const [cycleIndex, setCycleIndex] = React.useState<number | null>(null);
   const [selectedDate, setSelectedDate] = React.useState<string | null>(null);
   const [addBillFor, setAddBillFor] = React.useState<string | null>(null);
   const [planningCardPayment, setPlanningCardPayment] = React.useState<CardPaymentPlan | null>(null);
@@ -202,6 +388,12 @@ export function CalendarClient({
   const goToToday = () => {
     setYear(Number(today.slice(0, 4)));
     setMonth(Number(today.slice(5, 7)));
+    setCycleIndex(null);
+  };
+  const moveCycle = (delta: number) => {
+    setCycleIndex(
+      Math.min(Math.max(activeCycleIndex + delta, 0), Math.max(cycles.length - 1, 0)),
+    );
   };
 
   const dayCount = daysInMonth(year, month);
@@ -219,6 +411,71 @@ export function CalendarClient({
   const outsideWindow = monthRows.length === 0;
 
   const selectedRow = selectedDate ? rowByDate.get(selectedDate) : undefined;
+
+  // ---- Paycheck-cycle view -------------------------------------------------
+  // Each payday opens a cycle that runs until the day before the next payday
+  // (the last one runs to the end of the projection window). This is the lens
+  // that answers "what bills and card payments come out of THIS paycheck?".
+  const paydays = React.useMemo(
+    () => rows.filter((r) => r.events.some((e) => e.kind === "paycheck")).map((r) => r.date),
+    [rows],
+  );
+  const cycles = React.useMemo<PaycheckCycle[]>(
+    () =>
+      paydays.map((start, i) => {
+        const nextPay = paydays[i + 1];
+        return { start, endInclusive: nextPay ? addDaysIso(nextPay, -1) : endDate, nextPay };
+      }),
+    [paydays, endDate],
+  );
+  const defaultCycleIndex = React.useMemo(() => {
+    const first = cycles[0];
+    if (!first) return 0;
+    const idx = cycles.findIndex((c) => today >= c.start && today <= c.endInclusive);
+    if (idx >= 0) return idx;
+    return today < first.start ? 0 : cycles.length - 1;
+  }, [cycles, today]);
+  const activeCycleIndex = Math.min(
+    Math.max(cycleIndex ?? defaultCycleIndex, 0),
+    Math.max(cycles.length - 1, 0),
+  );
+  const activeCycle: PaycheckCycle | undefined = cycles[activeCycleIndex];
+
+  const cycleRows = React.useMemo(
+    () =>
+      activeCycle
+        ? rows.filter((r) => r.date >= activeCycle.start && r.date <= activeCycle.endInclusive)
+        : [],
+    [rows, activeCycle],
+  );
+  const cycleIncome = cycleRows.reduce((s, r) => s + r.incomeCents, 0);
+  const cycleExpense = cycleRows.reduce((s, r) => s + r.expenseCents, 0);
+  const cycleCardOut = React.useMemo(() => {
+    let sum = 0;
+    for (const r of cycleRows)
+      for (const ev of r.events)
+        if (!ev.chargedToCardName && ev.sourceType === "creditCardPayment" && !ev.isPaid)
+          sum += displayCents(ev);
+    return sum;
+  }, [cycleRows]);
+  const cycleEndBalance = cycleRows.at(-1)?.balanceCents;
+  const cycleLowBalance = cycleRows.length
+    ? Math.min(...cycleRows.map((r) => r.balanceCents))
+    : undefined;
+
+  const cycleCells = React.useMemo<Array<string | null>>(() => {
+    if (!activeCycle) return [];
+    const days = eachDayIso(activeCycle.start, activeCycle.endInclusive);
+    const arr: Array<string | null> = [
+      ...Array.from({ length: weekdayOfIso(activeCycle.start) }, () => null),
+      ...days,
+    ];
+    while (arr.length % 7 !== 0) arr.push(null);
+    return arr;
+  }, [activeCycle]);
+
+  const sumIncome = view === "month" ? monthIncome : cycleIncome;
+  const sumExpense = view === "month" ? monthExpense : cycleExpense;
 
   const createBill = async (values: BillFormValues) => {
     setSubmitting(true);
@@ -369,143 +626,185 @@ export function CalendarClient({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" onClick={() => moveMonth(-1)} aria-label="Previous month">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex overflow-hidden border border-[var(--border-raw)]">
+            {(["month", "paycheck"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                aria-pressed={view === v}
+                className={cn(
+                  "px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-colors",
+                  view === v
+                    ? "bg-[var(--mint)] text-[var(--bg-0)]"
+                    : "bg-[var(--bg-1)] text-[var(--text-2)] hover:bg-[var(--bg-2)]",
+                )}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => (view === "month" ? moveMonth(-1) : moveCycle(-1))}
+            aria-label={view === "month" ? "Previous month" : "Previous paycheck"}
+          >
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <Button variant="outline" size="icon" onClick={() => moveMonth(1)} aria-label="Next month">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => (view === "month" ? moveMonth(1) : moveCycle(1))}
+            aria-label={view === "month" ? "Next month" : "Next paycheck"}
+          >
             <ChevronRight className="h-4 w-4" />
           </Button>
           <Button variant="outline" onClick={goToToday}>
             TODAY
           </Button>
-          <div className="ml-2 text-[18px] font-bold tracking-[0.08em] text-[var(--text-0)]">
-            {MONTH_NAMES[month - 1]} <span className="text-[var(--text-2)]">{year}</span>
-          </div>
+          {view === "month" ? (
+            <div className="ml-2 text-[18px] font-bold tracking-[0.08em] text-[var(--text-0)]">
+              {MONTH_NAMES[month - 1]} <span className="text-[var(--text-2)]">{year}</span>
+            </div>
+          ) : activeCycle ? (
+            <div className="ml-2 flex items-center gap-2 text-[16px] font-bold tracking-[0.02em] text-[var(--text-0)]">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-3)]">
+                Paycheck
+              </span>
+              <DateLabel iso={activeCycle.start} format="short" />
+              <span className="text-[var(--text-3)]">→</span>
+              <DateLabel iso={activeCycle.endInclusive} format="short" />
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-4 text-[12px]">
           <span className="text-[var(--text-3)]">
-            IN <span className="tabular font-semibold text-[var(--mint)]"><Money cents={monthIncome} /></span>
+            IN <span className="tabular font-semibold text-[var(--mint)]"><Money cents={sumIncome} /></span>
           </span>
           <span className="text-[var(--text-3)]">
-            OUT <span className="tabular font-semibold text-[var(--red)]"><Money cents={monthExpense} /></span>
+            OUT <span className="tabular font-semibold text-[var(--red)]"><Money cents={sumExpense} /></span>
           </span>
           <span className="text-[var(--text-3)]">
             NET{" "}
             <span
               className={cn(
                 "tabular font-semibold",
-                monthIncome - monthExpense >= 0 ? "text-[var(--mint)]" : "text-[var(--red)]",
+                sumIncome - sumExpense >= 0 ? "text-[var(--mint)]" : "text-[var(--red)]",
               )}
             >
-              <Money cents={monthIncome - monthExpense} />
+              <Money cents={sumIncome - sumExpense} />
             </span>
           </span>
         </div>
       </div>
 
-      {outsideWindow ? (
-        <p className="text-[12px] text-[var(--text-3)]">
-          This month is outside the projection window (
-          <DateLabel iso={startDate} format="short" /> – <DateLabel iso={endDate} format="short" />
-          ) — no scheduled events to show, but you can still click a day to add a bill or plan a card payment.
-        </p>
-      ) : null}
+      {view === "month" ? (
+        <>
+          {outsideWindow ? (
+            <p className="text-[12px] text-[var(--text-3)]">
+              This month is outside the projection window (
+              <DateLabel iso={startDate} format="short" /> – <DateLabel iso={endDate} format="short" />
+              ) — no scheduled events to show, but you can still click a day to add a bill or plan a card payment.
+            </p>
+          ) : null}
 
-      <Card className="overflow-x-auto p-0">
-        <div className="min-w-[720px]">
-          <div className="grid grid-cols-7 border-b border-[var(--border-raw)]">
-            {WEEKDAYS.map((d) => (
-              <div
-                key={d}
-                className="px-2 py-2 text-center text-[10px] font-semibold tracking-[0.2em] text-[var(--text-3)]"
-              >
-                {d}
+          <Card className="overflow-x-auto p-0">
+            <div className="min-w-[720px]">
+              <WeekdayHeader />
+              <div className="grid grid-cols-7">
+                {cells.map((iso, i) =>
+                  iso ? (
+                    <DayCell
+                      key={iso}
+                      iso={iso}
+                      row={rowByDate.get(iso)}
+                      today={today}
+                      maxChips={MAX_CHIPS_PER_DAY}
+                      minHeightClass="min-h-[104px]"
+                      onSelect={setSelectedDate}
+                    />
+                  ) : (
+                    <BlankCell key={`blank-${i}`} minHeightClass="min-h-[104px]" />
+                  ),
+                )}
               </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-7">
-            {cells.map((iso, i) => {
-              if (!iso) {
-                return <div key={`blank-${i}`} className="min-h-[104px] border-b border-r border-[var(--border-raw)] bg-[var(--bg-0)]" />;
+            </div>
+          </Card>
+        </>
+      ) : activeCycle ? (
+        <>
+          <div className="grid grid-cols-2 gap-px overflow-hidden border border-[var(--border-raw)] bg-[var(--border-raw)] sm:grid-cols-3 lg:grid-cols-5">
+            <CycleSummaryTile
+              label="Paycheck in"
+              value={<>+<Money cents={cycleIncome} /></>}
+              valueClass="text-[var(--mint)]"
+              sub={<DateLabel iso={activeCycle.start} format="short" />}
+            />
+            <CycleSummaryTile
+              label="Cash out"
+              value={<>−<Money cents={cycleExpense} /></>}
+              valueClass="text-[var(--red)]"
+              sub="bills + card payments"
+            />
+            <CycleSummaryTile
+              label="Card payments"
+              value={<>−<Money cents={cycleCardOut} /></>}
+              valueClass="text-[var(--amber)]"
+              sub="of cash out"
+            />
+            <CycleSummaryTile
+              label="Left over"
+              value={<Money cents={cycleIncome - cycleExpense} />}
+              valueClass={cycleIncome - cycleExpense >= 0 ? "text-[var(--mint)]" : "text-[var(--red)]"}
+              sub="income − cash out"
+            />
+            <CycleSummaryTile
+              label="Lowest balance"
+              value={cycleLowBalance != null ? <Money cents={cycleLowBalance} /> : "—"}
+              valueClass={
+                cycleLowBalance != null ? balanceToneClass(cycleLowBalance) : undefined
               }
-              const row = rowByDate.get(iso);
-              const events = row?.events ?? [];
-              const isToday = iso === today;
-              const isPast = iso < today;
-              const overflow = events.length - MAX_CHIPS_PER_DAY;
-              return (
-                <button
-                  key={iso}
-                  type="button"
-                  onClick={() => setSelectedDate(iso)}
-                  className={cn(
-                    "min-h-[104px] cursor-pointer border-b border-r border-[var(--border-raw)] p-1.5 text-left align-top transition-colors",
-                    "hover:bg-[var(--bg-2)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--mint)]",
-                    isToday ? "bg-[var(--mint-glow)]" : "bg-[var(--bg-1)]",
-                    isPast && !isToday ? "opacity-60" : "",
-                  )}
-                >
-                  <div className="mb-1 flex items-center justify-between">
-                    <span
-                      className={cn(
-                        "tabular text-[11px] font-semibold",
-                        isToday
-                          ? "rounded-[2px] bg-[var(--mint)] px-1 text-[var(--bg-0)]"
-                          : "text-[var(--text-2)]",
-                      )}
-                    >
-                      {Number(iso.slice(8, 10))}
-                    </span>
-                    {row ? (
-                      <span
-                        className={cn(
-                          "tabular rounded-[2px] px-1 text-[10px] font-semibold",
-                          balanceToneClass(row.balanceCents),
-                          balanceSurfaceClass(row.balanceCents),
-                        )}
-                        title="Balance left after this day"
-                      >
-                        <Money cents={row.balanceCents} />
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="space-y-1">
-                    {events.slice(0, MAX_CHIPS_PER_DAY).map((ev, j) => {
-                      const tone = toneOf(ev, isPast);
-                      const credit = isCredit(ev);
-                      const onCard = Boolean(ev.chargedToCardName);
-                      const cardDue =
-                        ev.sourceType === "creditCardPayment" && (ev.paymentDueCents ?? 0) > 0;
-                      return (
-                        <div
-                          key={`${iso}-${j}`}
-                          className={cn(
-                            "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-[10px] leading-tight",
-                            TONE_CLASSES[tone],
-                          )}
-                          title={onCard ? `Charged to ${ev.chargedToCardName}` : undefined}
-                        >
-                          <span className="min-w-0 truncate">
-                            {cardDue ? `CARD DUE · ${ev.label}` : ev.label}
-                          </span>
-                          <span className="tabular shrink-0">
-                            {onCard ? "" : credit ? "+" : "−"}
-                            <Money cents={displayCents(ev)} />
-                          </span>
-                        </div>
-                      );
-                    })}
-                    {overflow > 0 ? (
-                      <div className="text-[10px] text-[var(--text-3)]">+{overflow} MORE</div>
-                    ) : null}
-                  </div>
-                </button>
-              );
-            })}
+              sub={
+                cycleEndBalance != null ? (
+                  <>
+                    ends <Money cents={cycleEndBalance} />
+                  </>
+                ) : undefined
+              }
+            />
           </div>
-        </div>
-      </Card>
+
+          <Card className="overflow-x-auto p-0">
+            <div className="min-w-[640px]">
+              <WeekdayHeader />
+              <div className="grid grid-cols-7">
+                {cycleCells.map((iso, i) =>
+                  iso ? (
+                    <DayCell
+                      key={iso}
+                      iso={iso}
+                      row={rowByDate.get(iso)}
+                      today={today}
+                      maxChips={null}
+                      minHeightClass="min-h-[150px]"
+                      onSelect={setSelectedDate}
+                    />
+                  ) : (
+                    <BlankCell key={`blank-${i}`} minHeightClass="min-h-[150px]" />
+                  ),
+                )}
+              </div>
+            </div>
+          </Card>
+        </>
+      ) : (
+        <p className="text-[13px] text-[var(--text-2)]">
+          No paychecks are projected in this window yet. Add a paycheck on the{" "}
+          <span className="text-[var(--text-0)]">Paychecks</span> page to use the paycheck view.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-[var(--text-3)]">
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.income)}>PAYCHECK / CREDIT</span>
