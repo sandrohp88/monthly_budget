@@ -13,6 +13,7 @@ import { Tile, TileGrid } from "@/components/ui/tile";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { CreditCardVisual } from "@/components/credit-card-visual";
+import { InlineBalanceEditor } from "@/components/inline-balance-editor";
 import { cardDisplayName, cardMaskDigits } from "@/lib/card-art";
 import { daysBetween } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
@@ -182,7 +183,9 @@ function WalletCardEntry({ data, today }: { data: WalletCard; today: string }) {
         </div>
         <div className="shrink-0 text-right">
           <div className="text-[14px] font-bold leading-snug tracking-tight tabular text-[var(--text-0)] sm:text-[15px]">
-            {balanceCents != null ? (
+            {card.plaidAccountId == null ? (
+              <InlineBalanceEditor cardId={card.id} valueCents={balanceCents} />
+            ) : balanceCents != null ? (
               <Money cents={balanceCents} />
             ) : (
               <span className="font-medium text-[var(--text-3)]">—</span>
