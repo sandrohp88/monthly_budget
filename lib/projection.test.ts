@@ -593,6 +593,39 @@ describe("projection engine", () => {
       expect(out).toHaveLength(1);
       expect(out[0]?.payDate).toBe("2025-01-03");
     });
+
+    it("covers a full window from `from` even when the anchor is far in the past", () => {
+      // Anchor 18 months back; regenerating "today" must still fill
+      // today + months, on the anchor's cadence — no paycheck cliff.
+      const out = generatePaychecksFromSettings({
+        firstPayday: "2025-01-03",
+        frequencyDays: 14,
+        months: 6,
+        defaultAmountCents: 200_000,
+        from: "2026-07-12",
+      });
+      expect(out.length).toBeGreaterThan(10); // ~13 biweekly dates in 6 months
+      expect(out[0]!.payDate >= "2026-07-12").toBe(true);
+      // the last date reaches near the end of the from + 6-month window
+      expect(out[out.length - 1]!.payDate >= "2026-12-15").toBe(true);
+      // every date stays on the anchor's 14-day cadence
+      const anchor = Date.parse("2025-01-03");
+      for (const p of out) {
+        expect((Date.parse(p.payDate) - anchor) % (14 * 24 * 60 * 60 * 1000)).toBe(0);
+      }
+    });
+
+    it("`from` before the anchor behaves like no `from` at all", () => {
+      const opts = {
+        firstPayday: "2025-01-03",
+        frequencyDays: 14,
+        months: 1,
+        defaultAmountCents: 100_000,
+      };
+      expect(generatePaychecksFromSettings({ ...opts, from: "2024-06-01" })).toEqual(
+        generatePaychecksFromSettings(opts),
+      );
+    });
   });
 });
 

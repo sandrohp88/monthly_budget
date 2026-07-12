@@ -3,6 +3,7 @@ import { ensureUser, jsonError, readJson } from "@/lib/api";
 import { paycheckCreateSchema } from "@/lib/validation";
 import { createPaycheck, getSettings, listPaychecks } from "@/lib/repos";
 import { generatePaychecksFromSettings } from "@/lib/projection";
+import { todayIso } from "@/lib/dates";
 
 export async function GET() {
   const auth = await ensureUser();
@@ -42,6 +43,10 @@ export async function PUT(_req: Request) {
     frequencyDays: settings.payFrequencyDays,
     months: settings.projectionMonths,
     defaultAmountCents: settings.defaultPaycheckCents,
+    // Cover the projection window from today — the anchor only sets the
+    // cadence. Otherwise the series ends at firstPayday + months and the
+    // projection falls off a paycheck cliff as the anchor ages.
+    from: todayIso(),
   });
   const existing = await listPaychecks(auth.userId);
   const existingDates = new Set(existing.map((p) => p.payDate));

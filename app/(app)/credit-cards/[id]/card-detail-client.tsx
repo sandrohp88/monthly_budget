@@ -25,6 +25,7 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { CreditCardVisual } from "@/components/credit-card-visual";
+import { InlineBalanceEditor } from "@/components/inline-balance-editor";
 import { PayPalPromoReconcileDialog } from "@/components/paypal-promo-reconcile-dialog";
 import { cardDisplayName, cardMaskDigits } from "@/lib/card-art";
 import {
@@ -189,7 +190,13 @@ export function CardDetailClient({
                 CURRENT BALANCE
               </div>
               <div className="text-[32px] font-bold leading-none tracking-tight tabular text-[var(--text-0)]">
-                {balanceCents != null ? (
+                {card.plaidAccountId == null ? (
+                  <InlineBalanceEditor
+                    cardId={card.id}
+                    valueCents={balanceCents}
+                    inputClassName="h-10 w-40 text-[22px]"
+                  />
+                ) : balanceCents != null ? (
                   <Money cents={balanceCents} />
                 ) : (
                   <span className="text-[var(--text-3)]">—</span>

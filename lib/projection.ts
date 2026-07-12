@@ -435,11 +435,22 @@ export function generatePaychecksFromSettings(opts: {
   frequencyDays: number;
   months: number;
   defaultAmountCents: number;
+  /**
+   * Window start for the generated occurrences (default: `firstPayday`).
+   * The series stays anchored to `firstPayday`'s cadence, but only dates on
+   * or after `from` are returned and the horizon is `from + months` — so
+   * regenerating always covers the projection window from today. Without
+   * this, the horizon was `firstPayday + months` and shrank as the anchor
+   * aged: paychecks "stopped" and the projection fell off a cliff.
+   */
+  from?: string;
 }): Paycheck[] {
   const out: Paycheck[] = [];
   const start = parseIsoDate(opts.firstPayday);
-  const end = start + opts.months * 31 * DAY_MS;
+  const from = opts.from ? Math.max(parseIsoDate(opts.from), start) : start;
+  const end = from + opts.months * 31 * DAY_MS;
   for (let ts = start; ts <= end; ts += opts.frequencyDays * DAY_MS) {
+    if (ts < from) continue;
     out.push({ payDate: formatIsoDate(ts), amountCents: opts.defaultAmountCents });
   }
   return out;
