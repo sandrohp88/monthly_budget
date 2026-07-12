@@ -568,7 +568,20 @@ These bit us before. Don't repeat:
 21. **PayPal Credit special financing is split across two Plaid accounts** — qualifying purchases appear on the PayPal wallet account (`depository/paypal`), while payments appear on the linked PayPal Credit account (`credit/paypal`) as `LOAN_PAYMENTS`. Purchases at or above `PAYPAL_SPECIAL_FINANCING_THRESHOLD_CENTS` (`lib/paypal-special-financing.ts`, currently PayPal's published $149 minimum) can seed promo rows, but Plaid payment rows do not expose PayPal's targeted promo allocation.
 22. **PayPal's promo list beats transaction FIFO** — PayPal's issuer UI exposes actual promotional balances, payoff dates, and targeted paid-off promos that Plaid transaction history does not. When a promo row's `authoritativeSource` column is non-null (introduced in migration `0018`), do not overwrite its amount/date from transaction FIFO; an inactive zero-balance PayPal promo must also stay paid off on later syncs. Legacy rows used a sentinel string `"PayPal authoritative promo data"` in `notes` — `0018` backfills the typed column from that and the sync logic now reads only `authoritativeSource`.
 23. **Playwright must use a host allowed by `AUTH_URL`** — middleware rejects unknown `Host` headers with 421. The E2E config builds and serves on `localhost:3000` to match local `.env`; `playwright.config.ts` derives `AUTH_URL` from the port, so on machines where 3000 is unusable (Windows WinNAT excluded port range) run `E2E_PORT=3200 npx playwright test`.
-24. **E2E specs share one test DB per suite run** (wiped once in `global-setup.ts`) — most specs are order-independent, but `credit-card-statement.spec.ts` still assumes a lone card; run it standalone until specs are fully scoped. Keep spec dates relative to today (hardcoded dates rot once the calendar passes them).
+24. **Chase flexible financing: statement rows carry the Interest Saving Balance.** The
+    Prime Visa (****9873) runs 0% "Equal Pay" plans, so Chase's pay-to-avoid-interest amount
+    (ISB = new balance − flex-plan outstanding + this cycle's plan payments) is far below the
+    statement's New Balance. Convention (reconciled 2026-07-11 from real statements): statement
+    rows store the **ISB** as `statementBalanceCents` (New Balance goes in `notes`), each Equal
+    Pay plan is an authoritative `credit_card_promos` row (`monthlyPaymentCents` = plan payment,
+    `endDate` = plan expiration), and the open due-date slot gets a payment override pinned to
+    the ISB because a Plaid liabilities sync overwrites the open statement's balance with the
+    New Balance (see `upsertCreditCardStatementByDate` — only paid records and due-date
+    overrides survive). After each new statement: re-enter the ISB, decrement promo remainings
+    from the QUALIFIED PROMOTIONAL FINANCING table, and refresh the slot override. A
+    `statement_balance_user_override` column (mirroring 0027's due-date override) would remove
+    the monthly manual step — candidate migration 0030.
+25. **E2E specs share one test DB per suite run** (wiped once in `global-setup.ts`) — most specs are order-independent, but `credit-card-statement.spec.ts` still assumes a lone card; run it standalone until specs are fully scoped. Keep spec dates relative to today (hardcoded dates rot once the calendar passes them).
 
 ---
 
