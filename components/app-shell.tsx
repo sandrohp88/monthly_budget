@@ -41,7 +41,12 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname() ?? "/";
-  const crumb = ROUTE_TO_CRUMB[pathname] ?? "ROOT";
+  const crumb =
+    ROUTE_TO_CRUMB[pathname] ??
+    Object.entries(ROUTE_TO_CRUMB).find(
+      ([route]) => route !== "/" && pathname.startsWith(`${route}/`),
+    )?.[1] ??
+    "ROOT";
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
 
   return (
