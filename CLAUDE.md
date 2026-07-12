@@ -91,7 +91,10 @@ app/
     assets/                ← manual net-worth line items
     bills/                 ← recurring + variable bills, payment overrides
     calendar/              ← month-grid of projection events; day click adds a bill
-    credit-cards/          ← cards, statements, promos, what-if sheets
+    credit-cards/          ← wallet view: official card art grid (balance + last digits only);
+                             card-dialogs.tsx holds the shared card/statement/promo dialogs
+      [id]/                ← per-card detail page: current statement, history, cycle
+                             estimate, promos, what-if sheets, edit/archive
     extras/
     ledger/                ← KPIs + projection insights + ledger table
     paychecks/
@@ -114,6 +117,8 @@ components/
   sidebar.tsx              ← nav with `g` + `d/b/a/t/c/p/e/l/j/x/w/r/s` shortcuts (hint auto-generated from NAV);
                              two sections: Core (dashboard/calendar/bills/transactions/accounts) and More (the rest)
   projection-chart.tsx     ← Recharts area chart
+  credit-card-visual.tsx   ← wallet card face: official art from public/cards/ (via
+                             lib/card-art.ts registry) or a brand-gradient fallback
   money.tsx, date-label.tsx, money-input.tsx
   category-dialog.tsx      ← shared "add new category" dialog (used in 2 places)
   plaid-draft-approve-dialog.tsx ← approve a Plaid draft into a real expense
@@ -131,6 +136,8 @@ lib/
   auth.ts                  ← NextAuth instance + requireUserId/requireAdmin helpers
   api.ts                   ← ensureUser, readJson, jsonError helpers for routes
   credit-cards.ts          ← cycle date math (clamp Feb 31 → 28, etc.)
+  card-art.ts              ← card-name → official art (public/cards/) + brand fallback
+                             + display-name/mask helpers for the wallet UI
   plaid-client.ts          ← lazy `PlaidApi` singleton (reads PLAID_* env)
   plaid-crypto.ts          ← AES-256-GCM encrypt/decrypt for access tokens (+ test)
   plaid-sync.ts            ← cursor-based `transactions/sync` polling + link-token creation
