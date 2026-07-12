@@ -126,7 +126,7 @@ export function CreditCardsClient({ initialCards }: { initialCards: WalletCard[]
           </Button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-x-5 gap-y-7 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-6 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
           {cards.map((wc) => (
             <WalletCardEntry key={wc.card.id} data={wc} today={today} />
           ))}
@@ -171,24 +171,24 @@ function WalletCardEntry({ data, today }: { data: WalletCard; today: string }) {
           </span>
         ) : null}
       </CreditCardVisual>
-      <div className="mt-3 flex items-start justify-between gap-3 px-1">
+      <div className="mt-2.5 flex items-start justify-between gap-2 px-0.5">
         <div className="min-w-0">
-          <div className="truncate text-[13px] font-semibold leading-snug text-[var(--text-0)]">
+          <div className="truncate text-[12px] font-semibold leading-snug text-[var(--text-0)] sm:text-[13px]">
             {name}
           </div>
-          <div className="mt-0.5 text-[12px] tracking-[0.12em] text-[var(--text-3)] tabular">
+          <div className="mt-0.5 text-[11px] tracking-[0.12em] text-[var(--text-3)] tabular sm:text-[12px]">
             {digits ? `•••• ${digits}` : "manual card"}
           </div>
         </div>
         <div className="shrink-0 text-right">
-          <div className="text-[16px] font-bold leading-snug tracking-tight tabular text-[var(--text-0)]">
+          <div className="text-[14px] font-bold leading-snug tracking-tight tabular text-[var(--text-0)] sm:text-[15px]">
             {balanceCents != null ? (
               <Money cents={balanceCents} />
             ) : (
               <span className="font-medium text-[var(--text-3)]">—</span>
             )}
           </div>
-          <div className="text-[11px] leading-tight text-[var(--text-3)]">balance</div>
+          <div className="text-[10px] leading-tight text-[var(--text-3)] sm:text-[11px]">balance</div>
         </div>
       </div>
     </Link>
