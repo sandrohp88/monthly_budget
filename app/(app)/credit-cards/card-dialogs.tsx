@@ -978,6 +978,14 @@ export function PromoScheduleSheet({
     })),
   );
   const [saving, setSaving] = React.useState(false);
+  // Quick "add a payment" inputs — the primary way to schedule one payment at a
+  // time. Amount defaults to whatever is still unscheduled so the user never
+  // double-counts money that's already planned.
+  const [quickDate, setQuickDate] = React.useState<string>(today);
+  const [quickAmountCents, setQuickAmountCents] = React.useState<number>(() => {
+    const scheduled = initialPayments.reduce((s, p) => s + p.amountCents, 0);
+    return Math.max(0, promo.remainingAmountCents - scheduled);
+  });
 
   const sorted = React.useMemo(
     () => [...drafts].sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
@@ -990,7 +998,35 @@ export function PromoScheduleSheet({
   // Compare scheduled total against the *current* remaining (what still needs
   // to be paid), not the original. The user often opens this AFTER some
   // amount has already been paid down via prior statements.
-  const gap = remaining - totalScheduled; // positive: short, negative: over
+  const gap = remaining - totalScheduled; // positive: unscheduled, negative: over
+  // What's left to schedule after existing payments. Feeds the quick-add form
+  // and the summary so adding a payment always accounts for prior ones.
+  const leftToSchedule = Math.max(0, gap);
+
+  const addQuickPayment = () => {
+    if (!quickDate) {
+      toast.error("Pick a payment date");
+      return;
+    }
+    if (quickDate > promo.endDate) {
+      toast.error(`Payment must be on or before ${promo.endDate}`);
+      return;
+    }
+    if (quickAmountCents <= 0) {
+      toast.error("Enter a positive amount");
+      return;
+    }
+    if (totalScheduled + quickAmountCents > remaining) {
+      toast.error("That exceeds the remaining balance — reduce the amount");
+      return;
+    }
+    setDrafts((d) => [
+      ...d,
+      { key: makeDraftKey(), dueDate: quickDate, amountCents: quickAmountCents, note: null },
+    ]);
+    // Re-default the amount to whatever is still unscheduled after this add.
+    setQuickAmountCents(Math.max(0, remaining - totalScheduled - quickAmountCents));
+  };
 
   const addRow = () => {
     setDrafts((d) => [
@@ -1074,8 +1110,8 @@ export function PromoScheduleSheet({
         return;
       }
     }
-    if (sorted.length > 0 && gap !== 0) {
-      toast.error("Schedule must exactly equal the remaining promotional balance");
+    if (gap < 0) {
+      toast.error("Schedule exceeds the remaining balance — remove or lower a payment");
       return;
     }
     setSaving(true);
@@ -1148,8 +1184,63 @@ export function PromoScheduleSheet({
           </div>
 
           <div className="text-[11px] tracking-wide text-[var(--text-2)]">
-            Pick exact dates and amounts through the deadline. The schedule must
-            cover the full remaining balance; actual balances change only when reconciled.
+            Add payments one at a time up to the remaining balance. Anything you
+            leave unscheduled auto-spreads across future cycles (or lands on the
+            deadline). Actual balances change only when reconciled.
+          </div>
+
+          {/* Quick add — schedule a single payment; amount defaults to what's
+              left so previous payments are never double-counted. */}
+          <div className="space-y-2 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-3">
+            <div className="flex items-baseline justify-between text-[10px] uppercase tracking-[0.14em] text-[var(--text-3)]">
+              <span>ADD A PAYMENT</span>
+              <span>
+                LEFT TO SCHEDULE{" "}
+                <span
+                  className={cn(
+                    "font-bold tabular",
+                    leftToSchedule > 0 ? "text-[var(--amber)]" : "text-[var(--phosphor)]",
+                  )}
+                >
+                  <Money cents={leftToSchedule} />
+                </span>
+              </span>
+            </div>
+            <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="promo-quick-date" className="text-[9px]">
+                  DATE
+                </Label>
+                <Input
+                  id="promo-quick-date"
+                  type="date"
+                  min={today}
+                  max={promo.endDate}
+                  value={quickDate}
+                  onChange={(e) => setQuickDate(e.target.value)}
+                  className="h-8 text-[11px]"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="promo-quick-amount" className="text-[9px]">
+                  AMOUNT
+                </Label>
+                <MoneyInput
+                  id="promo-quick-amount"
+                  valueCents={quickAmountCents}
+                  onChangeCents={setQuickAmountCents}
+                />
+              </div>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={addQuickPayment}
+                disabled={quickAmountCents <= 0 || !quickDate || leftToSchedule <= 0}
+                title={leftToSchedule <= 0 ? "Fully scheduled" : "Add this payment"}
+              >
+                <Plus className="h-3 w-3" /> ADD
+              </Button>
+            </div>
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2">
@@ -1190,10 +1281,8 @@ export function PromoScheduleSheet({
           {sorted.length === 0 ? (
             <div className="rounded-sm border border-dashed border-[var(--border-raw)] bg-[var(--bg-2)] p-4 text-center text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
               NO MANUAL PAYMENTS — PROMO USES AUTO-SPREAD
-              <div className="mt-2">
-                <Button size="sm" variant="primary" onClick={addRow}>
-                  <Plus className="h-3 w-3" /> ADD FIRST PAYMENT
-                </Button>
+              <div className="mt-1 lowercase tracking-normal">
+                add a payment above, or use a preset, to plan it yourself
               </div>
             </div>
           ) : (
@@ -1288,14 +1377,14 @@ export function PromoScheduleSheet({
               >
                 {gap > 0 ? (
                   <>
-                    SHORT <Money cents={gap} />
+                    UNSCHEDULED <Money cents={gap} />
                   </>
                 ) : gap < 0 ? (
                   <>
                     OVER <Money cents={-gap} />
                   </>
                 ) : (
-                  "EXACT"
+                  "FULLY SCHEDULED"
                 )}
               </span>
             </div>
