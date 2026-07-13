@@ -389,82 +389,28 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       }
     }
   }
-  // Pass A: reduce each promo chunk by any paydown targeting its OWN due date.
-  type PromoRow = {
-    cardId: string;
-    cardName: string;
-    dueDate: string;
-    /** Cash still owed after target-date paydown consumption (mutable). */
-    amountCents: number;
-    /** Original aggregate chunk before any paydown (for originalAmountCents). */
-    chunkCents: number;
-    /** Planning "due" figure (mutable, tracks amountCents down). */
-    dueCents: number;
-    balanceCents: number;
-    descriptions: string[];
-    relatedDate?: string;
-  };
-  const promoRows: PromoRow[] = [];
+  // Reduce each promo chunk by any paydown targeting its OWN due date. Anything
+  // a paydown over-pays (beyond its target) is handled by the prepayment pool
+  // below, together with plain planned payments.
+  const promoExtras: OneTimeExpense[] = [];
   for (const chunk of promoChunksByCardDate.values()) {
     const override = cardOverridesByCard.get(chunk.cardId)?.get(chunk.dueDate);
     appliedCardOverrideKeys.add(overrideKey(chunk.cardId, chunk.dueDate));
     const baseCents = override?.amountCents ?? chunk.amountCents;
     const consumed = consumePaydown(chunk.cardId, chunk.dueDate, baseCents);
-    promoRows.push({
-      cardId: chunk.cardId,
-      cardName: chunk.cardName,
-      dueDate: chunk.dueDate,
-      amountCents: baseCents - consumed,
-      chunkCents: chunk.amountCents,
-      dueCents: Math.max(0, chunk.amountCents - consumed),
-      balanceCents: chunk.balanceCents,
-      descriptions: chunk.descriptions,
-      relatedDate: movedFromDate(override?.notes),
-    });
-  }
-  // Pass B: a paydown planned LARGER than its target date's charge leaves an
-  // unspent remainder. That remainder is real planned cash toward the card, so
-  // credit it against the card's OTHER promo chunks (soonest first) instead of
-  // letting it evaporate. Without this, an over-sized paydown debits its full
-  // amount AND the later promo chunks still project in full — charging more
-  // total cash than the (interest-free) promo balance actually owed. No-op when
-  // no paydown exceeds its target (the common case), so lone-card / golden
-  // projections stay byte-identical.
-  const promoPrepayByCard = new Map<string, number>();
-  for (const [key, remaining] of paydownRemainingByKey) {
-    if (remaining <= 0) continue;
-    const cardId = paydownCardByKey.get(key);
-    if (cardId) promoPrepayByCard.set(cardId, (promoPrepayByCard.get(cardId) ?? 0) + remaining);
-  }
-  if (promoPrepayByCard.size > 0) {
-    const soonestFirst = [...promoRows].sort((a, b) =>
-      a.cardId === b.cardId
-        ? a.dueDate.localeCompare(b.dueDate)
-        : a.cardId.localeCompare(b.cardId),
-    );
-    for (const row of soonestFirst) {
-      const pool = promoPrepayByCard.get(row.cardId) ?? 0;
-      if (pool <= 0 || row.amountCents <= 0) continue;
-      const credit = Math.min(pool, row.amountCents);
-      row.amountCents -= credit;
-      row.dueCents = Math.max(0, row.dueCents - credit);
-      promoPrepayByCard.set(row.cardId, pool - credit);
-    }
-  }
-  const promoExtras: OneTimeExpense[] = [];
-  for (const row of promoRows) {
-    if (row.amountCents <= 0) continue;
-    const descLabel = row.descriptions.join(", ");
+    const amountCents = baseCents - consumed;
+    if (amountCents <= 0) continue;
+    const descLabel = chunk.descriptions.join(", ");
     promoExtras.push({
-      date: row.dueDate,
-      description: `${row.cardName} promo (${descLabel})`,
-      amountCents: row.amountCents,
-      sourceId: row.cardId,
+      date: chunk.dueDate,
+      description: `${chunk.cardName} promo (${descLabel})`,
+      amountCents,
+      sourceId: chunk.cardId,
       sourceType: "creditCardPayment",
-      originalAmountCents: row.chunkCents,
-      relatedDate: row.relatedDate,
-      paymentDueCents: row.dueCents,
-      paymentBalanceCents: row.balanceCents,
+      originalAmountCents: chunk.amountCents,
+      relatedDate: movedFromDate(override?.notes),
+      paymentDueCents: Math.max(0, chunk.amountCents - consumed),
+      paymentBalanceCents: chunk.balanceCents,
     });
   }
 
@@ -513,6 +459,59 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       paymentDueCents: group.amountCents,
       paymentBalanceCents: displayBalanceForCard(group.cardId, group.amountCents),
     });
+  }
+
+  // ── Prepayment pool: scheduled payments reduce what the card owes ──────────
+  // A scheduled card payment must never stack on top of the card's obligations —
+  // that double-counts and drives the projected balance negative. Two kinds feed
+  // a per-card pool:
+  //   • paydown leftovers — a `pays-down:` payment planned LARGER than its target
+  //     date's charge (the unspent excess),
+  //   • plain planned payments — a scheduled payment on a date with no charge of
+  //     its own (e.g. "pay the balance on the 3rd", a few days before the
+  //     statement's due date).
+  // Both still debit their own date in stage 5 below. Here the pool draws down
+  // the card's remaining obligations — statements, open-cycle estimate, promo
+  // chunks — soonest first, so the same money is only counted once. Variable
+  // spend is excluded: it's forecast FUTURE charges, not current balance. No-op
+  // when nothing over-pays (the common case), so golden projections are
+  // byte-identical.
+  const prepayPoolByCard = new Map<string, number>();
+  for (const [key, remaining] of paydownRemainingByKey) {
+    if (remaining <= 0) continue;
+    const cardId = paydownCardByKey.get(key);
+    if (cardId) prepayPoolByCard.set(cardId, (prepayPoolByCard.get(cardId) ?? 0) + remaining);
+  }
+  for (const [cardId, overrides] of cardOverridesByCard) {
+    for (const [dueDate, override] of overrides) {
+      // A plain planned payment: an override not claimed as a slot amount by any
+      // charge stage, dated today or later (a stale plan can't discount forever).
+      if (appliedCardOverrideKeys.has(overrideKey(cardId, dueDate))) continue;
+      if (override.amountCents <= 0 || dueDate < today) continue;
+      prepayPoolByCard.set(cardId, (prepayPoolByCard.get(cardId) ?? 0) + override.amountCents);
+    }
+  }
+  // Charges the pool fully covers are dropped from the output (a $0 line reads
+  // as noise); partially covered charges keep their reduced amount.
+  const prepaidToZero = new Set<OneTimeExpense>();
+  if (prepayPoolByCard.size > 0) {
+    const obligations = [...ccExtras, ...openCycleExtras, ...promoExtras].filter(
+      (e) => e.sourceId != null && prepayPoolByCard.has(e.sourceId),
+    );
+    obligations.sort((a, b) =>
+      a.sourceId === b.sourceId
+        ? a.date.localeCompare(b.date)
+        : a.sourceId!.localeCompare(b.sourceId!),
+    );
+    for (const e of obligations) {
+      const pool = prepayPoolByCard.get(e.sourceId!) ?? 0;
+      if (pool <= 0 || e.amountCents <= 0) continue;
+      const credit = Math.min(pool, e.amountCents);
+      e.amountCents -= credit;
+      e.paymentDueCents = Math.max(0, (e.paymentDueCents ?? 0) - credit);
+      prepayPoolByCard.set(e.sourceId!, pool - credit);
+      if (e.amountCents <= 0) prepaidToZero.add(e);
+    }
   }
 
   // ── 5. Planned payments ───────────────────────────────────────────────────
@@ -576,7 +575,9 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   for (const e of plannedCardExtras) kindByEvent.set(e, "planned");
 
   const extras = mergeByDueDate(
-    [...ccExtras, ...openCycleExtras, ...promoExtras, ...variableBillExtras, ...plannedCardExtras],
+    [...ccExtras, ...openCycleExtras, ...promoExtras, ...variableBillExtras, ...plannedCardExtras].filter(
+      (e) => !prepaidToZero.has(e),
+    ),
     kindByEvent,
     cardById,
   );
