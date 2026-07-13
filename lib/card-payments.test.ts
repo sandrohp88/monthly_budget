@@ -501,3 +501,44 @@ describe("projectCardPayments — over-sized paydown credits the promo balance",
     expect(pp.find((e) => e.date === "2026-07-10")?.amountCents).toBe(100_00);
   });
 });
+
+describe("projectCardPayments — a plain planned payment pays down the card", () => {
+  const base = {
+    ...EMPTY,
+    today: "2026-07-13",
+    endDate: "2026-12-31",
+    activeCards: [card({ currentBalanceCents: null, dueDay: 8 })],
+  };
+
+  it("a scheduled payment before a statement pays it down (no double-count)", () => {
+    // Mirrors the real ****1434 bug: $1,111 planned Aug 3, statement $1,110.41 due Aug 8.
+    const r = projectCardPayments({
+      ...base,
+      statements: [
+        stmt({ statementDate: "2026-07-10", dueDate: "2026-08-08", statementBalanceCents: 111041, paidAmountCents: null }),
+      ],
+      cardPaymentOverrides: [override({ dueDate: "2026-08-03", amountCents: 111100, notes: null })],
+    });
+    const pp = r.extras.filter((e) => e.sourceId === "c1");
+    // The scheduled payment debits its own day…
+    expect(pp.find((e) => e.date === "2026-08-03")?.amountCents).toBe(111100);
+    // …and the statement due date is fully covered (dropped, not charged again).
+    expect(pp.some((e) => e.date === "2026-08-08")).toBe(false);
+    // Total cash = the single scheduled payment, not payment + statement.
+    expect(pp.reduce((s, e) => s + e.amountCents, 0)).toBe(111100);
+  });
+
+  it("a partial scheduled payment reduces the statement by that amount", () => {
+    const r = projectCardPayments({
+      ...base,
+      statements: [
+        stmt({ statementDate: "2026-07-10", dueDate: "2026-08-08", statementBalanceCents: 100_00, paidAmountCents: null }),
+      ],
+      cardPaymentOverrides: [override({ dueDate: "2026-08-03", amountCents: 30_00, notes: null })],
+    });
+    const pp = r.extras.filter((e) => e.sourceId === "c1");
+    expect(pp.find((e) => e.date === "2026-08-03")?.amountCents).toBe(30_00);
+    expect(pp.find((e) => e.date === "2026-08-08")?.amountCents).toBe(70_00);
+    expect(pp.reduce((s, e) => s + e.amountCents, 0)).toBe(100_00);
+  });
+});
