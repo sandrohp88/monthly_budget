@@ -268,19 +268,32 @@ function DayCell({
   /** Whether dropping on the hovered day is a valid move. */
   dragOverValid?: boolean;
 }) {
+  // Busy days collapse to `maxChips` chips + a "+N MORE" control. Expanding
+  // reveals every chip so overflow payments are draggable too (otherwise the
+  // only way to reschedule a hidden payment was the edit dialog).
+  const [expanded, setExpanded] = React.useState(false);
   const events = row?.events ?? [];
   const isToday = iso === today;
   const isPast = iso < today;
-  const shown = maxChips == null ? events : events.slice(0, maxChips);
-  const overflow = maxChips == null ? 0 : events.length - maxChips;
+  const capped = maxChips != null && !expanded;
+  const shown = capped ? events.slice(0, maxChips) : events;
+  const overflow = capped ? events.length - maxChips! : 0;
+  const canCollapse = expanded && maxChips != null && events.length > maxChips;
   const isDropHover = dragActive && dragOverDate === iso;
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={() => onSelect(iso)}
+      onClick={(e) => {
+        // A click on a child control (expand / collapse "+N MORE") must not also
+        // open the day detail — those buttons manage their own inline state.
+        if ((e.target as HTMLElement).closest("button")) return;
+        onSelect(iso);
+      }}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
+        // Only when the cell itself is focused — let child controls (expand /
+        // collapse) handle their own keyboard activation.
+        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
           e.preventDefault();
           onSelect(iso);
         }
@@ -387,7 +400,29 @@ function DayCell({
           );
         })}
         {overflow > 0 ? (
-          <div className="text-[10px] text-[var(--text-3)]">+{overflow} MORE</div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded(true);
+            }}
+            className="w-full rounded-[2px] px-1 py-0.5 text-left text-[10px] text-[var(--text-3)] transition-colors hover:bg-[var(--bg-2)] hover:text-[var(--text-1)]"
+            title="Show all — reveals hidden payments so they can be dragged"
+          >
+            +{overflow} MORE
+          </button>
+        ) : null}
+        {canCollapse ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded(false);
+            }}
+            className="w-full rounded-[2px] px-1 py-0.5 text-left text-[10px] text-[var(--text-3)] transition-colors hover:bg-[var(--bg-2)] hover:text-[var(--text-1)]"
+          >
+            SHOW LESS
+          </button>
         ) : null}
       </div>
     </div>
