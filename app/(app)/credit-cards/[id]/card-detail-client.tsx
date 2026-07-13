@@ -76,6 +76,7 @@ export function CardDetailClient({
   estimate,
   linkedBillCount,
   paymentsByPromoId,
+  scheduledCardPayments,
   mask,
   institution,
   accountBalanceCents,
@@ -86,6 +87,8 @@ export function CardDetailClient({
   estimate: CycleEstimate | null;
   linkedBillCount: number;
   paymentsByPromoId: Record<string, PromoScheduledPayment[]>;
+  /** Pending calendar paydowns on this card (credit the promo balance). */
+  scheduledCardPayments: Array<{ date: string; amountCents: number }>;
   mask: string | null;
   institution: string | null;
   accountBalanceCents: number | null;
@@ -122,6 +125,12 @@ export function CardDetailClient({
 
   const activePromos = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);
   const promoRemainingCents = activePromos.reduce((s, p) => s + p.remainingAmountCents, 0);
+  // Calendar paydowns are applied to the card and then credited against the
+  // promo balance, so promo schedules can be fully/partly covered before they
+  // reach the calendar. Surface that in the planner instead of leaving the user
+  // to wonder why their promo payments don't show.
+  const scheduledCardPaymentCents = scheduledCardPayments.reduce((s, p) => s + p.amountCents, 0);
+  const promoLeftToCoverCents = Math.max(0, promoRemainingCents - scheduledCardPaymentCents);
 
   const openStatements = statements.filter(isStatementOpen);
   const openDueCents = openStatements.reduce((s, x) => s + statementCashDueCents(x), 0);
@@ -525,6 +534,40 @@ export function CardDetailClient({
                   <span className="text-[11px] font-medium text-[var(--text-3)]">REMAINING</span>
                 </div>
 
+                {scheduledCardPaymentCents > 0 ? (
+                  <div className="mb-3 rounded-[10px] border border-[var(--cyan)]/40 bg-[var(--cyan)]/5 px-3 py-2.5 text-[11px] leading-relaxed text-[var(--text-2)]">
+                    <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--cyan)]">
+                      <CalendarDays className="h-3 w-3" /> Scheduled on calendar
+                    </div>
+                    <span className="font-semibold tabular text-[var(--text-0)]">
+                      <Money cents={scheduledCardPaymentCents} />
+                    </span>{" "}
+                    in card payment{scheduledCardPayments.length === 1 ? " is" : "s are"} planned (
+                    {scheduledCardPayments.map((p, i) => (
+                      <React.Fragment key={p.date}>
+                        {i > 0 ? ", " : ""}
+                        <DateLabel iso={p.date} format="short" />
+                      </React.Fragment>
+                    ))}
+                    ).{" "}
+                    {promoLeftToCoverCents === 0 ? (
+                      <>
+                        That covers this card&apos;s full promo balance, so promo payment plans
+                        below are absorbed by those payments and won&apos;t show separately on the
+                        calendar.
+                      </>
+                    ) : (
+                      <>
+                        They cover part of the promo balance —{" "}
+                        <span className="font-semibold tabular text-[var(--text-0)]">
+                          <Money cents={promoLeftToCoverCents} />
+                        </span>{" "}
+                        still to plan.
+                      </>
+                    )}
+                  </div>
+                ) : null}
+
                 <ul className="space-y-1.5">
                   {activePromos.map((p) => {
                     const sched = paymentsByPromoId[p.id] ?? [];
@@ -686,6 +729,7 @@ export function CardDetailClient({
           card={card}
           promo={schedulePromo}
           initialPayments={paymentsByPromoId[schedulePromo.id] ?? []}
+          scheduledCardPaymentCents={scheduledCardPaymentCents}
           onClose={() => setSchedulePromo(null)}
           onSaved={() => {
             setSchedulePromo(null);
