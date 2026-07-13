@@ -28,6 +28,11 @@ test("create card -> enter statement -> mark paid -> verify paid state", async (
 
   await expect(page.getByText("Test Visa").first()).toBeVisible();
 
+  // Open the card detail page — statement entry and payment actions live
+  // there (the wallet list only shows the card face).
+  await page.getByRole("link", { name: /test visa/i }).first().click();
+  await expect(page.getByRole("heading", { name: /test visa/i })).toBeVisible();
+
   // ── enter a statement ─────────────────────────────────────────────────
   await page.getByRole("button", { name: /enter statement/i }).first().click();
 

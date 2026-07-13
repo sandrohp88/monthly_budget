@@ -429,6 +429,18 @@ export function promoFullBalancePayment(
   return [{ dueDate: promo.endDate, amountCents: promo.remainingAmountCents }];
 }
 
+/**
+ * Validate a manual promo payment schedule. Two rules:
+ *   1. No payment may land after the promo deadline.
+ *   2. The scheduled total may not EXCEED the remaining principal — that would
+ *      double-count money the user doesn't actually owe.
+ *
+ * A schedule that's *short* of the remaining principal is allowed: the user can
+ * plan one payment at a time, and the projection auto-covers any unscheduled
+ * remainder (a catch-up lump on the deadline — see
+ * `projectPromoScheduleWithBalances`). This is what lets the schedule sheet add
+ * payments incrementally instead of forcing an exact-to-the-cent plan.
+ */
 export function promoPaymentScheduleError(
   promo: Pick<CreditCardPromoRow, "remainingAmountCents" | "endDate">,
   payments: ReadonlyArray<{ dueDate: string; amountCents: number }>,
@@ -439,10 +451,9 @@ export function promoPaymentScheduleError(
     return `Payment date ${afterDeadline.dueDate} is after the promo deadline ${promo.endDate}.`;
   }
   const total = payments.reduce((sum, payment) => sum + payment.amountCents, 0);
-  if (total !== promo.remainingAmountCents) {
-    const diff = promo.remainingAmountCents - total;
-    const direction = diff > 0 ? "short" : "over";
-    return `Schedule total ${total} cents is ${direction} by ${Math.abs(diff)} cents — must equal remaining principal of ${promo.remainingAmountCents} cents.`;
+  if (total > promo.remainingAmountCents) {
+    const over = total - promo.remainingAmountCents;
+    return `Schedule total ${total} cents is over by ${over} cents — cannot exceed remaining principal of ${promo.remainingAmountCents} cents.`;
   }
   return null;
 }

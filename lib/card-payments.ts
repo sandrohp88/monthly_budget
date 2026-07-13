@@ -86,6 +86,50 @@ export function paydownTargetDate(notes: string | null | undefined): string | un
   return match?.[1];
 }
 
+export type CardPaymentMoveInput = {
+  /** The date the payment currently sits on. */
+  fromDate: string;
+  /** True when this is a scheduled paydown (a `pays-down:` override). */
+  isPaydown: boolean;
+  /**
+   * Cash still due at this slot from a statement / open-cycle estimate / promo
+   * chunk. 0 for a plain planned payment or a paydown, which carry no issuer
+   * deadline of their own.
+   */
+  paymentDueCents: number;
+  /** For an already-moved payment, the original issuer due date. */
+  relatedDate?: string;
+};
+
+/**
+ * Validate dragging a card payment from its current day to `toDate`. Returns
+ * null when the move is allowed, or a human-readable reason it isn't. The rules
+ * mirror the calendar dialogs (CardPaymentPlanDialog / ScheduleCardPaymentDialog):
+ *
+ *   - Never move a payment into the past.
+ *   - A statement / open-cycle-estimate / promo due (`paymentDueCents > 0`) may
+ *     only move EARLIER — never after the issuer due date, because paying after
+ *     it defeats the "avoid interest" purpose. The issuer due date is the date
+ *     the payment was moved from (`relatedDate`) if already moved, else
+ *     `fromDate`.
+ *   - A scheduled paydown or a plain planned payment can move to any future day.
+ *
+ * `toDate === fromDate` is a no-op the caller should skip; it validates as null.
+ */
+export function cardPaymentMoveError(
+  input: CardPaymentMoveInput,
+  toDate: string,
+  today: string,
+): string | null {
+  if (toDate < today) return "Choose today or a future date.";
+  if (input.isPaydown || input.paymentDueCents <= 0) return null;
+  const dueDate = input.relatedDate ?? input.fromDate;
+  if (toDate > dueDate) {
+    return `Move earlier — a card payment can't be scheduled after its due date ${dueDate}.`;
+  }
+  return null;
+}
+
 export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCardPaymentsResult {
   const { today, endDate, activeCards, statements, promos, variableBills } = input;
 

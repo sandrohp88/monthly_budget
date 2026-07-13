@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { projectCardPayments, type StatementWithCardName } from "./card-payments";
+import {
+  cardPaymentMoveError,
+  projectCardPayments,
+  type StatementWithCardName,
+} from "./card-payments";
 import type {
   CreditCardPaymentOverrideRow,
   CreditCardPromoRow,
@@ -340,5 +344,99 @@ describe("scheduled paydowns (pays-down overrides)", () => {
     // July slot: reduced by the paydown.
     const july = r.extras.find((e) => e.date === "2026-07-10");
     expect(july).toMatchObject({ amountCents: 320_00, paymentDueCents: 320_00 });
+  });
+});
+
+describe("cardPaymentMoveError", () => {
+  const today = "2026-06-01";
+
+  it("rejects moving a payment into the past", () => {
+    expect(
+      cardPaymentMoveError(
+        { fromDate: "2026-06-10", isPaydown: false, paymentDueCents: 200_00 },
+        "2026-05-31",
+        today,
+      ),
+    ).toContain("future date");
+  });
+
+  it("allows moving a statement due earlier", () => {
+    expect(
+      cardPaymentMoveError(
+        { fromDate: "2026-06-10", isPaydown: false, paymentDueCents: 200_00 },
+        "2026-06-05",
+        today,
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects moving a statement due after its due date", () => {
+    expect(
+      cardPaymentMoveError(
+        { fromDate: "2026-06-10", isPaydown: false, paymentDueCents: 200_00 },
+        "2026-06-11",
+        today,
+      ),
+    ).toContain("after its due date");
+  });
+
+  it("uses relatedDate as the deadline for an already-moved payment", () => {
+    // Payment was moved from its 2026-06-10 issuer due date to 2026-06-04.
+    // Dragging it back out to 2026-06-08 is still on/before the deadline → ok.
+    expect(
+      cardPaymentMoveError(
+        {
+          fromDate: "2026-06-04",
+          isPaydown: false,
+          paymentDueCents: 200_00,
+          relatedDate: "2026-06-10",
+        },
+        "2026-06-08",
+        today,
+      ),
+    ).toBeNull();
+    // …but past the original due date is still rejected.
+    expect(
+      cardPaymentMoveError(
+        {
+          fromDate: "2026-06-04",
+          isPaydown: false,
+          paymentDueCents: 200_00,
+          relatedDate: "2026-06-10",
+        },
+        "2026-06-12",
+        today,
+      ),
+    ).toContain("after its due date");
+  });
+
+  it("lets a paydown move to any future day", () => {
+    expect(
+      cardPaymentMoveError(
+        { fromDate: "2026-06-02", isPaydown: true, paymentDueCents: 0 },
+        "2026-09-30",
+        today,
+      ),
+    ).toBeNull();
+  });
+
+  it("lets a plain planned payment (no due) move to any future day", () => {
+    expect(
+      cardPaymentMoveError(
+        { fromDate: "2026-06-02", isPaydown: false, paymentDueCents: 0 },
+        "2026-08-15",
+        today,
+      ),
+    ).toBeNull();
+  });
+
+  it("treats same-day as a valid (no-op) position", () => {
+    expect(
+      cardPaymentMoveError(
+        { fromDate: "2026-06-10", isPaydown: false, paymentDueCents: 200_00 },
+        "2026-06-10",
+        today,
+      ),
+    ).toBeNull();
   });
 });

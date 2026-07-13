@@ -92,13 +92,18 @@ test("schedule a partial card paydown from a plain calendar day", async ({ page 
   await expect(dueDialog.getByText(/\$300\.00/).first()).toBeVisible();
   await dueDialog.getByRole("button", { name: "CLOSE", exact: true }).click();
 
-  // The scheduled paydown is editable from its day detail.
+  // The scheduled paydown is editable AND deletable from its day detail.
   await gotoCalendarMonthOf(page, paymentDate, today);
   await page.getByText("Paydown Visa planned payment").click();
   const paydownDialog = page.getByRole("dialog");
   await expect(paydownDialog.getByText(/pays down the card payment due/i)).toBeVisible();
   await expect(paydownDialog.getByRole("button", { name: /edit plan/i })).toBeVisible();
-  await paydownDialog.getByRole("button", { name: "CLOSE", exact: true }).click();
+
+  // One-click delete removes the scheduled payment.
+  await paydownDialog.getByRole("button", { name: /delete scheduled payment/i }).click();
+  await expect(page.getByText(/scheduled payment deleted/i)).toBeVisible();
+  await gotoCalendarMonthOf(page, paymentDate, today);
+  await expect(page.getByText("Paydown Visa planned payment")).toHaveCount(0);
 
   // The card-charged bill renders as an informational marker, not cash.
   await gotoCalendarMonthOf(page, billAnchor, today);

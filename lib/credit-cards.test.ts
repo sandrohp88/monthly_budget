@@ -783,18 +783,35 @@ describe("projectPromoSchedule", () => {
 describe("promoPaymentScheduleError", () => {
   const tracked = promo({ remainingAmountCents: 100_00, endDate: "2026-12-31" });
 
-  it("requires exact payoff by the promo deadline", () => {
+  it("accepts a schedule that exactly covers the remaining balance", () => {
     expect(
       promoPaymentScheduleError(tracked, [
         { dueDate: "2026-06-01", amountCents: 40_00 },
         { dueDate: "2026-12-31", amountCents: 60_00 },
       ]),
     ).toBeNull();
+  });
+
+  it("allows a short/partial schedule (remainder auto-covers)", () => {
+    // Only $40 of a $100 balance scheduled — the projection covers the rest, so
+    // this is a valid incremental plan, not an error.
     expect(
       promoPaymentScheduleError(tracked, [
         { dueDate: "2026-06-01", amountCents: 40_00 },
       ]),
-    ).toContain("short by 6000 cents");
+    ).toBeNull();
+  });
+
+  it("rejects over-scheduling beyond the remaining balance", () => {
+    expect(
+      promoPaymentScheduleError(tracked, [
+        { dueDate: "2026-06-01", amountCents: 70_00 },
+        { dueDate: "2026-12-31", amountCents: 40_00 },
+      ]),
+    ).toContain("over by 1000 cents");
+  });
+
+  it("rejects a payment after the promo deadline", () => {
     expect(
       promoPaymentScheduleError(tracked, [
         { dueDate: "2027-01-01", amountCents: 100_00 },

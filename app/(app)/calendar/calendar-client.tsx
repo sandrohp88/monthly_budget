@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, ChevronLeft, ChevronRight, CreditCard, Plus } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, CreditCard, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -29,6 +29,7 @@ import { DateLabel } from "@/components/date-label";
 import { cn } from "@/lib/cn";
 import { balanceToneClass, balanceSurfaceClass } from "@/lib/balance-tone";
 import { BillForm, type BillFormValues } from "../bills/bill-form";
+import { cardPaymentMoveError } from "@/lib/card-payments";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
 
 const MONTH_NAMES = [
@@ -66,6 +67,22 @@ type CardPaymentPlan = {
   paymentDueCents: number;
   paymentBalanceCents?: number;
   dueLabel: string;
+};
+
+/** A card-payment chip being dragged to a new day (drag-to-reschedule). */
+type DragPayment = {
+  cardId: string;
+  fromDate: string;
+  /** Cash that debits on the payment's day (what the chip shows). */
+  amountCents: number;
+  /** Cash still due at this slot — drives move validation + plan rebuild. */
+  paymentDueCents: number;
+  paymentBalanceCents?: number;
+  originalAmountCents: number;
+  relatedDate?: string;
+  paydownTargetDate?: string;
+  isPaydown: boolean;
+  label: string;
 };
 
 function cardPaymentDueLabel(label: string): string {
@@ -149,6 +166,23 @@ function displayCents(ev: ProjectionEvent): number {
   return Math.abs(ev.originalAmountCents ?? 0);
 }
 
+/** Snapshot the data a dragged card-payment chip needs to reschedule itself. */
+function dragPaymentOf(ev: ProjectionEvent, iso: string): DragPayment {
+  const paymentDueCents = ev.paymentDueCents ?? ev.originalAmountCents ?? Math.abs(ev.amountCents);
+  return {
+    cardId: ev.sourceId!,
+    fromDate: iso,
+    amountCents: displayCents(ev),
+    paymentDueCents,
+    paymentBalanceCents: ev.paymentBalanceCents,
+    originalAmountCents: ev.originalAmountCents ?? paymentDueCents,
+    relatedDate: ev.relatedDate,
+    paydownTargetDate: ev.paydownTargetDate,
+    isPaydown: Boolean(ev.paydownTargetDate),
+    label: ev.label,
+  };
+}
+
 const TONE_CLASSES: Record<EventTone, string> = {
   income: "border-[var(--mint-dim)] bg-[var(--mint-glow)] text-[var(--mint)]",
   card: "border-[var(--amber)]/40 bg-[var(--amber)]/10 text-[var(--amber)]",
@@ -206,6 +240,14 @@ function DayCell({
   maxChips,
   minHeightClass,
   onSelect,
+  canDrag,
+  onPaymentDragStart,
+  onPaymentDragEnd,
+  onDayDragOver,
+  onDayDrop,
+  dragActive = false,
+  dragOverDate = null,
+  dragOverValid = false,
 }: {
   iso: string;
   row: ProjectionRow | undefined;
@@ -213,22 +255,63 @@ function DayCell({
   maxChips: number | null;
   minHeightClass: string;
   onSelect: (iso: string) => void;
+  /** Whether a given event on this day can be dragged to reschedule it. */
+  canDrag?: (ev: ProjectionEvent, iso: string) => boolean;
+  onPaymentDragStart?: (ev: ProjectionEvent, iso: string) => void;
+  onPaymentDragEnd?: () => void;
+  onDayDragOver?: (iso: string) => void;
+  onDayDrop?: (iso: string) => void;
+  /** A drag is in progress somewhere on the grid. */
+  dragActive?: boolean;
+  /** The day currently hovered during a drag (for the drop highlight). */
+  dragOverDate?: string | null;
+  /** Whether dropping on the hovered day is a valid move. */
+  dragOverValid?: boolean;
 }) {
   const events = row?.events ?? [];
   const isToday = iso === today;
   const isPast = iso < today;
   const shown = maxChips == null ? events : events.slice(0, maxChips);
   const overflow = maxChips == null ? 0 : events.length - maxChips;
+  const isDropHover = dragActive && dragOverDate === iso;
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onSelect(iso)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(iso);
+        }
+      }}
+      onDragOver={
+        dragActive
+          ? (e) => {
+              e.preventDefault();
+              onDayDragOver?.(iso);
+            }
+          : undefined
+      }
+      onDrop={
+        dragActive
+          ? (e) => {
+              e.preventDefault();
+              onDayDrop?.(iso);
+            }
+          : undefined
+      }
       className={cn(
         minHeightClass,
         "cursor-pointer border-b border-r border-[var(--border-raw)] p-1.5 text-left align-top transition-colors",
         "hover:bg-[var(--bg-2)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--mint)]",
         isToday ? "bg-[var(--mint-glow)]" : "bg-[var(--bg-1)]",
         isPast && !isToday ? "opacity-60" : "",
+        isDropHover
+          ? dragOverValid
+            ? "outline outline-2 outline-[var(--mint)] outline-offset-[-2px]"
+            : "outline outline-2 outline-[var(--red)] outline-offset-[-2px]"
+          : "",
       )}
     >
       <div className="mb-1 flex items-center justify-between">
@@ -262,14 +345,36 @@ function DayCell({
           const onCard = Boolean(ev.chargedToCardName);
           const cardDue =
             ev.sourceType === "creditCardPayment" && (ev.paymentDueCents ?? 0) > 0;
+          const draggable = Boolean(canDrag?.(ev, iso));
           return (
             <div
               key={`${iso}-${j}`}
+              draggable={draggable || undefined}
+              onDragStart={
+                draggable
+                  ? (e) => {
+                      e.stopPropagation();
+                      // Payload rides in React state; dataTransfer is set so the
+                      // drag is recognized across browsers (Firefox needs it).
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", ev.sourceId ?? "card-payment");
+                      onPaymentDragStart?.(ev, iso);
+                    }
+                  : undefined
+              }
+              onDragEnd={draggable ? () => onPaymentDragEnd?.() : undefined}
               className={cn(
                 "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-[10px] leading-tight",
                 TONE_CLASSES[tone],
+                draggable ? "cursor-grab active:cursor-grabbing" : "",
               )}
-              title={onCard ? `Charged to ${ev.chargedToCardName}` : undefined}
+              title={
+                draggable
+                  ? "Drag to reschedule"
+                  : onCard
+                    ? `Charged to ${ev.chargedToCardName}`
+                    : undefined
+              }
             >
               <span className="min-w-0 truncate">
                 {cardDue ? `CARD DUE · ${ev.label}` : ev.label}
@@ -285,7 +390,7 @@ function DayCell({
           <div className="text-[10px] text-[var(--text-3)]">+{overflow} MORE</div>
         ) : null}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -325,6 +430,7 @@ export function CalendarClient({
   endDate,
   categories,
   cards,
+  overrides,
 }: {
   rows: ProjectionRow[];
   today: string;
@@ -332,6 +438,9 @@ export function CalendarClient({
   endDate: string;
   categories: ReadonlyArray<string>;
   cards: ReadonlyArray<{ id: string; name: string; isActive: boolean }>;
+  /** Every credit-card payment override row (keyed by card + due date). Lets the
+   *  calendar tell which events are user-scheduled — deletable and draggable. */
+  overrides: ReadonlyArray<{ cardId: string; dueDate: string }>;
 }) {
   const router = useRouter();
   const [view, setView] = React.useState<"month" | "paycheck">("month");
@@ -346,6 +455,8 @@ export function CalendarClient({
   const [categoriesState, setCategoriesState] = React.useState<string[]>(() => [...categories]);
   const [submitting, setSubmitting] = React.useState(false);
   const [savingCardPayment, setSavingCardPayment] = React.useState(false);
+  const [dragging, setDragging] = React.useState<DragPayment | null>(null);
+  const [dragOver, setDragOver] = React.useState<{ date: string; valid: boolean } | null>(null);
 
   const rowByDate = React.useMemo(() => {
     const map = new Map<string, ProjectionRow>();
@@ -354,6 +465,39 @@ export function CalendarClient({
   }, [rows]);
 
   const activeCards = React.useMemo(() => cards.filter((c) => c.isActive), [cards]);
+
+  // Set of `${cardId}:${dueDate}` that have a payment-override row. An event at
+  // such a key was scheduled by the user, so it's deletable and (as a plain
+  // planned override) draggable.
+  const overrideKeys = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const o of overrides) set.add(`${o.cardId}:${o.dueDate}`);
+    return set;
+  }, [overrides]);
+
+  const isScheduledPayment = React.useCallback(
+    (ev: ProjectionEvent, iso: string): boolean =>
+      ev.sourceType === "creditCardPayment" &&
+      Boolean(ev.sourceId) &&
+      overrideKeys.has(`${ev.sourceId}:${iso}`),
+    [overrideKeys],
+  );
+
+  // A future, unpaid card-payment chip the user can drag to another day.
+  const canDragPayment = React.useCallback(
+    (ev: ProjectionEvent, iso: string): boolean => {
+      if (ev.sourceType !== "creditCardPayment" || !ev.sourceId) return false;
+      if (ev.isPaid || ev.chargedToCardName || iso < today) return false;
+      // A real due (has cash), a scheduled paydown, or a plain planned override.
+      // A fully-covered $0 slot with no plan of its own is not draggable.
+      return (
+        (ev.paymentDueCents ?? 0) > 0 ||
+        Boolean(ev.paydownTargetDate) ||
+        overrideKeys.has(`${ev.sourceId}:${iso}`)
+      );
+    },
+    [overrideKeys, today],
+  );
 
   // The card's next projected payment on/after `fromDate` — the slot a
   // scheduled paydown reduces. Skips paid markers and other paydowns.
@@ -623,6 +767,122 @@ export function CalendarClient({
     }
   };
 
+  // One-click delete of a user-scheduled card payment from its day detail.
+  const deleteScheduledPaymentEvent = async (ev: ProjectionEvent, iso: string) => {
+    if (!ev.sourceId) return;
+    setSavingCardPayment(true);
+    try {
+      await deleteCardPaymentOverride(ev.sourceId, iso);
+      // A moved payment also has a "moved-from" row at its original due date —
+      // remove it too so the payment reverts to its natural due date.
+      if (ev.relatedDate && ev.relatedDate !== iso) {
+        await deleteCardPaymentOverride(ev.sourceId, ev.relatedDate);
+      }
+      toast.success("Scheduled payment deleted");
+      setSelectedDate(null);
+      router.refresh();
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSavingCardPayment(false);
+    }
+  };
+
+  // Reschedule a dragged card payment to `toDate`, reusing the same override
+  // mechanics as the PLAN / PROGRAM dialogs so behavior stays identical.
+  const moveCardPaymentTo = async (drag: DragPayment, toDate: string) => {
+    if (toDate === drag.fromDate) return;
+    const error = cardPaymentMoveError(
+      {
+        fromDate: drag.fromDate,
+        isPaydown: drag.isPaydown,
+        paymentDueCents: drag.paymentDueCents,
+        relatedDate: drag.relatedDate,
+      },
+      toDate,
+      today,
+    );
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    if (drag.isPaydown) {
+      // Keep the paydown's target due date; just move the payment's own day.
+      await saveScheduledPayment(drag.cardId, toDate, drag.amountCents, drag.paydownTargetDate, {
+        cardId: drag.cardId,
+        date: drag.fromDate,
+      });
+      return;
+    }
+    if (drag.paymentDueCents > 0) {
+      // A real card due — reuse the "program payment" move (moved-to/moved-from).
+      await saveCardPaymentPlan(
+        {
+          cardId: drag.cardId,
+          label: drag.label,
+          dueDate: drag.fromDate,
+          relatedDate: drag.relatedDate,
+          amountCents: drag.amountCents,
+          originalAmountCents: drag.originalAmountCents,
+          paymentDueCents: drag.paymentDueCents,
+          paymentBalanceCents: drag.paymentBalanceCents,
+          dueLabel: cardPaymentDueLabel(drag.label),
+        },
+        drag.amountCents,
+        toDate,
+      );
+      return;
+    }
+    // A plain planned override — move the row (delete old, write new).
+    await saveScheduledPayment(drag.cardId, toDate, drag.amountCents, undefined, {
+      cardId: drag.cardId,
+      date: drag.fromDate,
+    });
+  };
+
+  const handlePaymentDragStart = (ev: ProjectionEvent, iso: string) =>
+    setDragging(dragPaymentOf(ev, iso));
+  const handlePaymentDragEnd = () => {
+    setDragging(null);
+    setDragOver(null);
+  };
+  const handleDayDragOver = (iso: string) => {
+    if (!dragging) return;
+    const valid =
+      iso !== dragging.fromDate &&
+      cardPaymentMoveError(
+        {
+          fromDate: dragging.fromDate,
+          isPaydown: dragging.isPaydown,
+          paymentDueCents: dragging.paymentDueCents,
+          relatedDate: dragging.relatedDate,
+        },
+        iso,
+        today,
+      ) === null;
+    setDragOver((prev) =>
+      prev && prev.date === iso && prev.valid === valid ? prev : { date: iso, valid },
+    );
+  };
+  const handleDayDrop = (iso: string) => {
+    const drag = dragging;
+    setDragging(null);
+    setDragOver(null);
+    if (drag) void moveCardPaymentTo(drag, iso);
+  };
+
+  // Shared drag-and-drop wiring for both the month and paycheck DayCell grids.
+  const dragProps = {
+    canDrag: canDragPayment,
+    onPaymentDragStart: handlePaymentDragStart,
+    onPaymentDragEnd: handlePaymentDragEnd,
+    onDayDragOver: handleDayDragOver,
+    onDayDrop: handleDayDrop,
+    dragActive: dragging !== null,
+    dragOverDate: dragOver?.date ?? null,
+    dragOverValid: dragOver?.valid ?? false,
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -724,6 +984,7 @@ export function CalendarClient({
                       maxChips={MAX_CHIPS_PER_DAY}
                       minHeightClass="min-h-[104px]"
                       onSelect={setSelectedDate}
+                      {...dragProps}
                     />
                   ) : (
                     <BlankCell key={`blank-${i}`} minHeightClass="min-h-[104px]" />
@@ -790,6 +1051,7 @@ export function CalendarClient({
                       maxChips={null}
                       minHeightClass="min-h-[150px]"
                       onSelect={setSelectedDate}
+                      {...dragProps}
                     />
                   ) : (
                     <BlankCell key={`blank-${i}`} minHeightClass="min-h-[150px]" />
@@ -957,6 +1219,20 @@ export function CalendarClient({
                                 <CreditCard className="mr-1 h-3.5 w-3.5" /> PROGRAM PAYMENT
                               </Button>
                             )
+                          ) : null}
+                          {isCardPayment &&
+                          !ev.isPaid &&
+                          !isPastDay &&
+                          isScheduledPayment(ev, selectedDate) ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              title="Delete scheduled payment"
+                              disabled={savingCardPayment}
+                              onClick={() => void deleteScheduledPaymentEvent(ev, selectedDate)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 text-[var(--red)]" />
+                            </Button>
                           ) : null}
                         </div>
                       </div>

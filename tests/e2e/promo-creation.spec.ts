@@ -16,6 +16,11 @@ test("create card -> add deferred-interest promo -> verify promo chunk in projec
 
   await expect(page.getByText("Promo Card").first()).toBeVisible();
 
+  // Open the card's detail page — statements, promos, and payment planning
+  // live there (the wallet list only shows the card face).
+  await page.getByRole("link", { name: /promo card/i }).first().click();
+  await expect(page.getByRole("heading", { name: /promo card/i })).toBeVisible();
+
   // ── add a deferred-interest promo ─────────────────────────────────────
   // The promo action is the add button in the card's promo section.
   await page.getByRole("button", { name: /^add$/i }).first().click();
