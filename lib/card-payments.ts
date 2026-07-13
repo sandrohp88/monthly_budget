@@ -179,10 +179,12 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   // posted payments shrink the live balance and statement paid amounts — so
   // a stale plan must not keep discounting the due date forever.
   const paydownRemainingByKey = new Map<string, number>();
+  const paydownCardByKey = new Map<string, string>();
   for (const p of paydowns) {
     if (p.date < today || p.amountCents <= 0) continue;
     const key = overrideKey(p.cardId, p.targetDate);
     paydownRemainingByKey.set(key, (paydownRemainingByKey.get(key) ?? 0) + p.amountCents);
+    paydownCardByKey.set(key, p.cardId);
   }
   // Several generators can land on the same (card, dueDate) — e.g. an
   // open-cycle estimate plus a promo chunk. Consuming from a shared remaining
@@ -387,25 +389,82 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       }
     }
   }
-  const promoExtras: OneTimeExpense[] = [];
+  // Pass A: reduce each promo chunk by any paydown targeting its OWN due date.
+  type PromoRow = {
+    cardId: string;
+    cardName: string;
+    dueDate: string;
+    /** Cash still owed after target-date paydown consumption (mutable). */
+    amountCents: number;
+    /** Original aggregate chunk before any paydown (for originalAmountCents). */
+    chunkCents: number;
+    /** Planning "due" figure (mutable, tracks amountCents down). */
+    dueCents: number;
+    balanceCents: number;
+    descriptions: string[];
+    relatedDate?: string;
+  };
+  const promoRows: PromoRow[] = [];
   for (const chunk of promoChunksByCardDate.values()) {
     const override = cardOverridesByCard.get(chunk.cardId)?.get(chunk.dueDate);
     appliedCardOverrideKeys.add(overrideKey(chunk.cardId, chunk.dueDate));
     const baseCents = override?.amountCents ?? chunk.amountCents;
     const consumed = consumePaydown(chunk.cardId, chunk.dueDate, baseCents);
-    const amountCents = baseCents - consumed;
-    if (amountCents <= 0) continue;
-    const descLabel = chunk.descriptions.join(", ");
-    promoExtras.push({
-      date: chunk.dueDate,
-      description: `${chunk.cardName} promo (${descLabel})`,
-      amountCents,
-      sourceId: chunk.cardId,
-      sourceType: "creditCardPayment",
-      originalAmountCents: chunk.amountCents,
+    promoRows.push({
+      cardId: chunk.cardId,
+      cardName: chunk.cardName,
+      dueDate: chunk.dueDate,
+      amountCents: baseCents - consumed,
+      chunkCents: chunk.amountCents,
+      dueCents: Math.max(0, chunk.amountCents - consumed),
+      balanceCents: chunk.balanceCents,
+      descriptions: chunk.descriptions,
       relatedDate: movedFromDate(override?.notes),
-      paymentDueCents: Math.max(0, chunk.amountCents - consumed),
-      paymentBalanceCents: chunk.balanceCents,
+    });
+  }
+  // Pass B: a paydown planned LARGER than its target date's charge leaves an
+  // unspent remainder. That remainder is real planned cash toward the card, so
+  // credit it against the card's OTHER promo chunks (soonest first) instead of
+  // letting it evaporate. Without this, an over-sized paydown debits its full
+  // amount AND the later promo chunks still project in full — charging more
+  // total cash than the (interest-free) promo balance actually owed. No-op when
+  // no paydown exceeds its target (the common case), so lone-card / golden
+  // projections stay byte-identical.
+  const promoPrepayByCard = new Map<string, number>();
+  for (const [key, remaining] of paydownRemainingByKey) {
+    if (remaining <= 0) continue;
+    const cardId = paydownCardByKey.get(key);
+    if (cardId) promoPrepayByCard.set(cardId, (promoPrepayByCard.get(cardId) ?? 0) + remaining);
+  }
+  if (promoPrepayByCard.size > 0) {
+    const soonestFirst = [...promoRows].sort((a, b) =>
+      a.cardId === b.cardId
+        ? a.dueDate.localeCompare(b.dueDate)
+        : a.cardId.localeCompare(b.cardId),
+    );
+    for (const row of soonestFirst) {
+      const pool = promoPrepayByCard.get(row.cardId) ?? 0;
+      if (pool <= 0 || row.amountCents <= 0) continue;
+      const credit = Math.min(pool, row.amountCents);
+      row.amountCents -= credit;
+      row.dueCents = Math.max(0, row.dueCents - credit);
+      promoPrepayByCard.set(row.cardId, pool - credit);
+    }
+  }
+  const promoExtras: OneTimeExpense[] = [];
+  for (const row of promoRows) {
+    if (row.amountCents <= 0) continue;
+    const descLabel = row.descriptions.join(", ");
+    promoExtras.push({
+      date: row.dueDate,
+      description: `${row.cardName} promo (${descLabel})`,
+      amountCents: row.amountCents,
+      sourceId: row.cardId,
+      sourceType: "creditCardPayment",
+      originalAmountCents: row.chunkCents,
+      relatedDate: row.relatedDate,
+      paymentDueCents: row.dueCents,
+      paymentBalanceCents: row.balanceCents,
     });
   }
 

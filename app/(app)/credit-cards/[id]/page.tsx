@@ -4,6 +4,7 @@ import {
   getCreditCard,
   listAllPromoPayments,
   listBills,
+  listCreditCardPaymentOverridesForUser,
   listExtras,
   listPlaidAccounts,
   listPlaidItems,
@@ -12,6 +13,7 @@ import {
   listVariableBills,
 } from "@/lib/repos";
 import { estimateCurrentCycle } from "@/lib/credit-cards";
+import { paydownTargetDate } from "@/lib/card-payments";
 import { todayIso } from "@/lib/dates";
 import { projectVariableBillCardCharges } from "@/lib/variable-bills";
 import { CardDetailClient } from "./card-detail-client";
@@ -31,17 +33,27 @@ export default async function CreditCardDetailPage({
   const card = await getCreditCard(userId, id);
   if (!card) notFound();
 
-  const [statements, promos, allBills, allExtras, allPromoPayments, variableBills, accounts, items] =
-    await Promise.all([
-      listStatements(card.id),
-      listPromosForCard(userId, card.id, true),
-      listBills(userId, false), // active only — archived bills don't predict charges
-      listExtras(userId),
-      listAllPromoPayments(userId),
-      listVariableBills(userId, false),
-      listPlaidAccounts(userId),
-      listPlaidItems(userId),
-    ]);
+  const [
+    statements,
+    promos,
+    allBills,
+    allExtras,
+    allPromoPayments,
+    variableBills,
+    accounts,
+    items,
+    paymentOverrides,
+  ] = await Promise.all([
+    listStatements(card.id),
+    listPromosForCard(userId, card.id, true),
+    listBills(userId, false), // active only — archived bills don't predict charges
+    listExtras(userId),
+    listAllPromoPayments(userId),
+    listVariableBills(userId, false),
+    listPlaidAccounts(userId),
+    listPlaidItems(userId),
+    listCreditCardPaymentOverridesForUser(userId),
+  ]);
 
   const paymentsByPromoId: Record<
     string,
@@ -56,6 +68,18 @@ export default async function CreditCardDetailPage({
   }
 
   const today = todayIso();
+
+  // Calendar-scheduled paydowns (`pays-down:`) on this card that still lie
+  // ahead. Once applied to the card they credit the promo balance (see
+  // lib/card-payments.ts), so the promo planner surfaces them to explain why a
+  // promo schedule can be fully or partly covered before it reaches the calendar.
+  const scheduledCardPayments = paymentOverrides
+    .filter(
+      (o) => o.cardId === card.id && o.dueDate >= today && paydownTargetDate(o.notes) != null,
+    )
+    .map((o) => ({ date: o.dueDate, amountCents: o.amountCents }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
   const linkedBills = allBills.filter((b) => b.paidViaCardId === card.id);
   const linkedExtras = allExtras.filter((e) => e.paidViaCardId === card.id);
   const linkedVariableBills = variableBills.filter((bill) => bill.cardIds.includes(card.id));
@@ -98,6 +122,7 @@ export default async function CreditCardDetailPage({
       estimate={estimate}
       linkedBillCount={linkedBills.length + linkedExtras.length + linkedVariableBills.length}
       paymentsByPromoId={paymentsByPromoId}
+      scheduledCardPayments={scheduledCardPayments}
       mask={account?.mask ?? null}
       institution={institution}
       accountBalanceCents={account?.balanceCents ?? null}

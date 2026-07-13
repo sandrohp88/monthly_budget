@@ -6,6 +6,7 @@ import {
 } from "./card-payments";
 import type {
   CreditCardPaymentOverrideRow,
+  CreditCardPromoPaymentRow,
   CreditCardPromoRow,
   CreditCardRow,
 } from "./db/schema";
@@ -438,5 +439,65 @@ describe("cardPaymentMoveError", () => {
         today,
       ),
     ).toBeNull();
+  });
+});
+
+describe("projectCardPayments — over-sized paydown credits the promo balance", () => {
+  const cardBase = card({ currentBalanceCents: null, dueDay: 10 });
+  const promo1 = promo({
+    id: "pr1",
+    description: "Promo1",
+    remainingAmountCents: 100_00,
+    startDate: "2026-01-01",
+    endDate: "2026-08-10",
+  });
+  const promo2 = promo({
+    id: "pr2",
+    description: "Promo2",
+    remainingAmountCents: 100_00,
+    startDate: "2026-01-01",
+    endDate: "2026-08-10",
+  });
+  // Manual schedules pin each promo's chunk to a specific due date.
+  const promoPayments: CreditCardPromoPaymentRow[] = [
+    { id: "ppa", userId: "u1", promoId: "pr1", dueDate: "2026-06-10", amountCents: 100_00, note: null, createdAt: 0, updatedAt: 0 },
+    { id: "ppb", userId: "u1", promoId: "pr2", dueDate: "2026-07-10", amountCents: 100_00, note: null, createdAt: 0, updatedAt: 0 },
+  ];
+  const base = {
+    ...EMPTY,
+    today: "2026-05-04",
+    activeCards: [cardBase],
+    promos: [promo1, promo2],
+    promoPayments,
+  };
+
+  it("credits an over-sized paydown's excess to later promo chunks (total <= balance)", () => {
+    const r = projectCardPayments({
+      ...base,
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-06-01", amountCents: 150_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    const pp = r.extras.filter((e) => e.sourceId === "c1");
+    // The paydown still debits its own day in full…
+    expect(pp.find((e) => e.date === "2026-06-01")?.amountCents).toBe(150_00);
+    // …the target-date promo chunk is fully covered (gone)…
+    expect(pp.some((e) => e.date === "2026-06-10")).toBe(false);
+    // …and the 50_00 excess reduces the next promo chunk from 100 to 50.
+    expect(pp.find((e) => e.date === "2026-07-10")?.amountCents).toBe(50_00);
+    // Total card cash equals the promo balance (200_00) — never more.
+    expect(pp.reduce((s, e) => s + e.amountCents, 0)).toBe(200_00);
+  });
+
+  it("leaves later promo chunks untouched when the paydown fits its target", () => {
+    const r = projectCardPayments({
+      ...base,
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-06-01", amountCents: 40_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    const pp = r.extras.filter((e) => e.sourceId === "c1");
+    expect(pp.find((e) => e.date === "2026-06-10")?.amountCents).toBe(60_00);
+    expect(pp.find((e) => e.date === "2026-07-10")?.amountCents).toBe(100_00);
   });
 });

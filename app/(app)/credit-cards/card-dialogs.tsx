@@ -959,12 +959,15 @@ export function PromoScheduleSheet({
   card,
   promo,
   initialPayments,
+  scheduledCardPaymentCents = 0,
   onClose,
   onSaved,
 }: {
   card: CreditCardRow;
   promo: CreditCardPromoRow;
   initialPayments: PromoScheduledPayment[];
+  /** Pending calendar paydowns on this card that already credit the promo balance. */
+  scheduledCardPaymentCents?: number;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1188,6 +1191,18 @@ export function PromoScheduleSheet({
             leave unscheduled auto-spreads across future cycles (or lands on the
             deadline). Actual balances change only when reconciled.
           </div>
+
+          {scheduledCardPaymentCents > 0 ? (
+            <div className="rounded-sm border border-[var(--cyan)]/40 bg-[var(--cyan)]/5 p-3 text-[11px] leading-relaxed text-[var(--text-2)]">
+              This card already has{" "}
+              <span className="font-semibold tabular text-[var(--text-0)]">
+                <Money cents={scheduledCardPaymentCents} />
+              </span>{" "}
+              of card payments scheduled on the calendar, and those are applied to its promo
+              balance. Payments you plan here may be covered by them and won&apos;t appear
+              separately on the calendar.
+            </div>
+          ) : null}
 
           {/* Quick add — schedule a single payment; amount defaults to what's
               left so previous payments are never double-counted. */}
