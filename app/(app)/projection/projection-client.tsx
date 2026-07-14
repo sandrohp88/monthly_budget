@@ -40,6 +40,7 @@ import {
   buildProjectionInsights,
   type ProjectionInsights,
 } from "@/lib/projection-insights";
+import { buildLedgerSummary } from "@/lib/projection-ledger";
 import { addDaysIso, startOfMonthIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 import { balanceToneClass } from "@/lib/balance-tone";
@@ -132,19 +133,6 @@ type PromoPaymentSummary = {
   monthlyPaymentCents: number | null;
 };
 
-type LedgerSummary = {
-  openingBalanceCents: number;
-  closingBalanceCents: number;
-  netDeltaCents: number;
-  totalIncomeCents: number;
-  totalExpenseCents: number;
-  eventCount: number;
-  cardEventCount: number;
-  negativeDayCount: number;
-  lowPoint: ProjectionRow | null;
-  nextEvent: ProjectionRow | null;
-};
-
 type SoftPillTone = "neutral" | "income" | "danger" | "warning";
 
 function hasPaycheck(row: ProjectionRow): boolean {
@@ -198,41 +186,6 @@ function buildLedgerSections(rows: ProjectionRow[]): LedgerSection[] {
 
   if (current.rows.length > 0) sections.push(current);
   return sections;
-}
-
-function buildLedgerSummary(
-  windowRows: ProjectionRow[],
-  eventRows: ProjectionRow[],
-  today: string,
-): LedgerSummary {
-  const firstRow = windowRows[0] ?? null;
-  const lastRow = windowRows[windowRows.length - 1] ?? null;
-  const openingBalanceCents = firstRow
-    ? firstRow.balanceCents - firstRow.incomeCents + firstRow.expenseCents
-    : 0;
-  const closingBalanceCents = lastRow?.balanceCents ?? openingBalanceCents;
-  const lowPoint =
-    windowRows.length === 0
-      ? null
-      : windowRows.reduce((lowest, row) => (row.balanceCents < lowest.balanceCents ? row : lowest));
-  const nextEvent = eventRows.find((row) => row.date >= today) ?? eventRows[0] ?? null;
-
-  return {
-    openingBalanceCents,
-    closingBalanceCents,
-    netDeltaCents: closingBalanceCents - openingBalanceCents,
-    totalIncomeCents: windowRows.reduce((total, row) => total + row.incomeCents, 0),
-    totalExpenseCents: windowRows.reduce((total, row) => total + row.expenseCents, 0),
-    eventCount: eventRows.reduce((total, row) => total + row.events.length, 0),
-    cardEventCount: eventRows.reduce(
-      (total, row) =>
-        total + row.events.filter((event) => event.sourceType === "creditCardPayment").length,
-      0,
-    ),
-    negativeDayCount: windowRows.filter((row) => row.balanceCents < 0).length,
-    lowPoint,
-    nextEvent,
-  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
