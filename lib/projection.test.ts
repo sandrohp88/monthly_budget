@@ -117,6 +117,43 @@ describe("projection engine", () => {
     ]);
   });
 
+  it("does not re-add an early-posted paycheck as future income", () => {
+    // Payroll posted two days ahead of the scheduled payday: the deposit is
+    // already inside the linked live balance (settled=true) even though payDate
+    // is still in the future. Keying settlement on payDate alone would add it
+    // again as phantom income; the deposit signal must win.
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2026-05-01",
+      endDate: "2026-05-06",
+      startingBalanceCents: 500_00,
+      paychecks: [
+        {
+          payDate: "2026-05-05",
+          amountCents: 2000_00,
+          note: "Payroll",
+          // Live balance already reflects the early deposit; pivot is today+1.
+          settledBeforeDate: "2026-05-02",
+          settled: true,
+          showSettledBeforeDate: true,
+        },
+      ],
+    });
+
+    const payDay = rows.find((r) => r.date === "2026-05-05")!;
+    expect(payDay.incomeCents).toBe(0);
+    expect(payDay.balanceCents).toBe(500_00); // unchanged — cash already landed
+    expect(payDay.events).toEqual([
+      expect.objectContaining({
+        kind: "paycheck",
+        label: "Payroll",
+        amountCents: 0,
+        originalAmountCents: 2000_00,
+        isPaid: true,
+      }),
+    ]);
+  });
+
   it("routes a negative-amount extra (refund) to the income column", () => {
     // Plaid uses positive=debit, negative=credit. A refund therefore lands in
     // the extras stream with a negative amountCents. The projection must add

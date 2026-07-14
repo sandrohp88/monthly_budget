@@ -25,6 +25,15 @@ export type Paycheck = {
   settledBeforeDate?: string;
   /** Show settled past occurrences as paid rows instead of hiding them. */
   showSettledBeforeDate?: boolean;
+  /**
+   * The real deposit for this paycheck has already posted to the balance the
+   * projection starts from (the linked live balance). When true the occurrence
+   * is treated as settled REGARDLESS of scheduled payDate — the only signal
+   * that survives payroll landing a day or two off schedule. Without it, an
+   * early deposit that already sits in the live balance while its payDate is
+   * still in the future gets re-added here as phantom future income.
+   */
+  settled?: boolean;
 };
 
 export type Bill = {
@@ -233,7 +242,13 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
 
   for (const p of input.paychecks) {
     const label = p.note?.trim() ? p.note.trim() : "Paycheck";
-    if (p.settledBeforeDate && p.payDate < p.settledBeforeDate) {
+    // Settled = already inside the balance we started from — either because the
+    // scheduled date precedes the settle pivot, OR because the real deposit has
+    // already posted (`settled`). The deposit signal is what handles payroll
+    // posting early/late: an early deposit is in the live balance while payDate
+    // is still ahead, so keying on payDate alone would double-count it.
+    const isSettled = p.settled || (p.settledBeforeDate != null && p.payDate < p.settledBeforeDate);
+    if (isSettled) {
       if (!p.showSettledBeforeDate) continue;
       addEvent(p.payDate, {
         kind: "paycheck",
