@@ -1411,8 +1411,9 @@ function PaymentAdjustmentDialog({
               disabled={saving}
             />
             {exceedsBalance ? (
-              <div className="text-[10px] tracking-[0.12em] text-[var(--red)] uppercase">
-                Planned payment exceeds the displayed card balance.
+              <div className="text-[10px] tracking-[0.12em] text-[var(--amber)] uppercase">
+                Exceeds the displayed card balance — OK if recent transactions haven&apos;t posted
+                yet.
               </div>
             ) : null}
             {adjustment.targetType === "creditCardPayment" ? (
@@ -1497,7 +1498,7 @@ function PaymentAdjustmentDialog({
               <Button
                 type="submit"
                 variant="primary"
-                disabled={saving || amountCents < 0 || !plannedDate || exceedsBalance}
+                disabled={saving || amountCents < 0 || !plannedDate}
               >
                 {saving ? "SAVING..." : "SAVE PLAN"}
               </Button>

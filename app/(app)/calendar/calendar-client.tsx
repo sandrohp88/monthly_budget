@@ -1482,8 +1482,12 @@ function CardPaymentPlanDialog({
             </div>
           ) : null}
           {exceedsBalance ? (
-            <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--red)]">
-              Programmed payment exceeds the displayed card balance.
+            <div className="flex gap-2 border border-[var(--amber)]/50 bg-[var(--amber)]/10 p-3 text-[11px] text-[var(--amber)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                Programmed payment exceeds the displayed card balance — that&apos;s fine if
+                you&apos;re covering transactions that haven&apos;t posted yet.
+              </span>
             </div>
           ) : null}
 
@@ -1511,14 +1515,7 @@ function CardPaymentPlanDialog({
             <Button
               type="submit"
               variant="primary"
-              disabled={
-                saving ||
-                amountCents <= 0 ||
-                !plannedDate ||
-                afterDueDate ||
-                beforeToday ||
-                exceedsBalance
-              }
+              disabled={saving || amountCents <= 0 || !plannedDate || afterDueDate || beforeToday}
             >
               {saving ? "SAVING…" : "SAVE PAYMENT PLAN"}
             </Button>
@@ -1699,8 +1696,12 @@ function ScheduleCardPaymentDialog({
             </div>
           ) : null}
           {exceedsBalance ? (
-            <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--red)]">
-              Scheduled payment exceeds the displayed card balance.
+            <div className="flex gap-2 border border-[var(--amber)]/50 bg-[var(--amber)]/10 p-3 text-[11px] text-[var(--amber)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                Scheduled payment exceeds the displayed card balance — that&apos;s fine if
+                you&apos;re covering transactions that haven&apos;t posted yet.
+              </span>
             </div>
           ) : null}
 
