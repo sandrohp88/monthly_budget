@@ -429,6 +429,95 @@ function DayCell({
   );
 }
 
+/**
+ * One event-day line in the compact 3-month agenda. `band` alternates per
+ * paycheck cycle so the days one paycheck covers read as a block; the left
+ * rail doubles the tint signal for low-contrast themes.
+ */
+function CompactDayRow({
+  iso,
+  row,
+  today,
+  band,
+  onSelect,
+}: {
+  iso: string;
+  row: ProjectionRow;
+  today: string;
+  band: boolean;
+  onSelect: (iso: string) => void;
+}) {
+  const isToday = iso === today;
+  const isPast = iso < today;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(iso)}
+      className={cn(
+        "flex w-full cursor-pointer items-start gap-2.5 border-l-[3px] px-3 py-2 text-left transition-colors",
+        band ? "border-l-[var(--mint)]" : "border-l-[var(--border-2)]",
+        isToday
+          ? "bg-[var(--mint-glow)]"
+          : band
+            ? "bg-[color-mix(in_oklch,var(--mint)_11%,transparent)]"
+            : "bg-[var(--bg-1)]",
+        "hover:bg-[var(--bg-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--mint-dim)]",
+        isPast && !isToday ? "opacity-60" : "",
+      )}
+    >
+      <div className="w-9 shrink-0 pt-0.5 text-center">
+        <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--text-3)]">
+          {WEEKDAYS[weekdayOfIso(iso)]}
+        </div>
+        <div
+          className={cn(
+            "tabular text-[15px] font-semibold leading-tight",
+            isToday ? "text-[var(--mint)]" : "text-[var(--text-1)]",
+          )}
+        >
+          {Number(iso.slice(8, 10))}
+        </div>
+      </div>
+      <div className="min-w-0 flex-1 space-y-1">
+        {row.events.map((ev, j) => {
+          const tone = toneOf(ev, isPast);
+          const credit = isCredit(ev);
+          const onCard = Boolean(ev.chargedToCardName);
+          const cardDue = ev.sourceType === "creditCardPayment" && (ev.paymentDueCents ?? 0) > 0;
+          return (
+            <div
+              key={`${iso}-${j}`}
+              className={cn(
+                "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-[10px] leading-tight",
+                TONE_CLASSES[tone],
+              )}
+              title={onCard ? `Charged to ${ev.chargedToCardName}` : undefined}
+            >
+              <span className="min-w-0 truncate">
+                {cardDue ? `CARD DUE · ${ev.label}` : ev.label}
+              </span>
+              <span className="tabular shrink-0">
+                {onCard ? "" : credit ? "+" : "−"}
+                <Money cents={displayCents(ev)} />
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <span
+        className={cn(
+          "tabular mt-0.5 shrink-0 rounded-[2px] px-1 text-[10px] font-semibold",
+          balanceToneClass(row.balanceCents),
+          balanceSurfaceClass(row.balanceCents),
+        )}
+        title="Balance left after this day"
+      >
+        <Money cents={row.balanceCents} />
+      </span>
+    </button>
+  );
+}
+
 /** A labeled figure in the paycheck-cycle summary strip. */
 function CycleSummaryTile({
   label,
@@ -478,7 +567,7 @@ export function CalendarClient({
   overrides: ReadonlyArray<{ cardId: string; dueDate: string }>;
 }) {
   const router = useRouter();
-  const [view, setView] = React.useState<"month" | "paycheck">("month");
+  const [view, setView] = React.useState<"month" | "paycheck" | "compact">("month");
   const [year, setYear] = React.useState(() => Number(today.slice(0, 4)));
   const [month, setMonth] = React.useState(() => Number(today.slice(5, 7)));
   // null = follow the cycle that contains today; a number pins a chosen cycle.
@@ -653,8 +742,54 @@ export function CalendarClient({
     return arr;
   }, [activeCycle]);
 
-  const sumIncome = view === "month" ? monthIncome : cycleIncome;
-  const sumExpense = view === "month" ? monthExpense : cycleExpense;
+  // ---- Compact 3-month view ------------------------------------------------
+  // An agenda spanning three months from the selected month that lists only
+  // days with events. Rows are banded by paycheck cycle (alternating tint +
+  // left rail) so "which paycheck covers this?" reads at a glance.
+  const compactMonths = React.useMemo(
+    () =>
+      Array.from({ length: 3 }, (_, i) => {
+        const total = year * 12 + (month - 1) + i;
+        const y = Math.floor(total / 12);
+        const m = ((total % 12) + 12) % 12 + 1;
+        const prefix = `${y}-${String(m).padStart(2, "0")}`;
+        const monthRows = rows.filter((r) => r.date.startsWith(prefix));
+        return {
+          year: y,
+          month: m,
+          prefix,
+          eventRows: monthRows.filter((r) => r.events.length > 0),
+          incomeCents: monthRows.reduce((s, r) => s + r.incomeCents, 0),
+          expenseCents: monthRows.reduce((s, r) => s + r.expenseCents, 0),
+        };
+      }),
+    [rows, year, month],
+  );
+  const compactIncome = compactMonths.reduce((s, m) => s + m.incomeCents, 0);
+  const compactExpense = compactMonths.reduce((s, m) => s + m.expenseCents, 0);
+  const compactEmpty = compactMonths.every((m) => m.eventRows.length === 0);
+  // Last month of the 3-month window, for the "JUL – SEP 2026" title.
+  const compactEndTotal = year * 12 + (month - 1) + 2;
+  const compactEndYear = Math.floor(compactEndTotal / 12);
+  const compactEndMonth = ((compactEndTotal % 12) + 12) % 12 + 1;
+  // Index of the pay cycle containing `iso` (-1 before the first payday) —
+  // its parity drives the alternating cycle band.
+  const cycleIndexOf = React.useCallback(
+    (iso: string): number => {
+      let idx = -1;
+      for (const [i, payday] of paydays.entries()) {
+        if (payday > iso) break;
+        idx = i;
+      }
+      return idx;
+    },
+    [paydays],
+  );
+
+  const sumIncome =
+    view === "month" ? monthIncome : view === "compact" ? compactIncome : cycleIncome;
+  const sumExpense =
+    view === "month" ? monthExpense : view === "compact" ? compactExpense : cycleExpense;
 
   const createBill = async (values: BillFormValues) => {
     setSubmitting(true);
@@ -922,18 +1057,19 @@ export function CalendarClient({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex overflow-hidden border border-[var(--border-raw)]">
-            {(["month", "paycheck"] as const).map((v) => (
+          <div className="inline-flex gap-0.5 rounded-full border border-[var(--border-raw)] bg-[var(--bg-1)] p-0.5 shadow-[var(--shadow-sm)]">
+            {(["month", "paycheck", "compact"] as const).map((v) => (
               <button
                 key={v}
                 type="button"
                 onClick={() => setView(v)}
                 aria-pressed={view === v}
                 className={cn(
-                  "px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-colors",
+                  "cursor-pointer rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--mint-dim)]",
                   view === v
-                    ? "bg-[var(--mint)] text-[var(--bg-0)]"
-                    : "bg-[var(--bg-1)] text-[var(--text-2)] hover:bg-[var(--bg-2)]",
+                    ? "bg-[var(--mint)] text-[var(--button-primary-fg)]"
+                    : "text-[var(--text-2)] hover:bg-[var(--bg-2)] hover:text-[var(--text-0)]",
                 )}
               >
                 {v}
@@ -943,16 +1079,16 @@ export function CalendarClient({
           <Button
             variant="outline"
             size="icon"
-            onClick={() => (view === "month" ? moveMonth(-1) : moveCycle(-1))}
-            aria-label={view === "month" ? "Previous month" : "Previous paycheck"}
+            onClick={() => (view === "paycheck" ? moveCycle(-1) : moveMonth(-1))}
+            aria-label={view === "paycheck" ? "Previous paycheck" : "Previous month"}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <Button
             variant="outline"
             size="icon"
-            onClick={() => (view === "month" ? moveMonth(1) : moveCycle(1))}
-            aria-label={view === "month" ? "Next month" : "Next paycheck"}
+            onClick={() => (view === "paycheck" ? moveCycle(1) : moveMonth(1))}
+            aria-label={view === "paycheck" ? "Next paycheck" : "Next month"}
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
@@ -962,6 +1098,16 @@ export function CalendarClient({
           {view === "month" ? (
             <div className="ml-2 text-[18px] font-bold tracking-[0.08em] text-[var(--text-0)]">
               {MONTH_NAMES[month - 1]} <span className="text-[var(--text-2)]">{year}</span>
+            </div>
+          ) : view === "compact" ? (
+            <div className="ml-2 text-[18px] font-bold tracking-[0.08em] text-[var(--text-0)]">
+              {MONTH_NAMES[month - 1]?.slice(0, 3)}
+              {year !== compactEndYear ? (
+                <span className="text-[var(--text-2)]"> {year}</span>
+              ) : null}
+              <span className="text-[var(--text-3)]"> – </span>
+              {MONTH_NAMES[compactEndMonth - 1]?.slice(0, 3)}{" "}
+              <span className="text-[var(--text-2)]">{compactEndYear}</span>
             </div>
           ) : activeCycle ? (
             <div className="ml-2 flex items-center gap-2 text-[16px] font-bold tracking-[0.02em] text-[var(--text-0)]">
@@ -1028,6 +1174,60 @@ export function CalendarClient({
               </div>
             </div>
           </Card>
+        </>
+      ) : view === "compact" ? (
+        <>
+          {compactEmpty ? (
+            <p className="text-[12px] text-[var(--text-3)]">
+              No scheduled events in these three months — the projection window runs{" "}
+              <DateLabel iso={startDate} format="short" /> –{" "}
+              <DateLabel iso={endDate} format="short" />. Use the month view to add a bill or plan
+              a card payment on an empty day.
+            </p>
+          ) : null}
+
+          <div className="grid items-start gap-4 lg:grid-cols-3">
+            {compactMonths.map((m) => (
+              <Card key={m.prefix} className="overflow-hidden p-0">
+                <div className="flex items-center justify-between gap-3 border-b border-[var(--border-raw)] bg-[var(--bg-2)] px-4 py-2.5">
+                  <span className="text-[12px] font-bold tracking-[0.1em] text-[var(--text-0)]">
+                    {MONTH_NAMES[m.month - 1]} <span className="text-[var(--text-3)]">{m.year}</span>
+                  </span>
+                  <span
+                    className={cn(
+                      "tabular text-[11px] font-semibold",
+                      m.incomeCents - m.expenseCents >= 0
+                        ? "text-[var(--mint)]"
+                        : "text-[var(--red)]",
+                    )}
+                  >
+                    NET <Money cents={m.incomeCents - m.expenseCents} />
+                  </span>
+                </div>
+                {m.eventRows.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-[11px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                    No scheduled events
+                  </p>
+                ) : (
+                  <div className="divide-y divide-[var(--border-raw)]/60">
+                    {m.eventRows.map((r) => {
+                      const cycle = cycleIndexOf(r.date);
+                      return (
+                        <CompactDayRow
+                          key={r.date}
+                          iso={r.date}
+                          row={r}
+                          today={today}
+                          band={cycle >= 0 && cycle % 2 === 0}
+                          onSelect={setSelectedDate}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
         </>
       ) : activeCycle ? (
         <>
@@ -1111,6 +1311,21 @@ export function CalendarClient({
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.settled)}>PAID / SETTLED</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.posted)}>POSTED (HISTORY)</span>
       </div>
+
+      {view === "compact" ? (
+        <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-[var(--text-3)]">
+          <span className="text-[var(--text-2)]">PAYCHECK CYCLES:</span>
+          <span className="inline-flex overflow-hidden rounded-[2px] border border-[var(--border-raw)]">
+            <span className="border-l-[3px] border-[var(--border-2)] bg-[var(--bg-1)] px-1.5 py-0.5">
+              CYCLE
+            </span>
+            <span className="border-l-[3px] border-[var(--mint)] bg-[color-mix(in_oklch,var(--mint)_11%,var(--bg-1))] px-1.5 py-0.5">
+              NEXT CYCLE
+            </span>
+          </span>
+          <span>TINT SWITCHES AT EACH PAYDAY</span>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-[var(--text-3)]">
         <span className="text-[var(--text-2)]">BALANCE LEFT AFTER DAY:</span>
