@@ -310,13 +310,26 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     endDate,
     paychecks: paychecks
       .filter((p) => onOrAfterStart(p.payDate))
-      .map((p) => ({
-        payDate: p.payDate,
-        amountCents: p.actualReceived && p.actualAmountCents != null ? p.actualAmountCents : p.amountCents,
-        note: p.note,
-        settledBeforeDate: settleBefore,
-        showSettledBeforeDate: lookback,
-      })),
+      .map((p) => {
+        // In linked mode the live balance already reflects any deposit that has
+        // actually posted, so a paycheck settled by a real deposit must not be
+        // re-added as future income even when its scheduled payDate is still
+        // ahead (payroll posts early before a weekend/holiday). settledByDraftId
+        // — not the manual actualReceived toggle — is the deposit-backed signal
+        // that the cash is truly in the live balance.
+        const depositPosted = linked && p.settledByDraftId != null;
+        return {
+          payDate: p.payDate,
+          amountCents:
+            p.actualReceived && p.actualAmountCents != null ? p.actualAmountCents : p.amountCents,
+          note: p.note,
+          settledBeforeDate: settleBefore,
+          settled: depositPosted,
+          // Render the received occurrence as a paid marker (zero cash) instead
+          // of dropping it, so an early-posted paycheck still shows up.
+          showSettledBeforeDate: lookback || depositPosted,
+        };
+      }),
     bills: [
       ...cashBills.map((b) => ({
         id: b.id,

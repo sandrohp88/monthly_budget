@@ -43,8 +43,13 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
   const [submitting, setSubmitting] = React.useState(false);
 
   const today = todayIso();
-  const upcoming = items.filter((p) => p.payDate >= today);
-  const past = items.filter((p) => p.payDate < today);
+  // Split on RECEIPT, not the scheduled date. Payroll often posts a day or two
+  // ahead of payDate; such a paycheck is already reconciled (actualReceived)
+  // while its payDate is still in the future. Keying on payDate alone stranded
+  // it under "Upcoming" and hid it from the reconciliation ledger until its
+  // scheduled date finally passed.
+  const upcoming = items.filter((p) => p.payDate >= today && !p.actualReceived);
+  const reconciled = items.filter((p) => p.actualReceived || p.payDate < today);
   const nextPayday = upcoming[0];
 
   React.useEffect(() => {
@@ -159,7 +164,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
         />
         <Tile
           label="HISTORY"
-          value={past.length}
+          value={reconciled.length}
           delta="received"
         />
       </TileGrid>
@@ -268,7 +273,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
             </Card>
           ) : null}
 
-          {past.length > 0 ? (
+          {reconciled.length > 0 ? (
             <Card>
               <CardHeader>
                 <div>
@@ -288,7 +293,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {past.slice(-12).reverse().map((p) => {
+                  {reconciled.slice(-12).reverse().map((p) => {
                     const delta = (p.actualAmountCents ?? p.amountCents) - p.amountCents;
                     return (
                       <TableRow key={p.id}>
@@ -312,16 +317,22 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
                         </TableCell>
                         <TableCell className="text-[var(--text-2)]">{p.note ?? ""}</TableCell>
                         <TableCell>
-                          {p.actualReceived ? (
-                            <span className="inline-flex items-center gap-1.5">
-                              <StatusPill variant={delta === 0 ? "default" : "warn"}>RECEIVED</StatusPill>
-                              {p.settledByDraftId ? (
-                                <StatusPill variant="default">AUTO</StatusPill>
-                              ) : null}
-                            </span>
-                          ) : (
-                            <StatusPill variant="off">PENDING</StatusPill>
-                          )}
+                          <div className="flex items-center gap-2">
+                            <Switch
+                              checked={p.actualReceived}
+                              onCheckedChange={(v) => updateRow(p, { actualReceived: v })}
+                            />
+                            {p.actualReceived ? (
+                              <span className="inline-flex items-center gap-1.5">
+                                <StatusPill variant={delta === 0 ? "default" : "warn"}>RECEIVED</StatusPill>
+                                {p.settledByDraftId ? (
+                                  <StatusPill variant="default">AUTO</StatusPill>
+                                ) : null}
+                              </span>
+                            ) : (
+                              <StatusPill variant="off">PENDING</StatusPill>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
