@@ -88,7 +88,10 @@ export default async function DashboardPage() {
     m.ending = row.balanceCents;
   }
 
-  const worst = findWorstDay(rows);
+  // "Projected low" is a forward-looking warning — a dip that already happened
+  // (linked accounts replay a lookback window of past rows) isn't actionable,
+  // so only consider today onward.
+  const worst = findWorstDay(rows.filter((r) => r.date >= today));
   const worstIsRisk = worst && worst.balanceCents < 50000;
 
   // Balance vs projection delta: compare live Plaid balance to today's projected balance

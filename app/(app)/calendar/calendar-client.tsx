@@ -727,8 +727,13 @@ export function CalendarClient({
     return sum;
   }, [cycleRows]);
   const cycleEndBalance = cycleRows.at(-1)?.balanceCents;
-  const cycleLowBalance = cycleRows.length
-    ? Math.min(...cycleRows.map((r) => r.balanceCents))
+  // Lowest balance from today forward — a dip that already happened this cycle
+  // isn't actionable. If the whole cycle is in the past (navigated back to
+  // review history), fall back to its actual low.
+  const cycleLowRows = cycleRows.filter((r) => r.date >= today);
+  const cycleLowSource = cycleLowRows.length ? cycleLowRows : cycleRows;
+  const cycleLowBalance = cycleLowSource.length
+    ? Math.min(...cycleLowSource.map((r) => r.balanceCents))
     : undefined;
 
   const cycleCells = React.useMemo<Array<string | null>>(() => {
