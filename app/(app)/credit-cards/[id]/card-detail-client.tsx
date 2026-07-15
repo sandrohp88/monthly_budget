@@ -32,11 +32,11 @@ import {
   LinkedBillEstimate,
   currentStatementOf,
   daysBetween,
+  interestSavingCashDueCents,
   isStatementOpen,
   nextStatementDateOnOrAfter,
   paidWithoutInterest,
   promoMonthlyChunkAt,
-  statementCashDueCents,
   summarizeStatementBalances,
 } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
@@ -133,7 +133,12 @@ export function CardDetailClient({
   const promoLeftToCoverCents = Math.max(0, promoRemainingCents - scheduledCardPaymentCents);
 
   const openStatements = statements.filter(isStatementOpen);
-  const openDueCents = openStatements.reduce((s, x) => s + statementCashDueCents(x), 0);
+  // Cash needed to avoid interest — the Interest Saving Balance when the card
+  // has active 0% promos, the full statement cash due otherwise.
+  const openDueCents = openStatements.reduce(
+    (s, x) => s + interestSavingCashDueCents(x, activePromos),
+    0,
+  );
   const balanceCents =
     card.currentBalanceCents ??
     accountBalanceCents ??
@@ -145,7 +150,7 @@ export function CardDetailClient({
   const current = currentStatementOf(statements);
   const isOpen = current ? isStatementOpen(current) : false;
   const days = current ? daysBetween(today, current.dueDate) : null;
-  const safe = current ? paidWithoutInterest(current) : false;
+  const safe = current ? paidWithoutInterest(current, activePromos) : false;
 
   const summary = React.useMemo(
     () => summarizeStatementBalances(statements, today),
@@ -296,7 +301,7 @@ export function CardDetailClient({
                         : "text-[var(--amber)]",
                   )}
                 >
-                  <Money cents={statementCashDueCents(current)} />
+                  <Money cents={interestSavingCashDueCents(current, activePromos)} />
                 </div>
                 <div className="mt-1.5 text-[12px] text-[var(--text-2)]">
                   Closed <DateLabel iso={current.statementDate} format="short" /> · Due{" "}
@@ -377,7 +382,7 @@ export function CardDetailClient({
               )}
               {current && isOpen ? (
                 <ActualVsEstimate
-                  actualCents={statementCashDueCents(current)}
+                  actualCents={interestSavingCashDueCents(current, activePromos)}
                   estimatedCents={estimate.totalCents}
                 />
               ) : null}
@@ -444,7 +449,7 @@ export function CardDetailClient({
                   </thead>
                   <tbody>
                     {statements.map((s) => {
-                      const ok = paidWithoutInterest(s);
+                      const ok = paidWithoutInterest(s, activePromos);
                       return (
                         <tr
                           key={s.id}
@@ -678,6 +683,7 @@ export function CardDetailClient({
       {editStatement ? (
         <StatementEditDialog
           statement={editStatement}
+          promos={activePromos}
           onClose={() => setEditStatement(null)}
           onSaved={() => {
             setEditStatement(null);

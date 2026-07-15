@@ -791,6 +791,31 @@ The math is in `projectPromoSchedule()` and `promoMonthlyChunkAt()` (both in
 `lib/credit-cards.ts`); the projection wiring is in `lib/projection-server.ts`
 right after the open-cycle-estimate block.
 
+### Interest Saving Balance (the "due to avoid interest" number)
+For a card whose issuer statement balance **contains** outstanding 0%-promo
+principal (Chase-style Equal Pay/flex plans), the cash needed by the due date
+to avoid interest is NOT the full balance — it's
+
+```
+ISB = statementBalance − Σ active promo remaining + Σ plan payments billed this cycle
+```
+
+floored at the minimum payment (Chase's own rule) and capped at the full cash
+due. `interestSavingCashDueCents(statement, promos)` in `lib/credit-cards.ts`
+owns this; the due markers, dashboard/wallet/detail dues, `paidWithoutInterest`,
+`looksLikePaid`, and `settleStatementWithDraft` matching all run through it, so
+paying the ISB reads as "paid, no interest" and auto-reconciles.
+
+**The adjustment only fires when `statementBalance ≥ Σ promo remaining`** — the
+tell that the balance embeds the principal. PayPal-style statements (which bill
+only the cycle's cash while promo principal lives outside the statement) and
+stale unreconciled promo rows fail that check and fall back to the full cash
+due. Keep promo `remainingAmountCents` reconciled from the issuer's promo list
+(paste flow / manual edit) or the ISB will silently degrade to the full balance.
+The open-cycle estimate applies the same guard before subtracting
+`promoRemaining` so promo principal isn't subtracted twice (once inside the
+unpaid statement, once on its own).
+
 ### Authoritative promo balances
 Statement payments never decrement `remainingAmountCents`. PayPal controls
 payment allocation, and Plaid does not expose the amount applied to each

@@ -6,6 +6,7 @@ import {
   daysBetween,
   dueDateFromStatement,
   estimateCurrentCycle,
+  interestSavingCashDueCents,
   isStatementOpen,
   nextDayOfMonthOnOrAfter,
   nextStatementDateOnOrAfter,
@@ -588,6 +589,114 @@ describe("promoMonthlyChunkAt", () => {
 
   it("returns zero when remaining is zero", () => {
     expect(promoMonthlyChunkAt(promo({ remainingAmountCents: 0 }), "2026-05-01")).toBe(0);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// interestSavingCashDueCents — golden numbers from real Chase Prime Visa
+// statements (Equal Pay flexible financing), 2026. Chase's printed formula:
+// ISB = New Balance − Σ flex remaining + Σ plan payments this cycle,
+// floored at the minimum payment.
+// ────────────────────────────────────────────────────────────────────────────
+describe("interestSavingCashDueCents", () => {
+  // The four Equal Pay plans exactly as printed on the 07/10/26 statement.
+  const equalPayPlans = [
+    // remaining $73.37, expires 10/07/2026, no fixed payment (auto-spread → $24.46)
+    promo({ id: "ep1", remainingAmountCents: 73_37, endDate: "2026-10-07", monthlyPaymentCents: null }),
+    promo({ id: "ep2", remainingAmountCents: 123_23, endDate: "2026-11-07", monthlyPaymentCents: 30_82 }),
+    promo({ id: "ep3", remainingAmountCents: 89_09, endDate: "2026-12-07", monthlyPaymentCents: 17_82 }),
+    promo({ id: "ep4", remainingAmountCents: 210_32, endDate: "2027-01-07", monthlyPaymentCents: 35_06 }),
+  ];
+
+  it("reproduces the printed ISB on the 07/10/26 statement", () => {
+    // New Balance $1,220.11, flex remaining $496.01, plan payments $108.16
+    // → printed Interest Saving Balance $832.26.
+    const s = statement({
+      statementBalanceCents: 1220_11,
+      minimumPaymentCents: 143_16,
+      dueDate: "2026-08-07",
+    });
+    expect(interestSavingCashDueCents(s, equalPayPlans)).toBe(832_26);
+  });
+
+  it("reproduces the printed ISB on the 04/10/26 statement (single plan)", () => {
+    // New Balance $653.13, one fresh plan $146.75 expiring 10/07/26 → $530.84.
+    const s = statement({
+      statementBalanceCents: 653_13,
+      minimumPaymentCents: 59_46,
+      dueDate: "2026-05-07",
+    });
+    const plan = promo({
+      remainingAmountCents: 146_75,
+      endDate: "2026-10-07",
+      monthlyPaymentCents: null, // auto-spread May–Oct = 6 → ceil = $24.46
+    });
+    expect(interestSavingCashDueCents(s, [plan])).toBe(530_84);
+  });
+
+  it("is the plain cash due when there are no promos", () => {
+    const s = statement({ statementBalanceCents: 1220_11, dueDate: "2026-08-07" });
+    expect(interestSavingCashDueCents(s, [])).toBe(1220_11);
+  });
+
+  it("ignores inactive and zero-remaining promos", () => {
+    const s = statement({ statementBalanceCents: 1220_11, dueDate: "2026-08-07" });
+    expect(
+      interestSavingCashDueCents(s, [
+        promo({ isActive: false, remainingAmountCents: 500_00 }),
+        promo({ remainingAmountCents: 0 }),
+      ]),
+    ).toBe(1220_11);
+  });
+
+  it("keeps the PayPal shape: $0 balance falls back to the minimum payment", () => {
+    const s = statement({
+      statementBalanceCents: 0,
+      minimumPaymentCents: 35_00,
+      dueDate: "2026-08-07",
+    });
+    expect(interestSavingCashDueCents(s, equalPayPlans)).toBe(35_00);
+  });
+
+  it("does not adjust when promo remaining exceeds the balance (PayPal-style / stale promos)", () => {
+    // A statement that bills only the cycle's cash can't contain the promo
+    // principal — subtracting it would be wrong, so the raw due stands.
+    const s = statement({ statementBalanceCents: 125_00, dueDate: "2026-06-10" });
+    const big = promo({ remainingAmountCents: 1_000_00, monthlyPaymentCents: 125_00 });
+    expect(interestSavingCashDueCents(s, [big])).toBe(125_00);
+  });
+
+  it("floors at the minimum payment (the issuer's own ISB rule)", () => {
+    // Balance barely above the promo remaining → tiny ISB → min payment wins.
+    const s = statement({
+      statementBalanceCents: 210_00,
+      minimumPaymentCents: 40_00,
+      dueDate: "2026-08-07",
+    });
+    const plan = promo({ remainingAmountCents: 205_00, monthlyPaymentCents: 5_00, endDate: "2027-06-07" });
+    // raw ISB = 210.00 − 205.00 + 5.00 = 10.00 → floored to $40.00.
+    expect(interestSavingCashDueCents(s, [plan])).toBe(40_00);
+  });
+
+  it("an expired unreconciled promo keeps its full remaining inside the ISB", () => {
+    // Past endDate the chunk is the full remaining (it IS interest-exposed
+    // now), so the ISB equals the full balance again.
+    const s = statement({ statementBalanceCents: 500_00, dueDate: "2026-08-07" });
+    const expired = promo({ remainingAmountCents: 200_00, endDate: "2026-07-01" });
+    expect(interestSavingCashDueCents(s, [expired])).toBe(500_00);
+  });
+
+  it("paidWithoutInterest accepts an ISB payment when promos are supplied", () => {
+    const s = statement({
+      statementBalanceCents: 1220_11,
+      minimumPaymentCents: 143_16,
+      dueDate: "2026-08-07",
+      paidAmountCents: 832_26,
+      paidDate: "2026-08-05",
+    });
+    expect(paidWithoutInterest(s, equalPayPlans)).toBe(true);
+    // Without the promos the same payment reads as partial.
+    expect(paidWithoutInterest(s)).toBe(false);
   });
 });
 

@@ -597,6 +597,103 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
     expect(again.statementsReconciled).toBe(0);
   });
 
+  it("settles a statement from an Interest-Saving-Balance payment on a promo card", async () => {
+    // Real Chase 07/10/26 shape: New Balance $1,220.11, four Equal Pay plans
+    // totaling $496.01 remaining with $108.16 of plan payments billed this
+    // cycle → printed ISB $832.26. Paying the ISB avoids interest, so it must
+    // settle the statement even though it's far below the full balance.
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_56",
+      institutionName: "Chase",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: "old-cursor",
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_prime",
+      itemId: item.id,
+      userId: user.id,
+      name: "CREDIT CARD",
+      mask: "9873",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 1555_19,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Prime Visa ****9873",
+      statementDay: 10,
+      dueDay: 7,
+      autoPay: false,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_prime");
+    const today = todayIso();
+    const statement = await createStatement(card.id, {
+      statementDate: addDaysIso(today, -28),
+      dueDate: today,
+      statementBalanceCents: 1220_11,
+      minimumPaymentCents: 143_16,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    const plans: Array<[number, number, number]> = [
+      // [remaining, monthly plan payment, months until expiration]
+      [73_37, 24_46, 3],
+      [123_23, 30_82, 4],
+      [89_09, 17_82, 5],
+      [210_32, 35_06, 6],
+    ];
+    for (const [remaining, monthly, months] of plans) {
+      await createPromo(user.id, card.id, {
+        description: `Equal Pay (${monthly})`,
+        originalAmountCents: remaining,
+        remainingAmountCents: remaining,
+        startDate: addDaysIso(today, -60),
+        endDate: addMonthsClampedIso(today, months),
+        monthlyPaymentCents: monthly,
+        notes: null,
+        isActive: true,
+      });
+    }
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "cursor-isb",
+        has_more: false,
+        accounts: [],
+        added: [
+          {
+            transaction_id: "pay_isb",
+            account_id: "acct_prime",
+            date: today,
+            name: "Payment Thank You - Web",
+            amount: -832.26,
+            pending: false,
+            personal_finance_category: { primary: "LOAN_DISBURSEMENTS", detailed: "" },
+          },
+        ],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.statementsReconciled).toBe(1);
+
+    const settled = (await listStatements(card.id)).find((s) => s.id === statement.id)!;
+    expect(settled.paidAmountCents).toBe(832_26);
+    expect(settled.paidDate).toBe(today);
+    expect(settled.settledByDraftId).toBe("pay_isb");
+  });
+
   it("does not backfill-settle a partial payment on a revolving card", async () => {
     // ****9873 reality: a $219 payment against a $505 statement is partial —
     // it must NOT clear the statement (the balance is still owed).

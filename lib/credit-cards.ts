@@ -157,11 +157,68 @@ export function statementCashDueCents(s: CreditCardStatementRow): number {
   return s.statementBalanceCents > 0 ? s.statementBalanceCents : (s.minimumPaymentCents ?? 0);
 }
 
-/** Did the user pay the full statement on or before the due date? */
-export function paidWithoutInterest(s: CreditCardStatementRow): boolean {
-  if (statementCashDueCents(s) <= 0) return true;
+/**
+ * Cash needed by the due date to avoid interest when the card carries active
+ * flexible-financing promos (Chase "Interest Saving Balance", and the same
+ * arithmetic for any issuer whose statement balance includes 0%-plan
+ * principal):
+ *
+ *   ISB = statement balance
+ *         − promo principal still outstanding (not interest-bearing)
+ *         + the promo plan payments billed in this cycle
+ *
+ * floored at the minimum payment (the issuer's own rule) and never above the
+ * full statement cash due. The issuer's reported statement balance ALWAYS
+ * includes outstanding promo principal (§17a) — paying the full balance avoids
+ * interest too, but prematurely pays off the 0% plans; this is the smaller
+ * number that still avoids interest.
+ *
+ * Pass the card's promos; inactive/zero-remaining rows are ignored. With no
+ * qualifying promos (or a $0-balance statement, the PayPal minimum-payment
+ * shape) this is exactly `statementCashDueCents`.
+ *
+ * The adjustment only applies when the statement balance is at least the
+ * total promo remaining — the tell that the balance embeds the principal
+ * (Chase-style). A smaller balance (PayPal-style, where the statement bills
+ * only the cycle's cash and promo principal lives outside it — or stale,
+ * unreconciled promo rows) falls back to the full statement cash due.
+ */
+export function interestSavingCashDueCents(
+  s: Pick<CreditCardStatementRow, "statementBalanceCents" | "minimumPaymentCents" | "dueDate">,
+  promos: ReadonlyArray<
+    Pick<CreditCardPromoRow, "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive">
+  >,
+): number {
+  const base =
+    s.statementBalanceCents > 0 ? s.statementBalanceCents : (s.minimumPaymentCents ?? 0);
+  if (s.statementBalanceCents <= 0) return base;
+  const active = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);
+  if (active.length === 0) return base;
+  const remaining = active.reduce((sum, p) => sum + p.remainingAmountCents, 0);
+  if (remaining > s.statementBalanceCents) return base;
+  // The plan payment the issuer bills this cycle — promoMonthlyChunkAt at the
+  // due date (an expired promo returns its full remaining: that principal IS
+  // exposed to interest now, so it stays inside the ISB).
+  const chunks = active.reduce((sum, p) => sum + promoMonthlyChunkAt(p, s.dueDate), 0);
+  const isb = s.statementBalanceCents - remaining + chunks;
+  return Math.min(base, Math.max(s.minimumPaymentCents ?? 0, isb, 0));
+}
+
+/**
+ * Did the user pay enough, on time, to avoid interest? With the card's promos
+ * the threshold is the Interest Saving Balance; without them (or omitted) it's
+ * the full statement cash due, as before.
+ */
+export function paidWithoutInterest(
+  s: CreditCardStatementRow,
+  promos: ReadonlyArray<
+    Pick<CreditCardPromoRow, "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive">
+  > = [],
+): boolean {
+  const dueCents = interestSavingCashDueCents(s, promos);
+  if (dueCents <= 0) return true;
   if (s.paidAmountCents == null || s.paidDate == null) return false;
-  return s.paidAmountCents >= statementCashDueCents(s) && s.paidDate <= s.dueDate;
+  return s.paidAmountCents >= dueCents && s.paidDate <= s.dueDate;
 }
 
 /** Sum of unpaid balances across a list of statements. */

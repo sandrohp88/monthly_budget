@@ -7,7 +7,7 @@ import {
   listPromosForCard,
   listStatements,
 } from "@/lib/repos";
-import { isStatementOpen, statementCashDueCents } from "@/lib/credit-cards";
+import { interestSavingCashDueCents, isStatementOpen } from "@/lib/credit-cards";
 import { CreditCardsClient, type WalletCard } from "./credit-cards-client";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +37,12 @@ export default async function CreditCardsPage() {
         : undefined;
 
       const openStatements = statements.filter(isStatementOpen);
-      const dueCents = openStatements.reduce((s, x) => s + statementCashDueCents(x), 0);
+      // Due to avoid interest: the Interest Saving Balance when the card has
+      // active 0% promos, the full statement cash due otherwise.
+      const dueCents = openStatements.reduce(
+        (s, x) => s + interestSavingCashDueCents(x, promos),
+        0,
+      );
       const dueDate =
         openStatements.map((s) => s.dueDate).sort((a, b) => a.localeCompare(b))[0] ?? null;
 

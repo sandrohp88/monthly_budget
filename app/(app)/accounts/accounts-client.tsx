@@ -21,16 +21,21 @@ import { DateLabel } from "@/components/date-label";
 import { PlaidLinkButton } from "@/components/plaid-link-button";
 import { PlaidLinkCardDialog } from "@/components/plaid-link-card-dialog";
 import { cn } from "@/lib/cn";
-import { statementCashDueCents } from "@/lib/credit-cards";
+import { interestSavingCashDueCents } from "@/lib/credit-cards";
 import type {
   PlaidItemRow,
   PlaidAccountRow,
   CreditCardRow,
+  CreditCardPromoRow,
   CreditCardStatementRow,
 } from "@/lib/db/schema";
 
 type ItemWithAccounts = PlaidItemRow & { accounts: PlaidAccountRow[] };
-type CardWithStatements = { card: CreditCardRow; statements: CreditCardStatementRow[] };
+type CardWithStatements = {
+  card: CreditCardRow;
+  statements: CreditCardStatementRow[];
+  promos: CreditCardPromoRow[];
+};
 
 export function AccountsClient({
   initialItems,
@@ -375,7 +380,7 @@ function AccountRow({
                         {" · NEXT DUE "}
                         <DateLabel iso={latestStatement.dueDate} format="short" />
                         {" · "}
-                        <Money cents={statementCashDueCents(latestStatement)} />
+                        <Money cents={interestSavingCashDueCents(latestStatement, link.promos)} />
                       </>
                     )}
                   </span>
