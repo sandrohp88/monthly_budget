@@ -26,7 +26,7 @@ import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { CreditCardVisual } from "@/components/credit-card-visual";
 import { InlineBalanceEditor } from "@/components/inline-balance-editor";
-import { PayPalPromoReconcileDialog } from "@/components/paypal-promo-reconcile-dialog";
+import { PromoReconcileDialog } from "@/components/promo-reconcile-dialog";
 import { cardDisplayName, cardMaskDigits } from "@/lib/card-art";
 import {
   LinkedBillEstimate,
@@ -516,7 +516,7 @@ export function CardDetailClient({
                 size="sm"
                 variant="ghost"
                 onClick={() => setReconcileOpen(true)}
-                title="Reconcile from a pasted PayPal promo list"
+                title="Reconcile from a pasted issuer promo list (PayPal page or Chase statement table)"
               >
                 <ClipboardPaste className="h-3 w-3" /> RECONCILE
               </Button>
@@ -744,7 +744,7 @@ export function CardDetailClient({
         />
       ) : null}
       {reconcileOpen ? (
-        <PayPalPromoReconcileDialog
+        <PromoReconcileDialog
           card={{ id: card.id, name: card.name }}
           promos={promos}
           onClose={() => setReconcileOpen(false)}

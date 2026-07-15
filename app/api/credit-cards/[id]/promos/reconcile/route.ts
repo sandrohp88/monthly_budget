@@ -9,17 +9,27 @@ import {
   updatePromo,
 } from "@/lib/repos";
 import { planPromoReconcile } from "@/lib/paypal-promo-list";
+import { planChaseFlexReconcile, type ChaseFlexPlanRow } from "@/lib/chase-flex-plan-list";
 import { promoReconcileSchema } from "@/lib/validation";
 import { todayIso } from "@/lib/dates";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
- * Apply a pasted issuer promo list (PayPal "Promotional purchases") to this
- * card's promos. The list is authoritative: matched promos take its amounts
- * and payoff dates, unmatched rows become new promos, and (optionally) active
- * promos missing from the list are archived as paid off. Every touched row is
- * stamped `authoritativeSource = paypal_promo_list` so sync never rewrites it.
+ * Apply a pasted issuer promo list to this card's promos. Two sources share
+ * this endpoint:
+ *
+ *   - `paypal_promo_list` — PayPal "Promotional purchases" page. Matched by
+ *     description (merchant names are unique).
+ *   - `chase_flex_plan_list` — a Chase statement's "Qualified Promotional
+ *     Financing" table / chase.com plan list. Matched by plan expiration date
+ *     (statement rows all share one description), and rows additionally carry
+ *     the original purchase total and the fixed plan payment.
+ *
+ * The list is authoritative: matched promos take its amounts and payoff dates,
+ * unmatched rows become new promos, and (optionally) active promos missing
+ * from the list are archived as paid off. Every touched row is stamped with
+ * the source so sync never rewrites it.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const auth = await ensureUser();
@@ -36,16 +46,40 @@ export async function POST(req: Request, ctx: Ctx) {
   const today = todayIso(settings?.timezone);
 
   const promos = await listPromosForCard(auth.userId, id, false);
-  const plan = planPromoReconcile(promos, data.rows);
+  const source = data.source;
+  const rows: ChaseFlexPlanRow[] = data.rows.map((r) => ({
+    description: r.description,
+    remainingCents: r.remainingCents,
+    endDate: r.endDate,
+    originalCents: r.originalCents ?? null,
+    monthlyPaymentCents: r.monthlyPaymentCents ?? null,
+  }));
+  // Both planners pass the row objects through by reference, so the plan's
+  // rows keep the (possibly null) Chase-only fields from the mapping above.
+  const planned =
+    source === "chase_flex_plan_list"
+      ? planChaseFlexReconcile(promos, rows)
+      : planPromoReconcile(promos, rows);
+  const plan = {
+    updates: planned.updates.map((u) => ({ promoId: u.promoId, row: u.row as ChaseFlexPlanRow })),
+    creates: planned.creates as ChaseFlexPlanRow[],
+    archives: planned.archives,
+  };
 
   for (const { promoId, row } of plan.updates) {
     await updatePromo(auth.userId, promoId, {
       remainingAmountCents: row.remainingCents,
       endDate: row.endDate,
       // A past deadline does not prove the balance was paid. Keep any
-      // issuer-reported remainder active until PayPal reports zero/removes it.
+      // issuer-reported remainder active until the issuer reports zero.
       isActive: row.remainingCents > 0,
-      authoritativeSource: "paypal_promo_list",
+      authoritativeSource: source,
+      // Chase rows carry the issuer's own plan payment + purchase total —
+      // adopt them when present, keep the existing values otherwise.
+      ...(row.monthlyPaymentCents != null
+        ? { monthlyPaymentCents: row.monthlyPaymentCents }
+        : {}),
+      ...(row.originalCents != null ? { originalAmountCents: row.originalCents } : {}),
     });
   }
 
@@ -56,15 +90,18 @@ export async function POST(req: Request, ctx: Ctx) {
     if (row.remainingCents <= 0) continue;
     await createPromo(auth.userId, id, {
       description: row.description,
-      // The list shows the current balance, not the original purchase —
-      // remaining is the best available anchor for both.
-      originalAmountCents: row.remainingCents,
+      // The issuer's purchase total when the table carries it; the current
+      // balance is the best available anchor otherwise.
+      originalAmountCents: row.originalCents ?? row.remainingCents,
       remainingAmountCents: row.remainingCents,
       startDate: today,
       endDate: row.endDate,
-      monthlyPaymentCents: null,
-      notes: "Created from pasted PayPal promo list",
-      authoritativeSource: "paypal_promo_list",
+      monthlyPaymentCents: row.monthlyPaymentCents ?? null,
+      notes:
+        source === "chase_flex_plan_list"
+          ? "Created from pasted Chase flex-plan list"
+          : "Created from pasted PayPal promo list",
+      authoritativeSource: source,
       isActive: true,
     });
     created++;

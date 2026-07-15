@@ -823,6 +823,13 @@ promotional purchase. The only trustworthy balance mutations are:
 
 - The PayPal Promotional Purchases paste/reconcile flow
   (`authoritativeSource = paypal_promo_list`).
+- The Chase flex-plan paste/reconcile flow — a statement's "Qualified
+  Promotional Financing" table or chase.com plan list
+  (`authoritativeSource = chase_flex_plan_list`). Chase rows also carry the
+  purchase total and the fixed plan payment, and are matched to existing
+  promos by **expiration date** (statement rows all share one description) —
+  parser/matcher in `lib/chase-flex-plan-list.ts`, shared reconcile route +
+  dialog with the PayPal flow (format auto-detected from the paste).
 - An explicit user edit (`authoritativeSource = manual_reconciliation`).
 - Archiving after issuer reconciliation confirms the promo is gone.
 

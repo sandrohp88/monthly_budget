@@ -200,7 +200,7 @@ export const creditCardUpdateSchema = creditCardBaseSchema
   });
 
 const authoritativeSource = z
-  .enum(["paypal_promo_list", "manual_reconciliation"])
+  .enum(["paypal_promo_list", "chase_flex_plan_list", "manual_reconciliation"])
   .nullable()
   .optional();
 
@@ -286,16 +286,27 @@ export type PromoUpdateInput = z.infer<typeof promoUpdateSchema>;
 
 /**
  * Body for POST /api/credit-cards/[id]/promos/reconcile — rows parsed from a
- * pasted PayPal promo list. Applying sets `authoritativeSource` so sync never
- * rewrites the reconciled values.
+ * pasted issuer promo list (PayPal "Promotional purchases" or a Chase
+ * flex-plan table). Applying sets `authoritativeSource` to the source so sync
+ * never rewrites the reconciled values. The optional per-row fields only come
+ * from the Chase table (Total Qualified / Promo Min Pay columns).
  */
 export const promoReconcileSchema = z.object({
+  source: z.enum(["paypal_promo_list", "chase_flex_plan_list"]).default("paypal_promo_list"),
   rows: z
     .array(
       z.object({
         description: z.string().min(1).max(120),
         remainingCents: cents.refine((n) => n >= 0, "Remaining cannot be negative"),
         endDate: isoDate,
+        originalCents: cents
+          .refine((n) => n > 0, "Original amount must be positive")
+          .nullable()
+          .optional(),
+        monthlyPaymentCents: cents
+          .refine((n) => n > 0, "Monthly payment must be positive")
+          .nullable()
+          .optional(),
       }),
     )
     .min(1)
