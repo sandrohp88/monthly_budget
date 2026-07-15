@@ -35,7 +35,8 @@ export default async function CalendarPage() {
           Calendar
         </div>
         <p className="mt-2 text-[14px] text-[var(--text-2)]">
-          See every card due date and the full statement amount needed to avoid interest
+          Every card due date, color-coded by how much you&apos;ve scheduled to pay — unpaid
+          balances warn about interest instead of draining your cash
         </p>
       </div>
       <CalendarClient

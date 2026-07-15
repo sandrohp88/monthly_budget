@@ -289,12 +289,14 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   //   - Linked, no lookback: today. There are no past rows to render anyway.
   const settleBefore = lookback ? addDaysIso(today, 1) : linked ? today : startDate;
 
-  // Shared markers for all credit-card-derived extras: they need to be
+  // Shared markers for all credit-card-derived CASH extras: they need to be
   // settled-before-today in lookback mode so past-dated cycles don't
   // re-debit the running balance (the live Plaid balance already reflects
-  // any payment that actually cleared).
+  // any payment that actually cleared). Zero-cash due markers are exempt —
+  // they never move the balance, and turning a past-dated one into a "paid"
+  // marker would wrongly imply the statement was settled.
   const decorateScheduledExtra = <T extends OneTimeExpense>(e: T): T =>
-    lookback
+    lookback && !e.dueMarker
       ? { ...e, settledBeforeDate: settleBefore, showSettledBeforeDate: true }
       : e;
 

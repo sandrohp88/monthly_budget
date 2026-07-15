@@ -39,7 +39,32 @@ const MONTH_NAMES = [
 const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 const MAX_CHIPS_PER_DAY = 3;
 
-type EventTone = "income" | "card" | "expense" | "settled" | "posted" | "onCard";
+type EventTone =
+  | "income"
+  | "card"
+  | "expense"
+  | "settled"
+  | "posted"
+  | "onCard"
+  | "dueCovered"
+  | "duePartial"
+  | "dueUncovered";
+
+/** How much of a due marker's balance the user has scheduled a payment for. */
+type DueCoverage = "covered" | "partial" | "uncovered";
+
+function dueCoverageOf(ev: ProjectionEvent): DueCoverage {
+  const owed = ev.paymentDueCents ?? 0;
+  const cover = ev.scheduledCoverCents ?? 0;
+  if (owed <= 0 || cover >= owed) return "covered";
+  return cover > 0 ? "partial" : "uncovered";
+}
+
+const DUE_TONE: Record<DueCoverage, EventTone> = {
+  covered: "dueCovered",
+  partial: "duePartial",
+  uncovered: "dueUncovered",
+};
 
 /** Next projected payment slot for a card — what a scheduled paydown reduces. */
 type NextCardPayment = {
@@ -148,6 +173,9 @@ function toneOf(ev: ProjectionEvent, isPast: boolean): EventTone {
   // lookback window, not upcoming obligations. Rendering them in the pending
   // red reads as "unpaid bill", which is exactly wrong.
   if (isPast) return "posted";
+  // A credit-card due-date marker: color by how covered it is by scheduled
+  // payments (green covered / amber partial / red will-accrue-interest).
+  if (ev.dueMarker) return DUE_TONE[dueCoverageOf(ev)];
   // Charged to a credit card: informational, no cash leaves checking that day.
   if (ev.chargedToCardName) return "onCard";
   if (isCredit(ev)) return "income";
@@ -190,6 +218,11 @@ const TONE_CLASSES: Record<EventTone, string> = {
   settled: "border-[var(--border-raw)] bg-[var(--bg-2)] text-[var(--text-3)] line-through",
   posted: "border-[var(--border-raw)] bg-[var(--bg-2)] text-[var(--text-2)]",
   onCard: "border-[var(--olive)]/50 bg-[var(--olive)]/10 text-[var(--olive)]",
+  // Due-date markers: dashed border marks them as informational (no cash), color
+  // encodes interest risk.
+  dueCovered: "border-dashed border-[var(--mint-dim)] bg-[var(--mint-glow)] text-[var(--mint)]",
+  duePartial: "border-dashed border-[var(--amber)]/50 bg-[var(--amber)]/10 text-[var(--amber)]",
+  dueUncovered: "border-dashed border-[var(--red)]/50 bg-[var(--red)]/10 text-[var(--red)]",
 };
 
 const TONE_TEXT: Record<EventTone, string> = {
@@ -199,6 +232,9 @@ const TONE_TEXT: Record<EventTone, string> = {
   settled: "text-[var(--text-3)] line-through",
   posted: "text-[var(--text-2)]",
   onCard: "text-[var(--olive)]",
+  dueCovered: "text-[var(--mint)]",
+  duePartial: "text-[var(--amber)]",
+  dueUncovered: "text-[var(--red)]",
 };
 
 function WeekdayHeader() {
@@ -611,6 +647,8 @@ export function CalendarClient({
   const canDragPayment = React.useCallback(
     (ev: ProjectionEvent, iso: string): boolean => {
       if (ev.sourceType !== "creditCardPayment" || !ev.sourceId) return false;
+      // Due markers are informational, not payments — nothing to reschedule.
+      if (ev.dueMarker) return false;
       if (ev.isPaid || ev.chargedToCardName || iso < today) return false;
       // A real due (has cash), a scheduled paydown, or a plain planned override.
       // A fully-covered $0 slot with no plan of its own is not draggable.
@@ -633,7 +671,12 @@ export function CalendarClient({
         for (const ev of row.events) {
           if (ev.sourceType !== "creditCardPayment" || ev.sourceId !== cardId) continue;
           if (ev.isPaid || ev.paydownTargetDate) continue;
-          const dueCents = (ev.paymentDueCents ?? 0) > 0 ? ev.paymentDueCents! : ev.amountCents;
+          // For a due marker, the cash still owed is the balance minus what
+          // scheduled payments already cover — a fully-covered due isn't a target.
+          const dueCents =
+            (ev.paymentDueCents ?? 0) > 0
+              ? Math.max(0, ev.paymentDueCents! - (ev.dueMarker ? ev.scheduledCoverCents ?? 0 : 0))
+              : ev.amountCents;
           if (dueCents <= 0) continue;
           return {
             date: row.date,
@@ -722,7 +765,13 @@ export function CalendarClient({
     let sum = 0;
     for (const r of cycleRows)
       for (const ev of r.events)
-        if (!ev.chargedToCardName && ev.sourceType === "creditCardPayment" && !ev.isPaid)
+        // Only actual cash-out payments — due markers move no cash.
+        if (
+          !ev.chargedToCardName &&
+          !ev.dueMarker &&
+          ev.sourceType === "creditCardPayment" &&
+          !ev.isPaid
+        )
           sum += displayCents(ev);
     return sum;
   }, [cycleRows]);
@@ -897,17 +946,18 @@ export function CalendarClient({
       const originalDate = plan.relatedDate ?? plan.dueDate;
       const moved = plannedDate !== originalDate;
       if (moved) {
+        // Pay earlier than the issuer due date: leave a vacate marker on the due
+        // date and put the real payment on the chosen day (linked back so it
+        // still counts against that due date's balance).
         await putCardPaymentOverride(plan.cardId, originalDate, 0, `moved-to:${plannedDate}`);
         await putCardPaymentOverride(plan.cardId, plannedDate, amountCents, `moved-from:${originalDate}`);
         if (plan.dueDate !== originalDate && plan.dueDate !== plannedDate) {
           await deleteCardPaymentOverride(plan.cardId, plan.dueDate);
         }
-      } else if (amountCents === plan.originalAmountCents) {
-        await deleteCardPaymentOverride(plan.cardId, plan.dueDate);
-        if (plan.relatedDate && plan.relatedDate !== plan.dueDate) {
-          await deleteCardPaymentOverride(plan.cardId, plan.relatedDate);
-        }
       } else {
+        // Pay on the due date. A card is no longer force-paid by default, so a
+        // scheduled payment (even the full balance) is always written as an
+        // override — that's the cash that actually leaves checking.
         await putCardPaymentOverride(plan.cardId, plannedDate, amountCents, null);
         if (plan.dueDate !== plannedDate) {
           await deleteCardPaymentOverride(plan.cardId, plan.dueDate);
@@ -1311,10 +1361,23 @@ export function CalendarClient({
       <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-[var(--text-3)]">
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.income)}>PAYCHECK / CREDIT</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.expense)}>BILL / EXPENSE</span>
-        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.card)}>CARD PAYMENT</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.card)}>CARD PAYMENT (CASH OUT)</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.onCard)}>CHARGED TO CARD</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.settled)}>PAID / SETTLED</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.posted)}>POSTED (HISTORY)</span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-[var(--text-3)]">
+        <span className="text-[var(--text-2)]">CARD DUE DATES (NO CASH — SHOW WHAT&apos;S OWED):</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.dueCovered)}>
+          COVERED
+        </span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.duePartial)}>
+          PARTLY COVERED
+        </span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.dueUncovered)}>
+          WILL ACCRUE INTEREST
+        </span>
       </div>
 
       {view === "compact" ? (
@@ -1375,9 +1438,15 @@ export function CalendarClient({
                     const isCardCharge = Boolean(ev.chargedToCardName);
                     const isCardPayment =
                       ev.sourceType === "creditCardPayment" && Boolean(ev.sourceId);
+                    const isDueMarker = Boolean(ev.dueMarker);
                     const isPaydown = isCardPayment && Boolean(ev.paydownTargetDate);
                     const paymentDueCents =
                       ev.paymentDueCents ?? ev.originalAmountCents ?? ev.amountCents;
+                    // Due markers: how much of the cycle balance is covered by
+                    // scheduled payments, and what's still exposed to interest.
+                    const owedCents = ev.paymentDueCents ?? 0;
+                    const coverCents = Math.min(ev.scheduledCoverCents ?? 0, owedCents);
+                    const uncoveredCents = Math.max(0, owedCents - coverCents);
                     const originalDueDate = ev.relatedDate ?? selectedDate;
                     const dueLabel = cardPaymentDueLabel(ev.label);
                     const statusLabel = ev.isPaid
@@ -1386,13 +1455,17 @@ export function CalendarClient({
                         ? "posted"
                         : isCardCharge
                           ? "on card"
-                          : isPaydown
-                            ? "planned payment"
-                            : isCardPayment
-                              ? paymentDueCents > 0
-                                ? "card due"
-                                : "card plan"
-                              : ev.kind;
+                          : isDueMarker
+                            ? ev.estimated
+                              ? "estimated card due"
+                              : "card statement due"
+                            : isPaydown
+                              ? "planned payment"
+                              : isCardPayment
+                                ? paymentDueCents > 0
+                                  ? "card payment"
+                                  : "card plan"
+                                : ev.kind;
                     return (
                       <div
                         key={i}
@@ -1420,7 +1493,50 @@ export function CalendarClient({
                               <DateLabel iso={ev.paydownTargetDate!} format="short" />
                             </div>
                           ) : null}
-                          {isCardPayment && !isPaydown && paymentDueCents > 0 ? (
+                          {isDueMarker && !isPastDay ? (
+                            <div className="mt-1.5 space-y-1 text-[10px] uppercase tracking-[0.12em]">
+                              <div className="flex items-center justify-between gap-3 text-[var(--text-3)]">
+                                <span>
+                                  {ev.estimated ? "Estimated balance" : "Statement balance"}
+                                </span>
+                                <span className="tabular text-[var(--text-1)]">
+                                  <Money cents={owedCents} />
+                                </span>
+                              </div>
+                              {coverCents > 0 ? (
+                                <div className="flex items-center justify-between gap-3 text-[var(--text-3)]">
+                                  <span>Scheduled to pay</span>
+                                  <span className="tabular text-[var(--mint)]">
+                                    <Money cents={coverCents} />
+                                  </span>
+                                </div>
+                              ) : null}
+                              {uncoveredCents > 0 ? (
+                                <div
+                                  className={cn(
+                                    "flex gap-1.5 border p-2 text-[10px] normal-case tracking-normal",
+                                    coverCents > 0
+                                      ? "border-[var(--amber)]/50 bg-[var(--amber)]/10 text-[var(--amber)]"
+                                      : "border-[var(--red)]/50 bg-[var(--red)]/10 text-[var(--red)]",
+                                  )}
+                                >
+                                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                  <span>
+                                    Nothing leaves checking for this on its own. If you don&apos;t
+                                    schedule a payment, <Money cents={uncoveredCents} /> will accrue
+                                    interest{ev.estimated ? " on the unpaid balance" : ""}.
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="flex gap-1.5 border border-[var(--mint-dim)] bg-[var(--mint-glow)] p-2 text-[10px] normal-case tracking-normal text-[var(--mint)]">
+                                  <span>
+                                    Covered by scheduled payments — no interest on this due date.
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          ) : null}
+                          {isCardPayment && !isDueMarker && !isPaydown && paymentDueCents > 0 ? (
                             <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--amber)]">
                               {dueLabel} · due <DateLabel iso={originalDueDate} format="short" /> ·{" "}
                               <Money cents={paymentDueCents} />
@@ -1462,20 +1578,24 @@ export function CalendarClient({
                                     label: ev.label,
                                     dueDate: selectedDate,
                                     relatedDate: ev.relatedDate,
-                                    amountCents: ev.amountCents,
+                                    // Markers carry no cash; prefill the amount
+                                    // still needed to cover the cycle's balance.
+                                    amountCents: isDueMarker ? uncoveredCents : ev.amountCents,
                                     originalAmountCents:
                                       ev.originalAmountCents ?? paymentDueCents,
-                                    paymentDueCents,
+                                    paymentDueCents: isDueMarker ? uncoveredCents : paymentDueCents,
                                     paymentBalanceCents: ev.paymentBalanceCents,
                                     dueLabel,
                                   })
                                 }
                               >
-                                <CreditCard className="mr-1 h-3.5 w-3.5" /> PROGRAM PAYMENT
+                                <CreditCard className="mr-1 h-3.5 w-3.5" />{" "}
+                                {isDueMarker ? "SCHEDULE PAYMENT" : "PROGRAM PAYMENT"}
                               </Button>
                             )
                           ) : null}
                           {isCardPayment &&
+                          !isDueMarker &&
                           !ev.isPaid &&
                           !isPastDay &&
                           isScheduledPayment(ev, selectedDate) ? (

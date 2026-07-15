@@ -98,64 +98,82 @@ const EMPTY = {
   cardPaymentOverrides: [] as CreditCardPaymentOverrideRow[],
 };
 
-describe("projectCardPayments", () => {
-  it("projects an unpaid recorded statement as a payment on its due date", () => {
+type Result = ReturnType<typeof projectCardPayments>;
+/** Zero-cash due-date markers. */
+const markersOf = (r: Result) => r.extras.filter((e) => e.dueMarker);
+/** Cash-out events (scheduled payments, promo, variable). */
+const cashOf = (r: Result) => r.extras.filter((e) => !e.dueMarker);
+const cashTotal = (r: Result) => cashOf(r).reduce((s, e) => s + e.amountCents, 0);
+
+describe("projectCardPayments — due markers (no forced cash)", () => {
+  it("projects a recorded statement as a zero-cash due marker on its due date", () => {
     const r = projectCardPayments({ ...EMPTY, activeCards: [card()], statements: [stmt()] });
-    const cc = r.extras.filter((e) => e.sourceId === "c1");
-    expect(cc).toHaveLength(1);
-    expect(cc[0]).toMatchObject({
+    const m = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(m).toMatchObject({
       date: "2026-06-10",
-      description: "Card payment",
-      amountCents: 200_00,
-      originalAmountCents: 200_00,
+      amountCents: 0,
+      dueMarker: true,
+      estimated: false,
+      paymentDueCents: 200_00,
+      scheduledCoverCents: 0,
       sourceType: "creditCardPayment",
     });
+    // No cash leaves checking — nothing is scheduled.
+    expect(cashTotal(r)).toBe(0);
   });
 
-  it("a per-cycle override REPLACES the statement amount (and suppresses a planned payment there)", () => {
+  it("an override on a statement due date is a cash payment that covers the marker", () => {
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card()],
       statements: [stmt()],
       cardPaymentOverrides: [override({ dueDate: "2026-06-10", amountCents: 300_00 })],
     });
-    const cc = r.extras.filter((e) => e.sourceId === "c1");
-    expect(cc).toHaveLength(1);
-    expect(cc[0]).toMatchObject({ amountCents: 300_00, originalAmountCents: 200_00 });
-    expect(r.extras.some((e) => e.description === "Card planned payment")).toBe(false);
+    const m = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(m).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 200_00 });
+    const paid = cashOf(r).find((e) => e.date === "2026-06-10");
+    expect(paid).toMatchObject({ amountCents: 300_00, description: "Card planned payment" });
+    // Cash out is the scheduled payment only, not statement + payment.
+    expect(cashTotal(r)).toBe(300_00);
   });
 
-  it("a planned-payment override fires on a date no other source claims", () => {
+  it("a planned payment after a due date does not cover that due date", () => {
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card()],
       statements: [stmt({ dueDate: "2026-06-10" })],
       cardPaymentOverrides: [override({ dueDate: "2026-07-10", amountCents: 150_00 })],
     });
-    const planned = r.extras.find((e) => e.description === "Card planned payment");
-    expect(planned).toMatchObject({ date: "2026-07-10", amountCents: 150_00, originalAmountCents: 0 });
+    const june = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(june?.scheduledCoverCents).toBe(0);
+    const planned = cashOf(r).find((e) => e.date === "2026-07-10");
+    expect(planned).toMatchObject({ amountCents: 150_00, description: "Card planned payment" });
   });
 
-  it("estimates the open cycle for a card with a live balance and no statement", () => {
+  it("estimates the open cycle (and future cycles) as zero-cash markers", () => {
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card({ currentBalanceCents: 300_00 })],
     });
-    const est = r.extras.find((e) => e.description === "Card next payment (est)");
-    // today 2026-05-04 → next close 2026-05-15 → due 2026-06-10.
-    expect(est).toMatchObject({ date: "2026-06-10", amountCents: 300_00 });
+    // today 2026-05-04 → next close 2026-05-15 → due 2026-06-10, then 2026-07-10.
+    const june = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(june).toMatchObject({ amountCents: 0, estimated: true, paymentDueCents: 300_00 });
+    expect(markersOf(r).some((e) => e.date === "2026-07-10" && e.estimated)).toBe(true);
+    expect(cashTotal(r)).toBe(0);
   });
 
-  it("suppresses the open-cycle estimate when a recorded statement covers that due date", () => {
+  it("a recorded statement suppresses the estimate on its own due date", () => {
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card({ currentBalanceCents: 300_00 })],
       statements: [stmt({ statementBalanceCents: 200_00, dueDate: "2026-06-10" })],
     });
-    expect(r.extras.some((e) => e.description === "Card next payment (est)")).toBe(false);
-    const cc = r.extras.filter((e) => e.sourceId === "c1");
-    expect(cc).toHaveLength(1);
-    expect(cc[0]?.amountCents).toBe(200_00);
+    const june = markersOf(r).filter((e) => e.date === "2026-06-10");
+    expect(june).toHaveLength(1);
+    expect(june[0]).toMatchObject({ estimated: false, paymentDueCents: 200_00 });
+    // Later cycles fall back to the estimate (balance minus the unpaid statement).
+    const july = markersOf(r).find((e) => e.date === "2026-07-10");
+    expect(july).toMatchObject({ estimated: true, paymentDueCents: 100_00 });
   });
 
   it("records promo drift when promo principal exceeds the live-balance headroom", () => {
@@ -165,60 +183,42 @@ describe("projectCardPayments", () => {
       plaidAccounts: [{ id: "acct1", balanceCents: 100_00 }],
       promos: [promo({ remainingAmountCents: 500_00 })],
     });
-    // headroom 100_00, promo capped to 100_00 → drift 400_00; open cycle nets to 0.
+    // headroom 100_00, promo capped to 100_00 → drift 400_00; estimate nets to 0.
     expect(r.promoDriftByCard["c1"]).toBe(400_00);
-    expect(r.extras.some((e) => e.description === "Card next payment (est)")).toBe(false);
+    expect(markersOf(r).some((e) => e.estimated)).toBe(false);
   });
 
-  it("merges multiple sources on the same due date into one payment", () => {
-    // Card balance $500, promo $300 remaining. On the next due date (2026-06-10)
-    // the open-cycle estimate ($500 − $300 promo = $200) and the promo's first
-    // chunk ($50) both land → one merged $250 payment, not two rows.
+  it("keeps a promo cash chunk separate from the estimate marker on the same day", () => {
+    // Card balance $500, promo $300 remaining. On 2026-06-10 the estimate marker
+    // ($500 − $300 promo = $200, zero cash) and the promo's first cash chunk
+    // ($50) both land — markers never merge into cash payments.
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card({ currentBalanceCents: 500_00 })],
       promos: [promo({ remainingAmountCents: 300_00, monthlyPaymentCents: 50_00 })],
     });
-    // No two card events ever share a due date.
-    const dates = r.extras.map((e) => e.date);
-    expect(new Set(dates).size).toBe(dates.length);
-    const merged = r.extras.find((e) => e.date === "2026-06-10");
-    expect(merged?.amountCents).toBe(250_00);
-    expect(merged?.description).toBe("Card payment (est. spend + promo)");
-    // Summed metadata.
-    expect(merged?.paymentDueCents).toBe(250_00);
+    const marker = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(marker).toMatchObject({ amountCents: 0, paymentDueCents: 200_00, estimated: true });
+    const promoCash = cashOf(r).find((e) => e.date === "2026-06-10");
+    expect(promoCash?.amountCents).toBe(50_00);
+    expect(promoCash?.description).toContain("promo");
   });
 
-  it("leaves a lone source on a date byte-identical (no merge relabeling)", () => {
-    const r = projectCardPayments({ ...EMPTY, activeCards: [card()], statements: [stmt()] });
-    const cc = r.extras.find((e) => e.date === "2026-06-10");
-    // Single source → original label, not "Card payment (statement)".
-    expect(cc?.description).toBe("Card payment");
-  });
-
-  it("orders sources: statements, then open-cycle estimate, then promo", () => {
-    // Statement due 2026-06-10; balance high enough that the open cycle nets a
-    // positive estimate on a later, statement-free due date; a promo chunk too.
+  it("returns all markers ahead of cash-out events", () => {
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card({ currentBalanceCents: 900_00 })],
       statements: [stmt({ statementBalanceCents: 200_00, dueDate: "2026-06-10" })],
       promos: [promo({ remainingAmountCents: 300_00, monthlyPaymentCents: 50_00 })],
     });
-    const labels = r.extras.map((e) => e.description);
-    const cc = labels.findIndex((l) => l === "Card payment");
-    const est = labels.findIndex((l) => l.includes("next payment (est)"));
-    const pr = labels.findIndex((l) => l.startsWith("Card promo"));
-    expect(cc).toBeGreaterThanOrEqual(0);
-    expect(pr).toBeGreaterThanOrEqual(0);
-    // Statements always precede estimate and promo in the returned order.
-    expect(cc).toBeLessThan(pr);
-    if (est >= 0) expect(cc).toBeLessThan(est);
+    const firstCash = r.extras.findIndex((e) => !e.dueMarker);
+    const lastMarker = r.extras.map((e) => Boolean(e.dueMarker)).lastIndexOf(true);
+    expect(lastMarker).toBeLessThan(firstCash);
   });
 });
 
 describe("scheduled paydowns (pays-down overrides)", () => {
-  it("a pending paydown reduces the statement slot and debits its own date", () => {
+  it("a pending paydown covers the statement marker and debits its own date", () => {
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card()],
@@ -227,20 +227,19 @@ describe("scheduled paydowns (pays-down overrides)", () => {
         override({ dueDate: "2026-05-20", amountCents: 80_00, notes: "pays-down:2026-06-10" }),
       ],
     });
-    const slot = r.extras.find((e) => e.date === "2026-06-10");
-    expect(slot).toMatchObject({ amountCents: 120_00, paymentDueCents: 120_00 });
-    const planned = r.extras.find((e) => e.date === "2026-05-20");
+    const marker = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(marker).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 80_00 });
+    const planned = cashOf(r).find((e) => e.date === "2026-05-20");
     expect(planned).toMatchObject({
       amountCents: 80_00,
       description: "Card planned payment",
       paydownTargetDate: "2026-06-10",
     });
-    // Cash conservation: total out equals the statement balance.
-    const total = r.extras.reduce((s, e) => s + e.amountCents, 0);
-    expect(total).toBe(200_00);
+    // Only the scheduled payment moves cash — the statement never force-drains.
+    expect(cashTotal(r)).toBe(80_00);
   });
 
-  it("a paydown covering the whole statement zeroes the due-date slot", () => {
+  it("a paydown covering the whole statement marks it fully covered", () => {
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card()],
@@ -249,13 +248,12 @@ describe("scheduled paydowns (pays-down overrides)", () => {
         override({ dueDate: "2026-05-20", amountCents: 200_00, notes: "pays-down:2026-06-10" }),
       ],
     });
-    const slot = r.extras.find((e) => e.date === "2026-06-10");
-    expect(slot).toMatchObject({ amountCents: 0, paymentDueCents: 0 });
-    const total = r.extras.reduce((s, e) => s + e.amountCents, 0);
-    expect(total).toBe(200_00);
+    const marker = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(marker).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 200_00 });
+    expect(cashTotal(r)).toBe(200_00);
   });
 
-  it("a PAST-dated paydown no longer reduces the target slot", () => {
+  it("a PAST-dated paydown does not cover the target marker", () => {
     // today in EMPTY is 2026-05-04; the paydown is dated before that. Reality
     // (posted payments, statement paid amounts) carries the effect instead.
     const r = projectCardPayments({
@@ -266,14 +264,17 @@ describe("scheduled paydowns (pays-down overrides)", () => {
         override({ dueDate: "2026-05-01", amountCents: 80_00, notes: "pays-down:2026-06-10" }),
       ],
     });
-    const slot = r.extras.find((e) => e.date === "2026-06-10");
-    expect(slot).toMatchObject({ amountCents: 200_00, paymentDueCents: 200_00 });
+    const marker = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(marker).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 0 });
+    // Any cash it emits is dated in the past (2026-05-01), so the projection
+    // filters it — nothing on/after today covers the marker.
+    expect(cashOf(r).some((e) => e.date >= "2026-05-04")).toBe(false);
   });
 
-  it("consumes a paydown once across colliding generators on the same due date", () => {
-    // Live balance 300 with promo remaining 100 → open-cycle estimate 200 on
-    // 2026-06-10; the promo's 50/mo chunk lands on the same date. A 220
-    // paydown must reduce the combined 250, never fire once per generator.
+  it("consumes a paydown once across a promo chunk and its marker on the same date", () => {
+    // Live balance 300 with promo remaining 100 → estimate marker 200 on
+    // 2026-06-10; the promo's 50/mo chunk (cash) lands the same date. A 220
+    // paydown covers the marker AND clears the promo cash — never double-spent.
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card({ currentBalanceCents: 300_00 })],
@@ -282,14 +283,15 @@ describe("scheduled paydowns (pays-down overrides)", () => {
         override({ dueDate: "2026-05-20", amountCents: 220_00, notes: "pays-down:2026-06-10" }),
       ],
     });
-    const onDue = r.extras.filter((e) => e.date === "2026-06-10");
-    expect(onDue.reduce((s, e) => s + e.amountCents, 0)).toBe(30_00);
-    // Cash conservation: everything still totals the live balance.
-    const total = r.extras.reduce((s, e) => s + e.amountCents, 0);
-    expect(total).toBe(300_00);
+    const marker = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(marker).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 200_00 });
+    // The promo cash chunk on 2026-06-10 is fully covered → dropped.
+    expect(cashOf(r).some((e) => e.date === "2026-06-10")).toBe(false);
+    // Cash out is the single 220 paydown.
+    expect(cashTotal(r)).toBe(220_00);
   });
 
-  it("a paydown with no matching slot is a plain extra planned payment", () => {
+  it("a paydown with no matching marker is still a plain planned payment", () => {
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card()],
@@ -297,32 +299,16 @@ describe("scheduled paydowns (pays-down overrides)", () => {
         override({ dueDate: "2026-05-20", amountCents: 50_00, notes: "pays-down:2026-06-10" }),
       ],
     });
-    expect(r.extras).toHaveLength(1);
-    expect(r.extras[0]).toMatchObject({
+    const cash = cashOf(r);
+    expect(cash).toHaveLength(1);
+    expect(cash[0]).toMatchObject({
       date: "2026-05-20",
       amountCents: 50_00,
       paydownTargetDate: "2026-06-10",
     });
   });
 
-  it("a paydown scheduled ON the due date merges into one row with unchanged total", () => {
-    const r = projectCardPayments({
-      ...EMPTY,
-      activeCards: [card()],
-      statements: [stmt({ statementBalanceCents: 200_00, dueDate: "2026-06-10" })],
-      cardPaymentOverrides: [
-        override({ dueDate: "2026-06-10", amountCents: 80_00, notes: "pays-down:2026-06-10" }),
-      ],
-    });
-    const onDue = r.extras.filter((e) => e.date === "2026-06-10");
-    expect(onDue).toHaveLength(1);
-    expect(onDue[0]!.amountCents).toBe(200_00);
-    expect(onDue[0]!.description).toBe("Card payment (statement + planned)");
-  });
-
-  it("does not treat a pays-down override as a slot replacement", () => {
-    // The paydown targets a DIFFERENT date than its own; the statement slot on
-    // its own date must not be replaced by the paydown amount.
+  it("covers only its target marker, not the paydown's own-date marker", () => {
     const r = projectCardPayments({
       ...EMPTY,
       activeCards: [card()],
@@ -339,12 +325,15 @@ describe("scheduled paydowns (pays-down overrides)", () => {
         override({ dueDate: "2026-06-10", amountCents: 80_00, notes: "pays-down:2026-07-10" }),
       ],
     });
-    // June slot: full statement + the paydown extra, merged.
-    const june = r.extras.filter((e) => e.date === "2026-06-10");
-    expect(june.reduce((s, e) => s + e.amountCents, 0)).toBe(280_00);
-    // July slot: reduced by the paydown.
-    const july = r.extras.find((e) => e.date === "2026-07-10");
-    expect(july).toMatchObject({ amountCents: 320_00, paymentDueCents: 320_00 });
+    // June marker is untouched (the paydown targets July, not its own date).
+    const june = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(june).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 0 });
+    // July marker is partly covered by the 80 paydown.
+    const july = markersOf(r).find((e) => e.date === "2026-07-10");
+    expect(july).toMatchObject({ paymentDueCents: 400_00, scheduledCoverCents: 80_00 });
+    // The paydown's 80 debits its own date (2026-06-10).
+    expect(cashOf(r).find((e) => e.date === "2026-06-10")?.amountCents).toBe(80_00);
+    expect(cashTotal(r)).toBe(80_00);
   });
 });
 
@@ -502,7 +491,7 @@ describe("projectCardPayments — over-sized paydown credits the promo balance",
   });
 });
 
-describe("projectCardPayments — a plain planned payment pays down the card", () => {
+describe("projectCardPayments — a plain planned payment covers a statement marker", () => {
   const base = {
     ...EMPTY,
     today: "2026-07-13",
@@ -510,7 +499,7 @@ describe("projectCardPayments — a plain planned payment pays down the card", (
     activeCards: [card({ currentBalanceCents: null, dueDay: 8 })],
   };
 
-  it("a scheduled payment before a statement pays it down (no double-count)", () => {
+  it("a scheduled payment before a statement covers its marker (no double-count)", () => {
     // Mirrors the real ****1434 bug: $1,111 planned Aug 3, statement $1,110.41 due Aug 8.
     const r = projectCardPayments({
       ...base,
@@ -519,16 +508,16 @@ describe("projectCardPayments — a plain planned payment pays down the card", (
       ],
       cardPaymentOverrides: [override({ dueDate: "2026-08-03", amountCents: 111100, notes: null })],
     });
-    const pp = r.extras.filter((e) => e.sourceId === "c1");
     // The scheduled payment debits its own day…
-    expect(pp.find((e) => e.date === "2026-08-03")?.amountCents).toBe(111100);
-    // …and the statement due date is fully covered (dropped, not charged again).
-    expect(pp.some((e) => e.date === "2026-08-08")).toBe(false);
-    // Total cash = the single scheduled payment, not payment + statement.
-    expect(pp.reduce((s, e) => s + e.amountCents, 0)).toBe(111100);
+    expect(cashOf(r).find((e) => e.date === "2026-08-03")?.amountCents).toBe(111100);
+    // …the statement due date is a covered marker (no cash of its own)…
+    const marker = markersOf(r).find((e) => e.date === "2026-08-08");
+    expect(marker).toMatchObject({ amountCents: 0, paymentDueCents: 111041, scheduledCoverCents: 111041 });
+    // …and total cash = the single scheduled payment, not payment + statement.
+    expect(cashTotal(r)).toBe(111100);
   });
 
-  it("a partial scheduled payment reduces the statement by that amount", () => {
+  it("a partial scheduled payment leaves the marker partly covered", () => {
     const r = projectCardPayments({
       ...base,
       statements: [
@@ -536,9 +525,10 @@ describe("projectCardPayments — a plain planned payment pays down the card", (
       ],
       cardPaymentOverrides: [override({ dueDate: "2026-08-03", amountCents: 30_00, notes: null })],
     });
-    const pp = r.extras.filter((e) => e.sourceId === "c1");
-    expect(pp.find((e) => e.date === "2026-08-03")?.amountCents).toBe(30_00);
-    expect(pp.find((e) => e.date === "2026-08-08")?.amountCents).toBe(70_00);
-    expect(pp.reduce((s, e) => s + e.amountCents, 0)).toBe(100_00);
+    expect(cashOf(r).find((e) => e.date === "2026-08-03")?.amountCents).toBe(30_00);
+    const marker = markersOf(r).find((e) => e.date === "2026-08-08");
+    expect(marker).toMatchObject({ paymentDueCents: 100_00, scheduledCoverCents: 30_00 });
+    // Only the scheduled 30 leaves checking — the 70 shortfall accrues interest.
+    expect(cashTotal(r)).toBe(30_00);
   });
 });
