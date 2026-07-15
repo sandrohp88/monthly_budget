@@ -101,6 +101,14 @@ export type OneTimeExpense = {
    * payment reduces (see lib/card-payments.ts).
    */
   paydownTargetDate?: string;
+  /**
+   * True for cash the USER planned (calendar planned payments / paydowns), as
+   * opposed to projection-derived cash. A live bank balance reflects a plan
+   * only once the payment actually posts — so the settle pivot must not
+   * swallow a plan dated today (see decorateScheduledExtra in
+   * lib/projection-server.ts).
+   */
+  userScheduled?: boolean;
 };
 
 export type ProjectionEventKind = "paycheck" | "bill" | "extra";

@@ -295,9 +295,20 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   // any payment that actually cleared). Zero-cash due markers are exempt —
   // they never move the balance, and turning a past-dated one into a "paid"
   // marker would wrongly imply the statement was settled.
+  //
+  // USER-SCHEDULED cash (calendar planned payments / paydowns) pivots at
+  // `today`, not the lookback pivot: the live balance reflects a plan only
+  // once the payment actually posts, so a plan dated TODAY must stay a live,
+  // movable, cash-debiting event — not a phantom "settled" marker. Once the
+  // date passes, reality (posted drafts in the live balance) carries the
+  // effect and the plan settles like everything else.
   const decorateScheduledExtra = <T extends OneTimeExpense>(e: T): T =>
     lookback && !e.dueMarker
-      ? { ...e, settledBeforeDate: settleBefore, showSettledBeforeDate: true }
+      ? {
+          ...e,
+          settledBeforeDate: e.userScheduled ? today : settleBefore,
+          showSettledBeforeDate: true,
+        }
       : e;
 
   const historicalExtras: OneTimeExpense[] = historicalDrafts.map((d) => ({

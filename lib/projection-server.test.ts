@@ -597,6 +597,68 @@ describe("buildProjection linked starting balance", () => {
     expect(may3?.expenseCents).toBe(0);
   });
 
+  it("a planned card payment dated TODAY stays live in lookback mode (not phantom-settled)", async () => {
+    // Real-world report (Costco ****8303): a payment the user scheduled for
+    // today rendered as PAID/SETTLED although no transaction had posted, and
+    // being "settled" it couldn't be rescheduled either. The lookback settle
+    // pivot (tomorrow) assumed today's events were already inside the live
+    // balance — true for posted reality, false for a user plan.
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 500_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-05-01" });
+    const card = await createCreditCard(user.id, {
+      name: "Costco",
+      statementDay: 13,
+      dueDay: 9,
+      currentBalanceCents: 211_38,
+      autoPay: false,
+      isActive: true,
+    });
+    await upsertCreditCardPaymentOverride(user.id, card.id, {
+      dueDate: "2026-05-04", // mocked today
+      amountCents: 212_00,
+      notes: null,
+    });
+
+    const today = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-05-04");
+    const planned = today?.events.find((e) => e.label === "Costco planned payment");
+    // Live cash debit: pending (not isPaid), full amount, moves the balance.
+    expect(planned).toMatchObject({ amountCents: 212_00 });
+    expect(planned?.isPaid).toBeFalsy();
+    expect(today?.expenseCents).toBe(212_00);
+  });
+
+  it("a planned card payment dated in the PAST settles as a paid marker in lookback mode", async () => {
+    // Once the date passes, reality (posted drafts inside the live balance)
+    // carries the effect — the stale plan renders as a paid marker showing
+    // the planned amount, and stops debiting the projection.
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 500_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-05-01" });
+    const card = await createCreditCard(user.id, {
+      name: "Costco",
+      statementDay: 13,
+      dueDay: 9,
+      currentBalanceCents: 211_38,
+      autoPay: false,
+      isActive: true,
+    });
+    await upsertCreditCardPaymentOverride(user.id, card.id, {
+      dueDate: "2026-05-02", // before mocked today
+      amountCents: 212_00,
+      notes: null,
+    });
+
+    const may2 = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-05-02");
+    const planned = may2?.events.find((e) => e.label === "Costco planned payment");
+    expect(planned).toMatchObject({
+      amountCents: 0,
+      isPaid: true,
+      originalAmountCents: 212_00, // the planned amount, for display (PR #93)
+    });
+    expect(may2?.expenseCents).toBe(0);
+  });
+
   it("clamps lookback when startingBalanceAsOf is older than the cap (default 1970-01-01)", async () => {
     // Sanity check on the MAX_LOOKBACK_DAYS clamp: a user who never set the
     // field still gets the linked-no-lookback experience.
