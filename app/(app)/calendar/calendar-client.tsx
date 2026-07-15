@@ -187,10 +187,17 @@ function toneOf(ev: ProjectionEvent, isPast: boolean): EventTone {
  * Cash shown on a chip / detail row. Card-payment events whose cash was moved
  * or paid down elsewhere carry amountCents 0 — fall back to what's still due
  * that day, not the original, so a fully-covered due date reads $0.
+ *
+ * A due-date marker shows what's still exposed to interest — the balance owed
+ * MINUS what scheduled payments already cover — so a partly-covered due reads
+ * as the remainder and a fully-covered one reads $0.
  */
 function displayCents(ev: ProjectionEvent): number {
   if (ev.amountCents !== 0) return Math.abs(ev.amountCents);
-  if (ev.sourceType === "creditCardPayment" && !ev.isPaid) return ev.paymentDueCents ?? 0;
+  if (ev.sourceType === "creditCardPayment" && !ev.isPaid) {
+    const due = ev.paymentDueCents ?? 0;
+    return ev.dueMarker ? Math.max(0, due - (ev.scheduledCoverCents ?? 0)) : due;
+  }
   return Math.abs(ev.originalAmountCents ?? 0);
 }
 
