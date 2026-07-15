@@ -644,3 +644,48 @@ describe("projectCardPayments — interest-saving balance on promo cards", () =>
     expect(marker).toMatchObject({ paymentDueCents: 832_26, scheduledCoverCents: 832_26 });
   });
 });
+
+describe("projectCardPayments — userScheduled flag", () => {
+  it("planned payments and paydowns carry userScheduled; promo/variable cash does not", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      promos: [promo({ remainingAmountCents: 300_00, monthlyPaymentCents: 50_00 })],
+      cardPaymentOverrides: [
+        // plain scheduled payment on its own date (no cash chunk there)
+        override({ dueDate: "2026-05-20", amountCents: 75_00 }),
+        // paydown targeting the promo's 2026-06-10 chunk
+        override({
+          id: "o2",
+          dueDate: "2026-05-25",
+          amountCents: 20_00,
+          notes: "pays-down:2026-06-10",
+        }),
+      ],
+    });
+    const cash = r.extras.filter((e) => !e.dueMarker);
+    const planned = cash.find((e) => e.date === "2026-05-20");
+    const paydown = cash.find((e) => e.date === "2026-05-25");
+    const promoChunk = cash.find((e) => e.date === "2026-06-10");
+    expect(planned?.userScheduled).toBe(true);
+    expect(paydown?.userScheduled).toBe(true);
+    expect(promoChunk?.userScheduled).toBeFalsy();
+  });
+
+  it("a merged cash row containing any planned payment keeps userScheduled", () => {
+    // A plain payment and a paydown share 2026-05-20 -> mergeByDueDate folds
+    // them into one cash row; the plan semantics must survive the merge.
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      promos: [promo({ remainingAmountCents: 300_00, monthlyPaymentCents: 50_00 })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 75_00 }),
+        override({ id: "o2", dueDate: "2026-05-20", amountCents: 25_00, notes: "pays-down:2026-07-10" }),
+      ],
+    });
+    const merged = r.extras.find((e) => !e.dueMarker && e.date === "2026-05-20");
+    expect(merged?.amountCents).toBe(100_00);
+    expect(merged?.userScheduled).toBe(true);
+  });
+});

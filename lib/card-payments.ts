@@ -647,6 +647,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       relatedDate: s.relatedDate,
       paymentDueCents: 0,
       paymentBalanceCents: displayBalanceForCard(s.cardId, 0),
+      userScheduled: true,
     });
   }
   for (const p of paydowns) {
@@ -662,6 +663,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       paymentDueCents: 0,
       paymentBalanceCents: displayBalanceForCard(p.cardId, 0),
       paydownTargetDate: p.targetDate,
+      userScheduled: true,
     });
   }
 
@@ -734,6 +736,9 @@ function mergeByDueDate(
       paymentDueCents: group.reduce((s, e) => s + (e.paymentDueCents ?? 0), 0),
       paymentBalanceCents: Math.max(...group.map((e) => e.paymentBalanceCents ?? 0)),
       relatedDate: group.map((e) => e.relatedDate).find(Boolean),
+      // A merged row containing any user-planned cash keeps the plan's
+      // settle-pivot semantics (a plan isn't in the live balance until posted).
+      userScheduled: group.some((e) => e.userScheduled) || undefined,
     });
   }
   return out;
