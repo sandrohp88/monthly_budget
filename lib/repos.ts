@@ -824,6 +824,7 @@ export async function settlePaycheckWithDraft(
     .set({
       actualReceived: true,
       actualAmountCents: input.amountCents,
+      actualDate: input.date,
       settledByDraftId: input.draftId,
     })
     .where(and(eq(paychecks.userId, userId), eq(paychecks.id, input.paycheckId)))

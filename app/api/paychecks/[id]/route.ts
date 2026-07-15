@@ -18,8 +18,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       actualAmountCents: data.actualAmountCents ?? null,
       // Un-marking received releases the deposit draft that auto-settled this
       // paycheck — without this, the row could never auto-reconcile again
-      // (the consume-once gate would see its own draft as already spent).
-      ...(!(data.actualReceived ?? false) ? { settledByDraftId: null } : {}),
+      // (the consume-once gate would see its own draft as already spent). Also
+      // drop the recorded posting date so a re-settle re-dates it cleanly.
+      ...(!(data.actualReceived ?? false) ? { settledByDraftId: null, actualDate: null } : {}),
     });
     if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
     return NextResponse.json({ paycheck: updated });
