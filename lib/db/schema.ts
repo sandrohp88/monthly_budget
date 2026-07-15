@@ -400,13 +400,14 @@ export const creditCardPromos = sqliteTable(
      *
      * Values:
      *   - "paypal_promo_list": user copied data from PayPal's promo UI
+     *   - "chase_flex_plan_list": user pasted a Chase flex-plan/statement table
      *   - "manual_reconciliation": user manually edited and locked the row
      *   - null: defaults; FIFO heuristic owns the row
      *
      * Replaces the legacy magic-string note "PayPal authoritative promo data".
      */
     authoritativeSource: text("authoritative_source", {
-      enum: ["paypal_promo_list", "manual_reconciliation"],
+      enum: ["paypal_promo_list", "chase_flex_plan_list", "manual_reconciliation"],
     }),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
     updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
