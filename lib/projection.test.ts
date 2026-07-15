@@ -501,6 +501,66 @@ describe("projection engine", () => {
     });
   });
 
+  it("a settled scheduled card payment shows the amount that was paid, not $0", () => {
+    // Planned card payments carry originalAmountCents 0 by design (no issuer
+    // "original"). Once the payment settles, the marker must surface the cash
+    // that actually left — before this rule the UI rendered "-$0.00" struck
+    // through instead of the paid amount.
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-04-10",
+      endDate: "2025-04-10",
+      startingBalanceCents: 1000_00,
+      bills: [],
+      extras: [
+        {
+          date: "2025-04-10",
+          description: "Prime Visa planned payment",
+          amountCents: 832_26,
+          sourceId: "card-1",
+          sourceType: "creditCardPayment",
+          originalAmountCents: 0,
+          paymentDueCents: 0,
+          settledBeforeDate: "2025-04-15",
+          showSettledBeforeDate: true,
+        },
+      ],
+    });
+
+    expect(rows[0]!.events[0]).toMatchObject({
+      label: "Prime Visa planned payment",
+      amountCents: 0, // settled: no cash impact on the projected balance
+      isPaid: true,
+      originalAmountCents: 832_26, // the paid amount, for display
+    });
+    expect(rows[0]!.balanceCents).toBe(1000_00);
+  });
+
+  it("a settled extra keeps its explicit original amount when it has one", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2025-04-10",
+      endDate: "2025-04-10",
+      startingBalanceCents: 1000_00,
+      bills: [],
+      extras: [
+        {
+          date: "2025-04-10",
+          description: "Card statement",
+          amountCents: 250_00,
+          sourceType: "creditCardPayment",
+          originalAmountCents: 600_00,
+          settledBeforeDate: "2025-04-15",
+          showSettledBeforeDate: true,
+        },
+      ],
+    });
+    expect(rows[0]!.events[0]).toMatchObject({
+      isPaid: true,
+      originalAmountCents: 600_00,
+    });
+  });
+
   it("12-month window produces exactly the right number of daily rows", () => {
     const rows = computeProjection({
       ...baseInput(),
