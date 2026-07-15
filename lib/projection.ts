@@ -289,7 +289,11 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
         amountCents: 0,
         sourceId: e.sourceId,
         sourceType: e.sourceType,
-        originalAmountCents: e.originalAmountCents ?? e.amountCents,
+        // Scheduled card payments deliberately carry originalAmountCents 0
+        // (they have no issuer "original"), so `??` would keep the 0 and the
+        // settled marker would read "$0.00 paid". The cash that actually left
+        // is this event's own amount — show that when the original is 0/absent.
+        originalAmountCents: e.originalAmountCents || e.amountCents,
         relatedDate: e.relatedDate,
         paymentDueCents: e.paymentDueCents,
         paymentBalanceCents: e.paymentBalanceCents,
