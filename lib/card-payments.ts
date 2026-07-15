@@ -487,38 +487,90 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   }
 
   // ── Coverage: which markers your scheduled payments cover ─────────────────
-  // A payment dated on/before a marker's due date can cover it. Allocate each
-  // card's plain/moved payments to its markers, earliest-due first; leftover
-  // (money scheduled beyond what statements/estimates owe) credits that card's
-  // promo chunks so the same cash is never counted twice.
+  // Two kinds of obligation behave differently:
+  //   • A recorded statement is a distinct per-cycle bill — a payment covers
+  //     that one statement (consumed, earliest-due first).
+  //   • Estimated cycles all share ONE running card balance. A payment paid down
+  //     against it reduces THIS cycle AND every later cycle — otherwise a paydown
+  //     shown clearing August's estimate would let September snap back to the
+  //     full balance. So estimate coverage is cumulative by cash date, not
+  //     consumed per cycle.
+  // Leftover cash beyond statements + the estimate balance credits promo chunks.
   markers.sort((a, b) =>
     a.cardId === b.cardId ? a.dueDate.localeCompare(b.dueDate) : a.cardId.localeCompare(b.cardId),
   );
-  const coverPaymentsByCard = new Map<string, Array<{ date: string; remaining: number }>>();
+  const paymentsByCard = new Map<string, Array<{ date: string; remaining: number }>>();
   for (const s of scheduledPayments) {
     if (s.amountCents <= 0) continue;
-    const list = coverPaymentsByCard.get(s.cardId) ?? [];
+    const list = paymentsByCard.get(s.cardId) ?? [];
     list.push({ date: s.date, remaining: s.amountCents });
-    coverPaymentsByCard.set(s.cardId, list);
+    paymentsByCard.set(s.cardId, list);
   }
-  for (const list of coverPaymentsByCard.values()) list.sort((a, b) => a.date.localeCompare(b.date));
+  for (const list of paymentsByCard.values()) list.sort((a, b) => a.date.localeCompare(b.date));
+
+  const estimatedDuesByCard = new Map<string, Set<string>>();
+  const markersByCard = new Map<string, DueMarker[]>();
+  for (const m of markers) {
+    const list = markersByCard.get(m.cardId) ?? [];
+    list.push(m);
+    markersByCard.set(m.cardId, list);
+    if (m.estimated) {
+      const set = estimatedDuesByCard.get(m.cardId) ?? new Set<string>();
+      set.add(m.dueDate);
+      estimatedDuesByCard.set(m.cardId, set);
+    }
+  }
 
   const coverByMarker = new Map<DueMarker, number>();
-  for (const marker of markers) {
-    let cover = explicitPaydownCoverByKey.get(overrideKey(marker.cardId, marker.dueDate)) ?? 0;
-    const pool = coverPaymentsByCard.get(marker.cardId) ?? [];
-    for (const p of pool) {
-      if (cover >= marker.owedCents) break;
-      if (p.remaining <= 0 || p.date > marker.dueDate) continue;
-      const take = Math.min(p.remaining, marker.owedCents - cover);
-      cover += take;
-      p.remaining -= take;
+  for (const [cardId, cardMarkers] of markersByCard) {
+    const pool = paymentsByCard.get(cardId) ?? [];
+    const statementMarkers = cardMarkers.filter((m) => !m.estimated);
+    const estimateMarkers = cardMarkers.filter((m) => m.estimated);
+
+    // 1. Recorded statements: explicit paydown + plain payments, earliest first.
+    for (const sm of statementMarkers) {
+      let cover = explicitPaydownCoverByKey.get(overrideKey(cardId, sm.dueDate)) ?? 0;
+      for (const p of pool) {
+        if (cover >= sm.owedCents) break;
+        if (p.remaining <= 0 || p.date > sm.dueDate) continue;
+        const take = Math.min(p.remaining, sm.owedCents - cover);
+        cover += take;
+        p.remaining -= take;
+      }
+      coverByMarker.set(sm, Math.min(cover, sm.owedCents));
     }
-    coverByMarker.set(marker, cover);
+
+    // 2. Estimated cycles share one running balance (recurringEstimate). Cash
+    // paid down against it — plain payments left after statements, plus paydowns
+    // aimed at an estimated due date — reduces every cycle on/after the cash date.
+    if (estimateMarkers.length > 0) {
+      const estBalance = estimateMarkers[0]!.owedCents;
+      const estCash: Array<{ date: string; amt: number }> = [];
+      for (const p of pool) if (p.remaining > 0) estCash.push({ date: p.date, amt: p.remaining });
+      const estDues = estimatedDuesByCard.get(cardId);
+      for (const pd of paydowns) {
+        if (pd.cardId !== cardId || pd.amountCents <= 0 || pd.date < today) continue;
+        if (estDues?.has(pd.targetDate)) estCash.push({ date: pd.date, amt: pd.amountCents });
+      }
+      for (const em of estimateMarkers) {
+        let cumulative = 0;
+        for (const c of estCash) if (c.date <= em.dueDate) cumulative += c.amt;
+        coverByMarker.set(em, Math.min(estBalance, cumulative));
+      }
+      // Plain cash beyond what the estimate can absorb credits promo chunks.
+      const plainLeftover = pool.reduce((s, p) => s + Math.max(0, p.remaining), 0);
+      prepayPoolByCard.set(
+        cardId,
+        (prepayPoolByCard.get(cardId) ?? 0) + Math.max(0, plainLeftover - estBalance),
+      );
+    } else {
+      const leftover = pool.reduce((s, p) => s + Math.max(0, p.remaining), 0);
+      if (leftover > 0) prepayPoolByCard.set(cardId, (prepayPoolByCard.get(cardId) ?? 0) + leftover);
+    }
   }
-  // Payments left over after covering all of a card's markers are surplus cash
-  // aimed past the statements/estimates → credit the card's promo chunks.
-  for (const [cardId, pool] of coverPaymentsByCard) {
+  // Cards with scheduled payments but no markers at all: their cash credits promo.
+  for (const [cardId, pool] of paymentsByCard) {
+    if (markersByCard.has(cardId)) continue;
     const leftover = pool.reduce((s, p) => s + Math.max(0, p.remaining), 0);
     if (leftover > 0) prepayPoolByCard.set(cardId, (prepayPoolByCard.get(cardId) ?? 0) + leftover);
   }

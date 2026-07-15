@@ -337,6 +337,52 @@ describe("scheduled paydowns (pays-down overrides)", () => {
   });
 });
 
+describe("running-balance estimate — a paydown carries forward to later cycles", () => {
+  // A manual card with a static balance and no statements (e.g. CareCredit):
+  // every future due is an estimate off ONE running balance, so paying it down
+  // in one cycle must reduce the later cycles too, not snap back to the balance.
+  it("a paydown clearing the balance covers this AND every later estimated cycle", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card({ currentBalanceCents: 1000_00 })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 1000_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    const june = markersOf(r).find((e) => e.date === "2026-06-10");
+    const july = markersOf(r).find((e) => e.date === "2026-07-10");
+    expect(june).toMatchObject({ paymentDueCents: 1000_00, scheduledCoverCents: 1000_00 });
+    expect(july).toMatchObject({ paymentDueCents: 1000_00, scheduledCoverCents: 1000_00 });
+    // Only the single $1000 payment leaves checking.
+    expect(cashTotal(r)).toBe(1000_00);
+  });
+
+  it("a partial paydown leaves the same remainder exposed on every later cycle", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card({ currentBalanceCents: 1000_00 })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 400_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    const june = markersOf(r).find((e) => e.date === "2026-06-10");
+    const july = markersOf(r).find((e) => e.date === "2026-07-10");
+    // $600 still exposed on both cycles (not $600 then $1000).
+    expect(june?.scheduledCoverCents).toBe(400_00);
+    expect(july?.scheduledCoverCents).toBe(400_00);
+  });
+
+  it("a plain payment paid against the balance also carries forward", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card({ currentBalanceCents: 1000_00 })],
+      cardPaymentOverrides: [override({ dueDate: "2026-05-20", amountCents: 1000_00, notes: null })],
+    });
+    expect(markersOf(r).find((e) => e.date === "2026-06-10")?.scheduledCoverCents).toBe(1000_00);
+    expect(markersOf(r).find((e) => e.date === "2026-07-10")?.scheduledCoverCents).toBe(1000_00);
+  });
+});
+
 describe("cardPaymentMoveError", () => {
   const today = "2026-06-01";
 
