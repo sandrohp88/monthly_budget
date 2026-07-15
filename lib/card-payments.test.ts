@@ -578,3 +578,69 @@ describe("projectCardPayments — a plain planned payment covers a statement mar
     expect(cashTotal(r)).toBe(30_00);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Interest Saving Balance — golden numbers from the real Chase Prime Visa
+// 07/10/26 statement: New Balance $1,220.11, four Equal Pay plans totaling
+// $496.01 remaining with $108.16 of plan payments billed this cycle, printed
+// ISB $832.26, live balance $1,555.19 four days after close.
+// ────────────────────────────────────────────────────────────────────────────
+describe("projectCardPayments — interest-saving balance on promo cards", () => {
+  const chaseShape = {
+    ...EMPTY,
+    today: "2026-07-14",
+    endDate: "2026-10-01",
+    activeCards: [card({ id: "chase", name: "Prime Visa", statementDay: 10, dueDay: 7, plaidAccountId: "acct9873" })],
+    plaidAccounts: [{ id: "acct9873", balanceCents: 1555_19 }],
+    statements: [
+      stmt({
+        id: "s-0710",
+        cardId: "chase",
+        cardName: "Prime Visa",
+        statementDate: "2026-07-10",
+        dueDate: "2026-08-07",
+        statementBalanceCents: 1220_11,
+        minimumPaymentCents: 143_16,
+      }),
+    ],
+    promos: [
+      promo({ id: "ep1", cardId: "chase", remainingAmountCents: 73_37, endDate: "2026-10-07", monthlyPaymentCents: null }),
+      promo({ id: "ep2", cardId: "chase", remainingAmountCents: 123_23, endDate: "2026-11-07", monthlyPaymentCents: 30_82 }),
+      promo({ id: "ep3", cardId: "chase", remainingAmountCents: 89_09, endDate: "2026-12-07", monthlyPaymentCents: 17_82 }),
+      promo({ id: "ep4", cardId: "chase", remainingAmountCents: 210_32, endDate: "2027-01-07", monthlyPaymentCents: 35_06 }),
+    ],
+  };
+
+  it("the statement marker owes the ISB, not the full balance", () => {
+    const r = projectCardPayments(chaseShape);
+    const marker = markersOf(r).find((e) => e.date === "2026-08-07");
+    // $832.26 exposed to interest; the other $387.85 is 0% promo principal
+    // already projected as later promo chunks.
+    expect(marker).toMatchObject({
+      amountCents: 0,
+      dueMarker: true,
+      estimated: false,
+      paymentDueCents: 832_26,
+    });
+  });
+
+  it("the open-cycle estimate is the post-close spend — promo principal is not subtracted twice", () => {
+    const r = projectCardPayments(chaseShape);
+    // live 1,555.19 − non-promo unpaid (1,220.11 − 496.01) − promo 496.01 = 335.08.
+    const est = markersOf(r).find((e) => e.estimated);
+    expect(est).toMatchObject({ paymentDueCents: 335_08 });
+    // No phantom drift: the promo principal fits inside the statement balance.
+    expect(r.promoDriftByCard["chase"]).toBeUndefined();
+  });
+
+  it("an ISB payment fully covers the statement marker", () => {
+    const r = projectCardPayments({
+      ...chaseShape,
+      cardPaymentOverrides: [
+        override({ cardId: "chase", dueDate: "2026-08-05", amountCents: 832_26 }),
+      ],
+    });
+    const marker = markersOf(r).find((e) => e.date === "2026-08-07");
+    expect(marker).toMatchObject({ paymentDueCents: 832_26, scheduledCoverCents: 832_26 });
+  });
+});

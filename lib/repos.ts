@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
-import { statementCashDueCents } from "./credit-cards";
+import { interestSavingCashDueCents, statementCashDueCents } from "./credit-cards";
 import {
   assets,
   bills,
@@ -1308,11 +1308,13 @@ export async function getStatementSettledByDraft(
  *    payment: stamp it for provenance and consume the draft WITHOUT settling
  *    anything new. This is what stops a payment whose statement was paid by
  *    another path from "settling" the next cycle.
- * 3. An UNPAID statement's cash due (statementCashDueCents — the minimum for
- *    PayPal $0-balance statements, the balance otherwise) matches within
- *    `STATEMENT_MATCH_TOLERANCE_CENTS` and the due date is within
- *    `dateRangeDays` of the payment date → mark it paid, stamp the draft, and
- *    fire the unpaid→paid promo edge exactly once (§17a).
+ * 3. An UNPAID statement's cash due — the full `statementCashDueCents` (the
+ *    minimum for PayPal $0-balance statements, the balance otherwise) OR the
+ *    card's `interestSavingCashDueCents` when active promos exist — matches
+ *    within `STATEMENT_MATCH_TOLERANCE_CENTS` and the due date is within
+ *    `dateRangeDays` of the payment date → mark it paid and stamp the draft.
+ *    (Promo balances are never mutated here — issuer reconciliation is the
+ *    only trustworthy source, §17a.)
  *
  * Returns the newly-settled statement, or null when nothing was settled
  * (consumed, accounted, or no match).
@@ -1341,12 +1343,31 @@ export async function settleStatementWithDraft(
     .orderBy(desc(creditCardStatements.statementDate))
     .all();
 
+  // A payment for the Interest Saving Balance (full balance minus 0%-promo
+  // principal plus this cycle's plan payments) settles a statement the same as
+  // a full-balance payment — it's the amount that actually avoids interest on
+  // a card with active flexible-financing promos.
+  const activePromos = await db
+    .select()
+    .from(creditCardPromos)
+    .where(
+      and(
+        eq(creditCardPromos.userId, userId),
+        eq(creditCardPromos.cardId, input.cardId),
+        eq(creditCardPromos.isActive, true),
+      ),
+    )
+    .all();
+
   const targetTime = new Date(input.date).getTime();
   const withinWindow = (s: CreditCardStatementRow) =>
     Math.abs(new Date(s.dueDate).getTime() - targetTime) / (1000 * 60 * 60 * 24) <=
     dateRangeDays;
   const amountMatches = (cents: number) =>
     Math.abs(cents - input.paymentCents) <= STATEMENT_MATCH_TOLERANCE_CENTS;
+  const matchesDue = (s: CreditCardStatementRow) =>
+    amountMatches(statementCashDueCents(s)) ||
+    amountMatches(interestSavingCashDueCents(s, activePromos));
 
   // Step 2 — already-accounted heuristic (statements are newest-first, so the
   // most recent plausible cycle wins).
@@ -1355,7 +1376,7 @@ export async function settleStatementWithDraft(
       s.paidAmountCents != null &&
       s.settledByDraftId == null &&
       withinWindow(s) &&
-      (amountMatches(s.paidAmountCents) || amountMatches(statementCashDueCents(s))),
+      (amountMatches(s.paidAmountCents) || matchesDue(s)),
   );
   if (accounted) {
     await db
@@ -1366,12 +1387,11 @@ export async function settleStatementWithDraft(
     return null;
   }
 
-  // Step 3 — settle an open statement by its cash due.
+  // Step 3 — settle an open statement by its cash due (full balance or ISB).
   const match = stmts.find((s) => {
     if (s.paidAmountCents != null) return false;
-    const dueCents = statementCashDueCents(s);
-    if (dueCents <= 0) return false;
-    return withinWindow(s) && amountMatches(dueCents);
+    if (statementCashDueCents(s) <= 0) return false;
+    return withinWindow(s) && matchesDue(s);
   });
   if (!match) return null;
 

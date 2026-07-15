@@ -2,8 +2,8 @@ import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { buildProjection } from "@/lib/projection-server";
-import { listPaychecks, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance } from "@/lib/repos";
-import { isStatementOpen, statementCashDueCents } from "@/lib/credit-cards";
+import { listPaychecks, listPromos, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance } from "@/lib/repos";
+import { interestSavingCashDueCents, isStatementOpen } from "@/lib/credit-cards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CardSubTag, PageHead } from "@/components/ui/page-head";
 import { Tile, TileGrid } from "@/components/ui/tile";
@@ -54,16 +54,27 @@ export default async function DashboardPage() {
   const driftedCardCount = Object.keys(promoDriftByCard).length;
 
   const currentMonth = todayIso().slice(0, 7);
-  const [paychecks, ccStatements, budgetUtilization, liveBalance] = await Promise.all([
+  const [paychecks, ccStatements, ccPromos, budgetUtilization, liveBalance] = await Promise.all([
     listPaychecks(userId),
     listStatementsForUser(userId),
+    listPromos(userId),
     computeCategoryUtilization(userId, currentMonth),
     getPrimaryLinkedBalance(userId),
   ]);
 
-  // Credit card "due to avoid interest" totals
+  // Credit card "due to avoid interest" totals — the Interest Saving Balance
+  // for cards with active 0% promos, the full statement cash due otherwise.
+  const promosByCard = new Map<string, typeof ccPromos>();
+  for (const p of ccPromos) {
+    const list = promosByCard.get(p.cardId) ?? [];
+    list.push(p);
+    promosByCard.set(p.cardId, list);
+  }
   const openStatements = ccStatements.filter(isStatementOpen);
-  const ccTotalDue = openStatements.reduce((s, x) => s + statementCashDueCents(x), 0);
+  const ccTotalDue = openStatements.reduce(
+    (s, x) => s + interestSavingCashDueCents(x, promosByCard.get(x.cardId) ?? []),
+    0,
+  );
   const ccNextDue =
     openStatements.length > 0
       ? [...openStatements].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0]

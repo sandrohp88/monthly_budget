@@ -4,6 +4,7 @@ import {
   listPlaidItems,
   listPlaidAccountsByItem,
   listCreditCards,
+  listPromosForCard,
   listStatements,
 } from "@/lib/repos";
 import { AccountsClient } from "./accounts-client";
@@ -28,7 +29,13 @@ export default async function AccountsPage() {
   );
 
   const cardsWithStatements = await Promise.all(
-    cards.map(async (card) => ({ card, statements: await listStatements(card.id) })),
+    cards.map(async (card) => {
+      const [statements, promos] = await Promise.all([
+        listStatements(card.id),
+        listPromosForCard(userId, card.id),
+      ]);
+      return { card, statements, promos };
+    }),
   );
 
   return (

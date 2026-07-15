@@ -24,6 +24,7 @@ import {
   updatePlaidDraft,
   deletePlaidDraft,
   listStatements,
+  listPromosForCard,
   listConsumedPaycheckDraftIds,
   listStartingBalanceDraftsInRange,
   listUnreconciledPaychecksInRange,
@@ -35,7 +36,11 @@ import {
   matchPaycheckDeposits,
   PAYCHECK_MATCH_WINDOW_DAYS,
 } from "./paycheck-reconciliation";
-import { dueDateFromStatement, isStatementOpen } from "./credit-cards";
+import {
+  dueDateFromStatement,
+  interestSavingCashDueCents,
+  isStatementOpen,
+} from "./credit-cards";
 import { detectPromoPayoffDate, plaidTransactionPromoTexts } from "./plaid-promo-parser";
 import { classifyDraftKind, looksLikeCardPayment, looksLikeReversal } from "./plaid-transaction-kind";
 import {
@@ -124,10 +129,10 @@ async function autoCreatePromoFromTransaction(input: {
 
 /**
  * Reconcile a posted card payment against the open statement it settled: mark
- * that statement paid and fire the unpaid→paid promo decrement edge (same
- * contract as the statements PATCH route and the Liabilities sync). Without
- * this, a statement the user has already paid keeps projecting as a pending
- * cash debit on its due date.
+ * that statement paid (same contract as the statements PATCH route and the
+ * Liabilities sync; promo balances are never mutated — §17a). Without this, a
+ * statement the user has already paid keeps projecting as a pending
+ * obligation on its due date.
  *
  * The payment posts on the CREDIT account, reducing the balance — a NEGATIVE
  * amount for most issuers, positive for PayPal — so we reconcile on the
@@ -139,9 +144,9 @@ async function autoCreatePromoFromTransaction(input: {
  *
  * A draft settles at most one statement, EVER — `settleStatementWithDraft`
  * owns that invariant (global consumption gate + already-accounted heuristic
- * + unpaid-only matching + the §17a promo edge), so this function is just the
- * Plaid-side guards: classification, reversal shape, and the active linked
- * card. Idempotent by construction — a re-synced or backfilled draft is
+ * + unpaid-only matching on full-balance OR interest-saving amounts), so this
+ * function is just the Plaid-side guards: classification, reversal shape, and
+ * the active linked card. Idempotent by construction — a re-synced or backfilled draft is
  * consumed and settles nothing further.
  *
  * Returns true when it settled a statement.
@@ -558,7 +563,7 @@ export async function syncPlaidTransactions(
           });
 
           // Auto-reconcile a posted card payment against the open statement it
-          // settled — marks that statement paid + decrements promos.
+          // settled — marks that statement paid (promo balances untouched).
           if (
             await reconcileCardPaymentDraft({
               userId,
@@ -659,9 +664,8 @@ export async function syncPlaidTransactions(
           // If this draft had auto-settled a statement, the payment it
           // represented no longer exists — un-settle so the statement's cash
           // due re-enters the projection instead of silently vanishing. Promo
-          // chunks decremented on the unpaid→paid edge are NOT auto-restored
-          // (§17a keeps promo mutation on that edge only) — log loudly so the
-          // user can reconcile promo balances manually.
+          // balances are never mutated by paid state (§17a) — log loudly so
+          // the user can double-check issuer reconciliation anyway.
           const settledStmt = await getStatementSettledByDraft(userId, removedTxn.transaction_id);
           if (settledStmt && settledStmt.paidAmountCents != null) {
             await updateStatement(settledStmt.id, {
@@ -820,12 +824,24 @@ export async function syncCreditCardLiabilitiesForItem(
           liab.minimum_payment_amount != null ? toCents(liab.minimum_payment_amount) : null;
         const payAmtCents = lastPayAmt != null ? toCents(lastPayAmt) : null;
 
+        // A payment covering the Interest Saving Balance (statement balance
+        // minus 0%-promo principal plus this cycle's plan payments) avoids
+        // interest without paying off the promos early — treat it as paid.
+        const activePromos = await listPromosForCard(userId, card.id);
         const looksPaid = looksLikePaid({
           lastPaymentDate: lastPayDate,
           lastPaymentCents: payAmtCents,
           statementDate: stmtDate,
           statementBalanceCents: stmtBalCents,
           minimumPaymentCents,
+          interestSavingDueCents: interestSavingCashDueCents(
+            {
+              statementBalanceCents: stmtBalCents,
+              minimumPaymentCents,
+              dueDate: resolvedDue,
+            },
+            activePromos,
+          ),
         });
 
         const upsertResult = await upsertCreditCardStatementByDate(card.id, {

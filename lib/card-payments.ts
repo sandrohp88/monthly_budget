@@ -27,9 +27,9 @@
 
 import {
   dueDateFromStatement,
+  interestSavingCashDueCents,
   nextStatementDateOnOrAfter,
   projectPromoScheduleWithBalances,
-  statementCashDueCents,
 } from "./credit-cards";
 import { addDaysIso } from "./dates";
 import { projectVariableBillCardCharges, type VariableBillWithCards } from "./variable-bills";
@@ -179,11 +179,15 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     }
   }
   const promoRemainingByCard = new Map<string, number>();
+  const promosByCard = new Map<string, CreditCardPromoRow[]>();
   for (const p of promos) {
     promoRemainingByCard.set(
       p.cardId,
       (promoRemainingByCard.get(p.cardId) ?? 0) + p.remainingAmountCents,
     );
+    const list = promosByCard.get(p.cardId) ?? [];
+    list.push(p);
+    promosByCard.set(p.cardId, list);
   }
   const liveBalanceForCard = (cardId: string): number | null => {
     const card = cardById.get(cardId);
@@ -430,10 +434,16 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     markers.push(m);
   };
 
-  // 1. Recorded statements due today or later.
+  // 1. Recorded statements due today or later. The owed amount is the
+  // Interest Saving Balance, not the full statement balance: outstanding 0%
+  // promo principal isn't exposed to interest and its future chunks are
+  // already projected as promo cash on later due dates — marking the full
+  // balance here would both overstate the interest risk and double-represent
+  // the promo principal.
   for (const s of statements) {
     if (s.dueDate < today) continue;
-    const owed = Math.max(0, statementCashDueCents(s) - (s.paidAmountCents ?? 0));
+    const isbDue = interestSavingCashDueCents(s, promosByCard.get(s.cardId) ?? []);
+    const owed = Math.max(0, isbDue - (s.paidAmountCents ?? 0));
     if (owed <= 0) continue;
     pushMarker({
       cardId: s.cardId,
@@ -452,10 +462,19 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       : card.currentBalanceCents;
     let recurringEstimate = 0;
     if (liveBalance != null && liveBalance > 0) {
-      const unpaid = unpaidByCard.get(card.id) ?? 0;
+      const unpaidRaw = unpaidByCard.get(card.id) ?? 0;
+      const promoRemainingRaw = promoRemainingByCard.get(card.id) ?? 0;
+      // A Chase-style statement balance contains the card's outstanding promo
+      // principal (§17a). Since promoRemaining is subtracted on its own below,
+      // remove it from the unpaid-statement total first — otherwise the same
+      // principal is subtracted twice and a promo-heavy card's estimate
+      // collapses to $0 with a phantom "drift". Only when the unpaid total can
+      // actually contain the principal (unpaid ≥ remaining) — a smaller total
+      // is the PayPal shape, where statements bill only the cycle's cash.
+      const unpaid =
+        unpaidRaw >= promoRemainingRaw ? unpaidRaw - promoRemainingRaw : unpaidRaw;
       // Cap the promo subtraction at the live-balance headroom so a drifted
       // promo total can't wipe the estimate to $0; record the overflow.
-      const promoRemainingRaw = promoRemainingByCard.get(card.id) ?? 0;
       const headroom = Math.max(0, liveBalance - unpaid);
       const promoRemaining = Math.min(promoRemainingRaw, headroom);
       const drift = promoRemainingRaw - promoRemaining;

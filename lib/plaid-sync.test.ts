@@ -81,6 +81,36 @@ describe("plaid-sync helpers", () => {
       expect(looksLikePaid({ ...base, lastPaymentCents: undefined })).toBe(false);
     });
 
+    it("true: a payment covering the Interest Saving Balance counts as paid", () => {
+      // Real Chase 07/10/26 shape: balance $1,220.11, printed ISB $832.26.
+      expect(
+        looksLikePaid({
+          ...base,
+          statementBalanceCents: 1220_11,
+          lastPaymentCents: 832_26,
+          interestSavingDueCents: 832_26,
+        }),
+      ).toBe(true);
+      expect(
+        looksLikePaid({
+          ...base,
+          statementBalanceCents: 1220_11,
+          lastPaymentCents: 832_25, // one cent short of the ISB
+          interestSavingDueCents: 832_26,
+        }),
+      ).toBe(false);
+    });
+
+    it("an ISB above the raw due never raises the bar", () => {
+      expect(
+        looksLikePaid({
+          ...base,
+          lastPaymentCents: 100_000,
+          interestSavingDueCents: 150_000,
+        }),
+      ).toBe(true);
+    });
+
     it("ISO date string comparison handles year boundaries (chronological)", () => {
       expect(
         looksLikePaid({

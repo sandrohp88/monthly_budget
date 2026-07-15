@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureUser, readJson, jsonError } from "@/lib/api";
-import { createCreditCard, listCreditCards, listStatements } from "@/lib/repos";
+import { createCreditCard, listCreditCards, listPromosForCard, listStatements } from "@/lib/repos";
 import { creditCardCreateSchema } from "@/lib/validation";
 
 export async function GET(req: Request) {
@@ -11,9 +11,16 @@ export async function GET(req: Request) {
   const includeArchived = url.searchParams.get("archived") === "1";
   const cards = await listCreditCards(auth.userId, includeArchived);
 
-  // Load statements for each card so the client can show current/upcoming.
+  // Load statements + active promos for each card so the client can show
+  // current/upcoming dues as the interest-saving amount.
   const withStatements = await Promise.all(
-    cards.map(async (card) => ({ card, statements: await listStatements(card.id) })),
+    cards.map(async (card) => {
+      const [statements, promos] = await Promise.all([
+        listStatements(card.id),
+        listPromosForCard(auth.userId, card.id),
+      ]);
+      return { card, statements, promos };
+    }),
   );
   return NextResponse.json({ cards: withStatements });
 }

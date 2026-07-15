@@ -39,12 +39,12 @@ import { DateLabel } from "@/components/date-label";
 import {
   cardPromoWhatIf,
   dueDateFromStatement,
+  interestSavingCashDueCents,
   previousStatementDateOnOrBefore,
   promoFullBalancePayment,
   promoMonthlyChunkAt,
   promoScheduledPayments,
   promoWhatIf,
-  statementCashDueCents,
 } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
@@ -420,15 +420,18 @@ export function StatementCreateDialog({
 
 export function StatementEditDialog({
   statement,
+  promos = [],
   onClose,
   onSaved,
 }: {
   statement: CreditCardStatementRow;
+  /** The card's promos — the default paid amount becomes the ISB when active 0% promos exist. */
+  promos?: CreditCardPromoRow[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [paidAmountCents, setPaidAmount] = React.useState<number>(
-    statement.paidAmountCents ?? statementCashDueCents(statement),
+    statement.paidAmountCents ?? interestSavingCashDueCents(statement, promos),
   );
   const [paidDate, setPaidDate] = React.useState<string>(statement.paidDate ?? todayIso());
   const [statementBalanceCents, setBalance] = React.useState(statement.statementBalanceCents);

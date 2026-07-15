@@ -40,6 +40,11 @@ export function toCents(plaidAmount: number): number {
  * When Plaid reports a $0 statement balance with a non-zero minimum payment
  * (PayPal special financing), the minimum payment is the amount to test.
  *
+ * When the card carries active 0% promos, `interestSavingDueCents` (computed
+ * by the caller via `interestSavingCashDueCents`) lowers the bar: paying the
+ * Interest Saving Balance avoids interest without prematurely clearing the
+ * promo principal, so it counts as paid.
+ *
  * String comparison on ISO YYYY-MM-DD is chronologically correct.
  */
 export function looksLikePaid(args: {
@@ -48,6 +53,7 @@ export function looksLikePaid(args: {
   statementDate: string;
   statementBalanceCents: number;
   minimumPaymentCents?: number | null;
+  interestSavingDueCents?: number | null;
 }): boolean {
   const {
     lastPaymentDate,
@@ -55,8 +61,12 @@ export function looksLikePaid(args: {
     statementDate,
     statementBalanceCents,
     minimumPaymentCents,
+    interestSavingDueCents,
   } = args;
-  const dueCents = statementBalanceCents > 0 ? statementBalanceCents : (minimumPaymentCents ?? 0);
+  const rawDueCents =
+    statementBalanceCents > 0 ? statementBalanceCents : (minimumPaymentCents ?? 0);
+  const dueCents =
+    interestSavingDueCents != null ? Math.min(rawDueCents, interestSavingDueCents) : rawDueCents;
   return (
     lastPaymentDate != null &&
     lastPaymentCents != null &&
