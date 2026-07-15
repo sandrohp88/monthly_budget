@@ -80,6 +80,12 @@ export type OneTimeExpense = {
   paymentDueCents?: number;
   paymentBalanceCents?: number;
   isPaid?: boolean;
+  /** See ProjectionEvent.dueMarker — a zero-cash credit-card due-date marker. */
+  dueMarker?: boolean;
+  /** For a due marker: cash the user has scheduled toward this cycle's balance. */
+  scheduledCoverCents?: number;
+  /** For a due marker: the owed amount is an estimate, not a recorded statement. */
+  estimated?: boolean;
   /**
    * When the starting balance comes from a live bank account, cash movements
    * before today are already reflected in that balance. Extras before this
@@ -116,6 +122,18 @@ export type ProjectionEvent = {
   chargedToCardName?: string;
   /** Set on scheduled card paydowns: the due date this payment reduces. */
   paydownTargetDate?: string;
+  /**
+   * A credit-card due-date MARKER: informational, zero cash. The app no longer
+   * assumes you pay a card's full statement on its due date — the due date is
+   * shown (colored by how much of it you've scheduled a payment for) and warns
+   * that an uncovered balance will accrue interest, but it never debits cash.
+   * Only payments you actually schedule move the running balance.
+   */
+  dueMarker?: boolean;
+  /** For a due marker: cash the user has scheduled toward this cycle's balance. */
+  scheduledCoverCents?: number;
+  /** For a due marker: the owed amount is an estimate, not a recorded statement. */
+  estimated?: boolean;
 };
 
 export type ProjectionRow = {
@@ -292,6 +310,9 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
       isPaid: e.isPaid,
       chargedToCardName: e.chargedToCardName,
       paydownTargetDate: e.paydownTargetDate,
+      dueMarker: e.dueMarker,
+      scheduledCoverCents: e.scheduledCoverCents,
+      estimated: e.estimated,
     });
   }
 

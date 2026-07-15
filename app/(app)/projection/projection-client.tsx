@@ -316,7 +316,13 @@ export function ProjectionClient({
         if (adjustment.dueDate !== originalDate && adjustment.dueDate !== plannedDate) {
           await deleteOverride(adjustment, adjustment.dueDate);
         }
-      } else if (amountCents === adjustment.originalAmountCents) {
+      } else if (
+        adjustment.targetType === "bill" &&
+        amountCents === adjustment.originalAmountCents
+      ) {
+        // A bill still defaults to being paid in full, so matching that amount
+        // means "reset to normal" → drop the override. Card due dates are NOT
+        // force-paid, so scheduling their full balance must WRITE an override.
         await deleteOverride(adjustment, adjustment.dueDate);
         if (adjustment.relatedDate && adjustment.relatedDate !== adjustment.dueDate) {
           await deleteOverride(adjustment, adjustment.relatedDate);
@@ -328,7 +334,9 @@ export function ProjectionClient({
         }
       }
       toast.success(
-        amountCents === adjustment.originalAmountCents && !movedCardPayment
+        adjustment.targetType === "bill" &&
+          amountCents === adjustment.originalAmountCents &&
+          !movedCardPayment
           ? "Planned payment reset"
           : "Planned payment updated",
       );
@@ -1171,6 +1179,61 @@ function ProjectionEventItem({
           </span>
         </div>
         <span className="mt-0.5 block text-[12px] text-[var(--text-3)]">Reconciled payment</span>
+      </div>
+    );
+  }
+
+  // A credit-card due-date marker: informational, zero cash. Show the balance
+  // owed and how much is covered by scheduled payments; warn about interest on
+  // the rest. Clicking opens the payment planner to schedule cash toward it.
+  if (event.dueMarker) {
+    const owed = event.paymentDueCents ?? 0;
+    const cover = Math.min(event.scheduledCoverCents ?? 0, owed);
+    const remaining = Math.max(0, owed - cover);
+    return (
+      <div key={`${event.sourceId}-${row.date}-${eventIndex}`} className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <SoftPill tone={remaining === 0 ? "income" : cover > 0 ? "warning" : "danger"}>
+            {event.estimated ? "Est. due" : "Statement due"}
+          </SoftPill>
+          <button
+            type="button"
+            onClick={() =>
+              onAdjustPayment({
+                targetType: "creditCardPayment",
+                targetId: event.sourceId!,
+                targetName: event.label,
+                dueDate: row.date,
+                relatedDate: event.relatedDate,
+                amountCents: remaining,
+                originalAmountCents: owed,
+                paymentDueCents: remaining,
+                paymentBalanceCents: event.paymentBalanceCents,
+                promoSummaries: promoSummariesByCard[event.sourceId!] ?? [],
+              })
+            }
+            className="min-w-0 truncate rounded-full px-1.5 py-1 text-left text-[14px] font-medium text-[var(--text-0)] transition-colors hover:bg-[var(--bg-2)]"
+          >
+            {event.label}
+          </button>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--text-3)]">
+          <span>
+            Balance <Money cents={owed} />
+          </span>
+          {cover > 0 ? (
+            <span className="text-[var(--phosphor)]">
+              Scheduled <Money cents={cover} />
+            </span>
+          ) : null}
+          {remaining > 0 ? (
+            <span className="text-[var(--red)]">
+              Interest risk <Money cents={remaining} />
+            </span>
+          ) : (
+            <span className="text-[var(--phosphor)]">Covered — no interest</span>
+          )}
+        </div>
       </div>
     );
   }

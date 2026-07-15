@@ -129,17 +129,20 @@ describe("buildProjection promo statement reconciliation", () => {
     expect(
       row?.events.some((event) => event.label === "PayPal promo (deferred-interest purchase)"),
     ).toBe(false);
+    // The statement is a zero-cash due marker (the app no longer force-pays it).
     expect(row?.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          label: "PayPal payment",
-          amountCents: 125_00,
+          label: "PayPal",
+          amountCents: 0,
+          dueMarker: true,
+          paymentDueCents: 125_00,
         }),
       ]),
     );
   });
 
-  it("projects only the unpaid portion of a partially-paid statement", async () => {
+  it("marks the unpaid portion of a partially-paid statement as the due balance", async () => {
     const user = await makeUser();
     const card = await createCreditCard(user.id, {
       name: "Partial Card",
@@ -161,16 +164,17 @@ describe("buildProjection promo statement reconciliation", () => {
     const projection = await buildProjection(user.id);
     const event = projection?.rows
       .find((r) => r.date === "2026-06-10")
-      ?.events.find((e) => e.label === "Partial Card payment");
+      ?.events.find((e) => e.label === "Partial Card" && e.dueMarker);
 
     expect(event).toMatchObject({
-      amountCents: 150_00,
-      originalAmountCents: 150_00,
+      amountCents: 0,
+      dueMarker: true,
+      estimated: false,
       paymentDueCents: 150_00,
     });
   });
 
-  it("projects a Plaid minimum payment when PayPal reports a zero statement balance", async () => {
+  it("marks a Plaid minimum payment as the due balance when PayPal reports a zero statement balance", async () => {
     const user = await makeUser();
     const card = await createCreditCard(user.id, {
       name: "PayPal",
@@ -193,17 +197,17 @@ describe("buildProjection promo statement reconciliation", () => {
     const projection = await buildProjection(user.id);
     const event = projection?.rows
       .find((r) => r.date === "2026-06-10")
-      ?.events.find((e) => e.label === "PayPal payment");
+      ?.events.find((e) => e.label === "PayPal" && e.dueMarker);
 
     expect(event).toMatchObject({
-      amountCents: 35_00,
-      originalAmountCents: 35_00,
+      amountCents: 0,
+      dueMarker: true,
       paymentDueCents: 35_00,
       paymentBalanceCents: 900_00,
     });
   });
 
-  it("uses the full statement balance when Plaid also returns a lower minimum payment", async () => {
+  it("uses the full statement balance as the due when Plaid also returns a lower minimum payment", async () => {
     const user = await makeUser();
     const card = await createCreditCard(user.id, {
       name: "Rewards Card",
@@ -226,11 +230,11 @@ describe("buildProjection promo statement reconciliation", () => {
     const projection = await buildProjection(user.id);
     const event = projection?.rows
       .find((r) => r.date === "2026-06-10")
-      ?.events.find((e) => e.label === "Rewards Card payment");
+      ?.events.find((e) => e.label === "Rewards Card" && e.dueMarker);
 
     expect(event).toMatchObject({
-      amountCents: 200_00,
-      originalAmountCents: 200_00,
+      amountCents: 0,
+      dueMarker: true,
       paymentDueCents: 200_00,
     });
   });
@@ -267,11 +271,14 @@ describe("buildProjection promo statement reconciliation", () => {
     const row = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-06-10");
 
     expect(row?.events.some((event) => event.label === "PayPal promo (deferred-interest purchase)")).toBe(false);
+    // The statement due date shows as a zero-cash marker, not a forced payment.
     expect(row?.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          label: "PayPal payment",
-          amountCents: 125_00,
+          label: "PayPal",
+          amountCents: 0,
+          dueMarker: true,
+          paymentDueCents: 125_00,
         }),
       ]),
     );
@@ -326,16 +333,16 @@ describe("buildProjection promo statement reconciliation", () => {
       notes: null,
     });
 
-    const projection = await buildProjection(user.id);
-    const event = projection?.rows
-      .find((r) => r.date === "2026-06-10")
-      ?.events.find((e) => e.label === "PayPal payment");
-
-    expect(event).toMatchObject({
-      amountCents: 300_00,
-      originalAmountCents: 125_00,
+    const row = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-06-10");
+    // The scheduled payment (300) is the cash out; the statement due (125) is a
+    // covered marker. A payment above the due is allowed (covering pending spend).
+    const paid = row?.events.find((e) => e.label === "PayPal planned payment");
+    expect(paid).toMatchObject({ amountCents: 300_00 });
+    const marker = row?.events.find((e) => e.label === "PayPal" && e.dueMarker);
+    expect(marker).toMatchObject({
+      amountCents: 0,
       paymentDueCents: 125_00,
-      paymentBalanceCents: 1_000_00,
+      scheduledCoverCents: 125_00,
     });
   });
 
@@ -367,12 +374,14 @@ describe("buildProjection promo statement reconciliation", () => {
     });
 
     const row = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-05-07");
-    const events = row?.events.filter((event) => event.label === "Shifted Statement Card payment");
+    const events = row?.events.filter(
+      (event) => event.label === "Shifted Statement Card" && event.dueMarker,
+    );
 
     expect(events).toHaveLength(1);
     expect(events?.[0]).toMatchObject({
-      amountCents: 122_29,
-      originalAmountCents: 122_29,
+      amountCents: 0,
+      dueMarker: true,
       paymentDueCents: 122_29,
     });
   });
@@ -401,15 +410,23 @@ describe("buildProjection open-cycle estimate", () => {
     });
 
     const row = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-06-10");
-    // Statement is authoritative; no separate "(est)" event double-counting.
-    expect(row?.events.some((e) => e.label === "Estimate Card next payment (est)")).toBe(false);
-    const cardExpense = (row?.events ?? [])
+    // Statement is authoritative; the marker on that date is the recorded
+    // statement (not estimated), and there's no separate estimate double-count.
+    const markers = (row?.events ?? []).filter((e) => e.sourceId === card.id && e.dueMarker);
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({
+      amountCents: 0,
+      estimated: false,
+      paymentDueCents: 200_00,
+    });
+    // Zero cash leaves checking for a due marker.
+    const cardCash = (row?.events ?? [])
       .filter((e) => e.sourceId === card.id)
       .reduce((sum, e) => sum + e.amountCents, 0);
-    expect(cardExpense).toBe(200_00);
+    expect(cardCash).toBe(0);
   });
 
-  it("still estimates the open cycle for a card with a balance but no recorded statement", async () => {
+  it("still estimates the open cycle as a marker for a card with a balance but no recorded statement", async () => {
     const user = await makeUser();
     await createCreditCard(user.id, {
       name: "No Statement Card",
@@ -422,8 +439,8 @@ describe("buildProjection open-cycle estimate", () => {
 
     const est = ((await buildProjection(user.id))?.rows ?? [])
       .flatMap((r) => r.events)
-      .find((e) => e.label === "No Statement Card next payment (est)");
-    expect(est?.amountCents).toBe(300_00);
+      .find((e) => e.label === "No Statement Card (est.)" && e.dueMarker);
+    expect(est).toMatchObject({ amountCents: 0, estimated: true, paymentDueCents: 300_00 });
   });
 });
 
