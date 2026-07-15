@@ -70,7 +70,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
     // The server releases the auto-reconcile draft link when a row is
     // un-marked received — mirror that locally so the AUTO pill drops
     // immediately instead of waiting for a reload.
-    if (patch.actualReceived === false) patch = { ...patch, settledByDraftId: null };
+    if (patch.actualReceived === false) patch = { ...patch, settledByDraftId: null, actualDate: null };
     setItems((curr) => curr.map((p) => (p.id === row.id ? { ...p, ...patch } : p)));
     try {
       const res = await fetch(`/api/paychecks/${row.id}`, {
@@ -298,7 +298,12 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
                     return (
                       <TableRow key={p.id}>
                         <TableCell className="font-semibold text-[var(--text-0)]">
-                          <DateLabel iso={p.payDate} format="short" />
+                          <DateLabel iso={p.actualDate ?? p.payDate} format="short" />
+                          {p.actualDate && p.actualDate !== p.payDate ? (
+                            <div className="text-[10px] font-normal text-[var(--text-2)]">
+                              sched <DateLabel iso={p.payDate} format="short" />
+                            </div>
+                          ) : null}
                         </TableCell>
                         <TableCell className="text-right">
                           <Money cents={p.amountCents} />

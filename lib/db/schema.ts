@@ -61,6 +61,15 @@ export const paychecks = sqliteTable(
     actualReceived: integer("actual_received", { mode: "boolean" }).notNull().default(false),
     actualAmountCents: integer("actual_amount_cents"),
     /**
+     * ISO YYYY-MM-DD the deposit actually posted, when known — set from the
+     * settling draft's date by settlePaycheckWithDraft. Payroll posts a day or
+     * two off the scheduled payDate (early on holidays, late on weekends), so
+     * the reconciliation ledger shows this real receipt date rather than the
+     * schedule. Null for manually-marked rows (no deposit to date them by) and
+     * cleared when the row is un-marked received.
+     */
+    actualDate: text("actual_date"),
+    /**
      * Plaid transaction_id of the deposit draft that auto-reconciled this
      * paycheck as received, if any. Null on manually-reconciled rows. Once
      * set, that draft can never settle a DIFFERENT paycheck — mirror of

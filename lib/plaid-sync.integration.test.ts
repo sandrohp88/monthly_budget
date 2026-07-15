@@ -1112,6 +1112,7 @@ describe("syncPlaidTransactions paycheck reconciliation", () => {
     expect(settled.actualReceived).toBe(true);
     expect(settled.actualAmountCents).toBe(1950_00);
     expect(settled.settledByDraftId).toBe("dep_1");
+    expect(settled.actualDate).toBe(TODAY);
     // Planned amount is untouched — only the actual is recorded.
     expect(settled.amountCents).toBe(2000_00);
 
@@ -1127,6 +1128,39 @@ describe("syncPlaidTransactions paycheck reconciliation", () => {
     const third = await syncPlaidTransactions(user.id, item.id);
     expect(third.paychecksReconciled).toBe(0);
     expect((await getPaycheck(user.id, paycheck.id))!.actualAmountCents).toBe(1960_00);
+  });
+
+  it("dates the paycheck by the deposit's posting date, not the scheduled payDate", async () => {
+    // Payroll landed two days ahead of schedule (early before a weekend). The
+    // reconciliation ledger must reflect when the money actually posted, so the
+    // settling draft's date is persisted as actualDate rather than payDate.
+    const user = await makeUser();
+    const { item } = await seedCheckingAccount(user.id);
+    const postedEarly = addDaysIso(TODAY, -2);
+    const paycheck = await createPaycheck(user.id, {
+      payDate: TODAY,
+      amountCents: 2000_00,
+      note: null,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [depositTxn({ date: postedEarly })],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.paychecksReconciled).toBe(1);
+
+    const settled = (await getPaycheck(user.id, paycheck.id))!;
+    expect(settled.actualDate).toBe(postedEarly);
+    expect(settled.actualDate).not.toBe(paycheck.payDate);
   });
 
   it("never overwrites a manually reconciled paycheck", async () => {
