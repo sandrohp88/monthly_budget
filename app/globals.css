@@ -605,4 +605,21 @@
   table.stack-table td:empty {
     display: none;
   }
+
+  /* A Card that wraps a stacked table dissolves on mobile: the row-cards
+     stand alone instead of nesting a border inside another border. The
+     card header stays as a plain section heading above the row-cards. */
+  .ui-card:has(table.stack-table) {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .ui-card:has(table.stack-table) > .ui-card-header {
+    border-bottom: 0;
+    padding: 0 0.25rem 0.625rem;
+  }
+  .ui-card:has(table.stack-table) table.stack-table tr:last-child {
+    margin-bottom: 0;
+  }
 }
