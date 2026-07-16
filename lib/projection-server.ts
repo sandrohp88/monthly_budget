@@ -296,12 +296,13 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   // they never move the balance, and turning a past-dated one into a "paid"
   // marker would wrongly imply the statement was settled.
   //
-  // USER-SCHEDULED cash (calendar planned payments / paydowns) pivots at
-  // `today`, not the lookback pivot: the live balance reflects a plan only
-  // once the payment actually posts, so a plan dated TODAY must stay a live,
-  // movable, cash-debiting event — not a phantom "settled" marker. Once the
-  // date passes, reality (posted drafts in the live balance) carries the
-  // effect and the plan settles like everything else.
+  // USER-SCHEDULED cash (calendar planned payments / paydowns, one-time
+  // expenses) pivots at `today`, not the lookback pivot: the live balance
+  // reflects a plan only once the payment actually posts, so a plan dated
+  // TODAY must stay a live, movable, cash-debiting event — not a phantom
+  // "settled" marker. Once the date passes, reality (posted drafts in the
+  // live balance) carries the effect and the plan settles like everything
+  // else.
   const decorateScheduledExtra = <T extends OneTimeExpense>(e: T): T =>
     lookback && !e.dueMarker
       ? {
@@ -369,13 +370,16 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
       ...extras
         .filter((e) => onOrAfterStart(e.date))
         .filter((e) => e.paidViaCardId == null || !activeCardIds.has(e.paidViaCardId))
-        .map((e) => ({
-          date: e.date,
-          description: e.description,
-          amountCents: e.amountCents,
-          settledBeforeDate: settleBefore,
-          showSettledBeforeDate: lookback,
-        })),
+        .map((e) =>
+          decorateScheduledExtra({
+            date: e.date,
+            description: e.description,
+            amountCents: e.amountCents,
+            settledBeforeDate: settleBefore,
+            showSettledBeforeDate: lookback,
+            userScheduled: true,
+          }),
+        ),
       // Card-charged one-time expenses: zero-cash markers (see cardChargedBills).
       ...extras
         .filter((e) => onOrAfterStart(e.date))

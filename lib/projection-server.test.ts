@@ -24,6 +24,7 @@ import { buildProjection } from "./projection-server";
 import {
   createBill,
   createCreditCard,
+  createExtra,
   createPlaidItem,
   createPromo,
   createStatement,
@@ -655,6 +656,60 @@ describe("buildProjection linked starting balance", () => {
       amountCents: 0,
       isPaid: true,
       originalAmountCents: 212_00, // the planned amount, for display (PR #93)
+    });
+    expect(may2?.expenseCents).toBe(0);
+  });
+
+  it("a one-time expense dated TODAY stays live in lookback mode (not phantom-settled)", async () => {
+    // Same defect as the planned card payment above (PR #94), one row over:
+    // a one-time expense is a user PLAN, so the live balance reflects it only
+    // once it actually posts. Settling it at the lookback pivot (tomorrow)
+    // turned a today-dated expense into a phantom "paid" marker that no
+    // longer debited the projection and couldn't be edited or rescheduled.
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 500_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-05-01" });
+    await createExtra(user.id, {
+      date: "2026-05-04", // mocked today
+      description: "Car registration",
+      amountCents: 187_00,
+      category: "Auto",
+      paidViaCardId: null,
+      notes: null,
+      isActive: true,
+    });
+
+    const today = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-05-04");
+    const expense = today?.events.find((e) => e.label === "Car registration");
+    // Live cash debit: pending (not isPaid), full amount, moves the balance.
+    expect(expense).toMatchObject({ amountCents: 187_00 });
+    expect(expense?.isPaid).toBeFalsy();
+    expect(today?.expenseCents).toBe(187_00);
+  });
+
+  it("a one-time expense dated in the PAST settles as a paid marker in lookback mode", async () => {
+    // Once the date passes, reality (posted drafts inside the live balance)
+    // carries the effect — the stale expense renders as a paid marker showing
+    // the planned amount, and stops debiting the projection.
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 500_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-05-01" });
+    await createExtra(user.id, {
+      date: "2026-05-02", // before mocked today
+      description: "Car registration",
+      amountCents: 187_00,
+      category: "Auto",
+      paidViaCardId: null,
+      notes: null,
+      isActive: true,
+    });
+
+    const may2 = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-05-02");
+    const expense = may2?.events.find((e) => e.label === "Car registration");
+    expect(expense).toMatchObject({
+      amountCents: 0,
+      isPaid: true,
+      originalAmountCents: 187_00, // the planned amount, for display
     });
     expect(may2?.expenseCents).toBe(0);
   });
