@@ -25,6 +25,7 @@ export const metadata: Metadata = {
     "mobile-web-app-capable": "yes",
     "apple-mobile-web-app-capable": "yes",
     "apple-mobile-web-app-status-bar-style": "black-translucent",
+    "apple-mobile-web-app-title": "Budget",
   },
 };
 
@@ -47,7 +48,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     >
       <head>
         <link rel="icon" href="/icons/bluefalls-mark.svg" type="image/svg+xml" />
-        <link rel="apple-touch-icon" href="/icons/bluefalls-mark.svg" />
+        {/* iOS ignores SVG here — must be an opaque PNG or the home-screen
+            icon falls back to a page screenshot */}
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
       </head>
       <body className="min-h-screen antialiased">
         <ThemeProvider>{children}</ThemeProvider>
