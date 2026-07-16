@@ -10,7 +10,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CardSubTag } from "@/components/ui/page-head";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { PlaidAccountRow, CreditCardRow } from "@/lib/db/schema";
@@ -88,16 +87,15 @@ export function PlaidLinkCardDialog({
       <DialogContent>
         <form onSubmit={submit}>
           <DialogHeader>
-            <CardSubTag>LINK_CARD</CardSubTag>
-            <DialogTitle>LINK CREDIT CARD</DialogTitle>
+            <DialogTitle>Link credit card</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
             <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2 text-[11px]">
-              <div className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-                PLAID ACCOUNT
+              <div className="text-2xs text-[var(--text-3)]">
+                Plaid account
               </div>
-              <div className="font-semibold uppercase tracking-[0.08em] text-[var(--text-0)]">
+              <div className="font-semibold text-[var(--text-0)]">
                 {account.name}
                 {account.mask ? (
                   <span className="ml-2 text-[var(--text-3)]">****{account.mask}</span>
@@ -112,7 +110,7 @@ export function PlaidLinkCardDialog({
                 onClick={() => setMode("existing")}
                 disabled={unlinkedCards.length === 0}
                 className={[
-                  "px-3 py-1.5 text-[10px] uppercase tracking-[0.15em] border-b-2 -mb-px transition-colors",
+                  "px-3 py-1.5 text-2xs border-b-2 -mb-px transition-colors",
                   mode === "existing"
                     ? "border-[var(--mint)] text-[var(--mint)]"
                     : "border-transparent text-[var(--text-2)] hover:text-[var(--text-1)]",
@@ -121,13 +119,13 @@ export function PlaidLinkCardDialog({
                   .filter(Boolean)
                   .join(" ")}
               >
-                LINK EXISTING
+                Link existing
               </button>
               <button
                 type="button"
                 onClick={() => setMode("new")}
                 className={[
-                  "px-3 py-1.5 text-[10px] uppercase tracking-[0.15em] border-b-2 -mb-px transition-colors",
+                  "px-3 py-1.5 text-2xs border-b-2 -mb-px transition-colors",
                   mode === "new"
                     ? "border-[var(--mint)] text-[var(--mint)]"
                     : "border-transparent text-[var(--text-2)] hover:text-[var(--text-1)]",
@@ -135,15 +133,15 @@ export function PlaidLinkCardDialog({
                   .filter(Boolean)
                   .join(" ")}
               >
-                CREATE NEW
+                Create new
               </button>
             </div>
 
             {mode === "existing" ? (
               <div className="space-y-2">
-                <Label>SELECT CARD</Label>
+                <Label>Select card</Label>
                 {unlinkedCards.length === 0 ? (
-                  <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                  <div className="text-2xs text-[var(--text-3)]">
                     No unlinked manual cards available.
                   </div>
                 ) : (
@@ -151,7 +149,7 @@ export function PlaidLinkCardDialog({
                     id="link-card-select"
                     value={selectedCardId}
                     onChange={(e) => setSelectedCardId(e.target.value)}
-                    className="w-full rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2 text-[12px] uppercase tracking-[0.08em] text-[var(--text-0)] focus:border-[var(--mint)] focus:outline-none"
+                    className="w-full rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2 text-[12px] text-[var(--text-0)] focus:border-[var(--mint)] focus:outline-none"
                   >
                     {unlinkedCards.map((c) => (
                       <option key={c.id} value={c.id}>
@@ -160,14 +158,14 @@ export function PlaidLinkCardDialog({
                     ))}
                   </select>
                 )}
-                <p className="text-[10px] tracking-wide text-[var(--text-3)]">
+                <p className="text-2xs tracking-wide text-[var(--text-3)]">
                   Cycle days + most recent statement will be pulled from Plaid
                   immediately.
                 </p>
               </div>
             ) : (
               <div className="space-y-2">
-                <Label htmlFor="link-card-new-name">CARD NAME</Label>
+                <Label htmlFor="link-card-new-name">Card name</Label>
                 <Input
                   id="link-card-new-name"
                   value={newName}
@@ -176,7 +174,7 @@ export function PlaidLinkCardDialog({
                   maxLength={80}
                   autoFocus
                 />
-                <p className="text-[10px] tracking-wide text-[var(--text-3)]">
+                <p className="text-2xs tracking-wide text-[var(--text-3)]">
                   A new credit card will be created and linked. Cycle days are
                   populated from Plaid Liabilities right away.
                 </p>
@@ -186,7 +184,7 @@ export function PlaidLinkCardDialog({
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-              CANCEL
+              Cancel
             </Button>
             <Button
               id="link-card-submit"
@@ -198,7 +196,7 @@ export function PlaidLinkCardDialog({
                 (mode === "new" && newName.trim().length === 0)
               }
             >
-              {saving ? "LINKING…" : "LINK"}
+              {saving ? "Linking…" : "LINK"}
             </Button>
           </DialogFooter>
         </form>

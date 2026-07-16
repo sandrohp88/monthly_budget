@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   CalendarDays,
@@ -17,6 +16,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { NavItem } from "@/components/ui/nav-item";
 import { Sparkline } from "@/components/ui/sparkline";
 import { Money } from "@/components/money";
 
@@ -97,33 +97,22 @@ export function Sidebar({
     .join("")
     .toUpperCase();
 
-  const renderItem = (item: (typeof NAV)[number]) => {
-    const Icon = item.icon;
-    const active = pathname === item.href;
-    return (
-      <Link
-        key={item.href}
-        href={item.href}
-        className={cn(
-          "mx-3 flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] font-medium",
-          "border border-transparent transition-all",
-          active
-            ? "border-[var(--border-raw)] bg-[var(--bg-card)] text-[var(--mint)] shadow-[var(--shadow-sm)]"
-            : "text-[var(--text-1)] hover:bg-[var(--bg-2)] hover:text-[var(--text-0)]",
-        )}
-      >
-        <Icon className="h-4 w-4" />
-        <span className="flex-1">{item.label}</span>
-        <kbd className="text-[11px] tracking-normal text-[var(--text-3)]">g {item.shortcut}</kbd>
-      </Link>
-    );
-  };
+  const renderItem = (item: (typeof NAV)[number]) => (
+    <NavItem
+      key={item.href}
+      href={item.href}
+      icon={item.icon}
+      label={item.label}
+      active={pathname === item.href}
+      shortcut={item.shortcut}
+    />
+  );
 
   return (
     <aside className="relative hidden w-60 shrink-0 flex-col border-r border-[var(--border-raw)] bg-[var(--bg-0)] md:flex">
       <div className="flex items-center gap-3 border-b border-[var(--border-raw)] px-5 py-4">
         <span
-          className="block h-9 w-9 rounded-[8px] bg-cover bg-center"
+          className="block h-9 w-9 rounded-md bg-cover bg-center"
           style={{
             backgroundImage: "url('/icons/bluefalls-mark.svg')",
             boxShadow: "0 10px 24px rgba(80, 214, 201, 0.2)",

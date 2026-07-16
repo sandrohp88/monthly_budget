@@ -25,7 +25,7 @@ export function CategoryTrendChart({
 
   if (data.length === 0 || categories.length === 0) {
     return (
-      <div className="py-8 text-center text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+      <div className="py-8 text-center text-2xs text-[var(--text-3)]">
         No data to display
       </div>
     );
@@ -59,7 +59,7 @@ export function CategoryTrendChart({
               borderRadius: 0,
               fontSize: 10,
             }}
-            labelStyle={{ color: "var(--text-1)", fontWeight: 700, textTransform: "uppercase" }}
+            labelStyle={{ color: "var(--text-1)", fontWeight: 700, textTransform: "" }}
             formatter={(value: number, name: string) => [formatCents(value, currency), name]}
           />
           {categories.map((cat) => (

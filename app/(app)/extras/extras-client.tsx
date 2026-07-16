@@ -5,7 +5,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { CardSubTag, PageHead } from "@/components/ui/page-head";
+import { PageHead } from "@/components/ui/page-head";
 import {
   Dialog,
   DialogContent,
@@ -36,8 +36,8 @@ import type { CreditCardRow, OneTimeExpenseRow } from "@/lib/db/schema";
 type FilterKey = "30" | "60" | "90" | "all";
 
 const MONTH_NAMES = [
-  "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-  "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 function formatMonthKey(key: string): string {
@@ -124,12 +124,11 @@ export function ExtrasClient({
   return (
     <div className="space-y-6 fade-in">
       <PageHead
-        module="MODULE_04"
-        title="ONE-TIME"
+        title="One-time"
         subtitle="Planned non-recurring expenses · grouped by month"
         actions={
           <Button variant="primary" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-3 w-3" /> ADD EXPENSE
+            <Plus className="h-3 w-3" /> Add expense
           </Button>
         }
       />
@@ -145,7 +144,7 @@ export function ExtrasClient({
           NEXT 90D
         </Tab>
         <Tab active={filter === "all"} onClick={() => setFilter("all")}>
-          ALL · {items.length}
+          All · {items.length}
         </Tab>
       </div>
 
@@ -156,24 +155,24 @@ export function ExtrasClient({
           delta={`${visible.length} expense${visible.length === 1 ? "" : "s"}`}
         />
         <Tile
-          label="LARGEST"
+          label="Largest"
           value={largest ? <Money cents={largest.amountCents} /> : <span className="text-[var(--text-2)] text-base">—</span>}
           delta={largest ? `${largest.description} · ${largest.date.slice(5, 7)}/${largest.date.slice(8)}` : "no expenses"}
         />
-        <Tile label="CATEGORIES" value={categoryCount} delta="distinct" />
+        <Tile label="Categories" value={categoryCount} delta="distinct" />
       </TileGrid>
 
       {grouped.length === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>NO UPCOMING EXPENSES</CardTitle>
+            <CardTitle>No upcoming expenses</CardTitle>
           </CardHeader>
           <div className="px-4 py-8 text-center">
             <p className="mb-4 text-[11px] tracking-wide text-[var(--text-2)]">
               Add a one-time expense to plan around it.
             </p>
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-3 w-3" /> ADD EXPENSE
+              <Plus className="h-3 w-3" /> Add expense
             </Button>
           </div>
         </Card>
@@ -181,19 +180,18 @@ export function ExtrasClient({
         <Card>
           <CardHeader>
             <div>
-              <CardSubTag>TABLE_EXTRA</CardSubTag>
-              <CardTitle className="mt-0.5">PLANNED — GROUPED BY MONTH</CardTitle>
+              <CardTitle className="mt-0.5">PLANNED — Grouped by month</CardTitle>
             </div>
           </CardHeader>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>DATE</TableHead>
-                <TableHead>DESCRIPTION</TableHead>
-                <TableHead>CATEGORY</TableHead>
-                <TableHead>PAID WITH</TableHead>
-                <TableHead className="text-right">AMOUNT</TableHead>
-                <TableHead>NOTES</TableHead>
+                <TableHead>Date</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Category</TableHead>
+                <TableHead>Paid with</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Notes</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -201,8 +199,8 @@ export function ExtrasClient({
               {grouped.map((g) => (
                 <React.Fragment key={g.month}>
                   <tr className="border-y border-[var(--border-2)] bg-[var(--bg-1)]">
-                    <td colSpan={7} className="px-4 py-2.5 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--mint)]">
-                      {`// ${formatMonthKey(g.month)} — ${g.rows.length} EXPENSE${g.rows.length === 1 ? "" : "S"} — `}
+                    <td colSpan={7} className="px-4 py-2.5 text-2xs font-bold text-[var(--mint)]">
+                      {`// ${formatMonthKey(g.month)} — ${g.rows.length} EXPENSE${g.rows.length === 1 ? "" : "s"} — `}
                       <Money cents={g.total} />
                     </td>
                   </tr>
@@ -239,8 +237,8 @@ export function ExtrasClient({
             </TableBody>
             <TableFooter>
               <TableRow>
-                <TableCell colSpan={4} className="text-[var(--text-0)] uppercase tracking-[0.15em]">
-                  TOTAL · {visible.length} EXPENSE{visible.length === 1 ? "" : "S"}
+                <TableCell colSpan={4} className="text-[var(--text-0)]">
+                  Total · {visible.length} expense{visible.length === 1 ? "" : "s"}
                 </TableCell>
                 <TableCell className="text-right text-[var(--mint)]">
                   <Money cents={totalCents} />
@@ -255,8 +253,7 @@ export function ExtrasClient({
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <CardSubTag>NEW_EXPENSE</CardSubTag>
-            <DialogTitle>ADD EXPENSE</DialogTitle>
+            <DialogTitle>Add expense</DialogTitle>
           </DialogHeader>
           <CreateExtraForm
             categories={categoriesState}
@@ -287,7 +284,7 @@ function Tab({
     <button
       onClick={onClick}
       className={cn(
-        "rounded-sm border px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.15em] transition-colors cursor-pointer font-mono",
+        "rounded-sm border px-3 py-1.5 text-2xs font-medium transition-colors cursor-pointer",
         active
           ? "bg-[var(--mint-glow)] text-[var(--mint)] border-[var(--mint-dim)]"
           : "bg-[var(--bg-2)] text-[var(--text-2)] border-[var(--border-raw)] hover:text-[var(--text-0)] hover:border-[var(--border-2)]",
@@ -353,7 +350,7 @@ function CreateExtraForm({
     >
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
-          <Label htmlFor="date">DATE</Label>
+          <Label htmlFor="date">Date</Label>
           <Input id="date" type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
         </div>
         <div className="space-y-1.5">
@@ -361,7 +358,7 @@ function CreateExtraForm({
           <MoneyInput id="amount" valueCents={amountCents} onChangeCents={setAmountCents} />
         </div>
         <div className="col-span-2 space-y-1.5">
-          <Label htmlFor="description">DESCRIPTION</Label>
+          <Label htmlFor="description">Description</Label>
           <Input
             id="description"
             required
@@ -371,13 +368,13 @@ function CreateExtraForm({
         </div>
         <div className="col-span-2 space-y-1.5">
           <Label className="flex items-center justify-between">
-            <span>CATEGORY</span>
+            <span>Category</span>
             <button
               type="button"
               onClick={() => setCategoryDialogOpen(true)}
-              className="inline-flex items-center gap-1 normal-case tracking-normal text-[10px] text-[var(--mint)] hover:text-[var(--mint-bright)] cursor-pointer"
+              className="inline-flex items-center gap-1 normal-case tracking-normal text-2xs text-[var(--mint)] hover:text-[var(--mint-bright)] cursor-pointer"
             >
-              <PlusIcon className="h-3 w-3" /> ADD NEW
+              <PlusIcon className="h-3 w-3" /> Add new
             </button>
           </Label>
           <Select value={category} onValueChange={setCategory}>
@@ -394,13 +391,13 @@ function CreateExtraForm({
           </Select>
         </div>
         <div className="col-span-2 space-y-1.5">
-          <Label>PAID WITH</Label>
+          <Label>Paid with</Label>
           <Select value={paidViaCardId} onValueChange={setPaidViaCardId}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="cash">CASH / BANK</SelectItem>
+              <SelectItem value="cash">Cash / bank</SelectItem>
               {creditCards.map((card) => (
                 <SelectItem key={card.id} value={card.id}>
                   {card.name}
@@ -410,16 +407,16 @@ function CreateExtraForm({
           </Select>
         </div>
         <div className="col-span-2 space-y-1.5">
-          <Label htmlFor="notes">NOTES</Label>
+          <Label htmlFor="notes">Notes</Label>
           <Input id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </div>
       </div>
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
-          CANCEL
+          Cancel
         </Button>
         <Button type="submit" variant="primary" disabled={submitting || !description.trim()}>
-          {submitting ? "SAVING…" : "SAVE"}
+          {submitting ? "Saving…" : "Save"}
         </Button>
       </DialogFooter>
 

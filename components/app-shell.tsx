@@ -7,6 +7,7 @@ import { Sidebar, type SidebarSummary } from "@/components/sidebar";
 import { MobileNav } from "@/components/mobile-nav";
 import { MobileTabBar } from "@/components/mobile-tab-bar";
 import { Toaster } from "sonner";
+import { ConfirmHost } from "@/components/ui/confirm-dialog";
 import { CurrencyProvider } from "@/components/currency-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UtcClock } from "@/components/utc-clock";
@@ -91,6 +92,7 @@ export function AppShell({
         </div>
         <MobileTabBar />
       </div>
+      <ConfirmHost />
       <Toaster
         position="top-right"
         toastOptions={{
@@ -98,7 +100,7 @@ export function AppShell({
             background: "var(--bg-1)",
             color: "var(--text-0)",
             border: "1px solid var(--border-2)",
-            borderRadius: "14px",
+            borderRadius: "var(--radius-lg)",
             boxShadow: "var(--shadow-md)",
             fontFamily: "var(--font-ui)",
             fontSize: "13px",

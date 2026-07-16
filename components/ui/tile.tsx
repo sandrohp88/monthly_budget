@@ -28,7 +28,7 @@ export function Tile({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-[12px] border border-[var(--border-raw)] bg-[var(--bg-card)] shadow-[var(--shadow-sm)] transition-colors hover:border-[var(--border-2)]",
+        "relative overflow-hidden rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] shadow-[var(--shadow-sm)] transition-colors hover:border-[var(--border-2)]",
         compact ? "px-3.5 py-3" : "px-5 py-4",
         className,
       )}

@@ -11,9 +11,9 @@ import { cn } from "@/lib/cn";
 type TabKey = "TRENDS" | "YTD" | "CATEGORIES";
 
 const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
-  { key: "TRENDS", label: "CATEGORY TRENDS" },
-  { key: "YTD", label: "YTD SUMMARY" },
-  { key: "CATEGORIES", label: "BY CATEGORY" },
+  { key: "TRENDS", label: "Category trends" },
+  { key: "YTD", label: "YTD summary" },
+  { key: "CATEGORIES", label: "By category" },
 ];
 
 type CategoryInfo = { name: string; color: string };
@@ -99,7 +99,7 @@ export function ReportsClient({
             type="button"
             onClick={() => setTab(t.key)}
             className={cn(
-              "px-4 py-2.5 text-[10px] uppercase tracking-[0.15em] font-semibold transition-colors",
+              "px-4 py-2.5 text-2xs font-semibold transition-colors",
               tab === t.key
                 ? "text-[var(--cyan)] border-b-2 border-[var(--cyan)]"
                 : "text-[var(--text-2)] hover:text-[var(--text-0)]",
@@ -115,16 +115,15 @@ export function ReportsClient({
         <Card>
           <CardHeader>
             <div>
-              <CardSubTag>CHART_02</CardSubTag>
-              <CardTitle className="mt-0.5">6-MONTH CATEGORY SPEND</CardTitle>
+              <CardTitle className="mt-0.5">6-month category spend</CardTitle>
             </div>
-            <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
+            <div className="text-2xs text-[var(--text-2)]">
               {trendMonths[0]} – {trendMonths[trendMonths.length - 1]}
             </div>
           </CardHeader>
           <CardContent>
             {expenseCategories.length === 0 ? (
-              <div className="py-8 text-center text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+              <div className="py-8 text-center text-2xs text-[var(--text-3)]">
                 No expense categories defined
               </div>
             ) : (
@@ -142,24 +141,24 @@ export function ReportsClient({
         <div className="space-y-5">
           <TileGrid cols={4}>
             <Tile
-              label="YTD INCOME"
+              label="YTD income"
               value={<Money cents={ytdIncomeCents} />}
               variant="mint"
               delta={`avg ${formatDollars(avgMonthlyIncome)}/mo`}
             />
             <Tile
-              label="YTD EXPENSES"
+              label="YTD expenses"
               value={<Money cents={ytdExpenseCents} />}
               delta={`avg ${formatDollars(avgMonthlyExpense)}/mo`}
             />
             <Tile
-              label="YTD NET"
+              label="YTD net"
               value={<Money cents={netYtd} />}
               variant={netYtd > 0 ? "mint" : "red"}
               delta={`${currentYear} · ${ytdMonthsElapsed} months`}
             />
             <Tile
-              label="NET WORTH"
+              label="Net worth"
               value={<Money cents={netWorth.netWorthCents} />}
               variant={netWorth.netWorthCents >= 0 ? "mint" : "red"}
               delta={`assets ${formatDollars(netWorth.assetsCents)} · debt ${formatDollars(netWorth.creditCardDebtCents + netWorth.promoDebtCents)}`}
@@ -169,14 +168,13 @@ export function ReportsClient({
           <Card>
             <CardHeader>
               <div>
-                <CardSubTag>COMPARE_01</CardSubTag>
-                <CardTitle className="mt-0.5">INCOME vs EXPENSE</CardTitle>
+                <CardTitle className="mt-0.5">Income vs expense</CardTitle>
               </div>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                <BarCompare label="INCOME" cents={ytdIncomeCents} max={Math.max(ytdIncomeCents, ytdExpenseCents)} color="var(--cyan)" />
-                <BarCompare label="EXPENSE" cents={ytdExpenseCents} max={Math.max(ytdIncomeCents, ytdExpenseCents)} color="var(--red)" />
+                <BarCompare label="Income" cents={ytdIncomeCents} max={Math.max(ytdIncomeCents, ytdExpenseCents)} color="var(--cyan)" />
+                <BarCompare label="Expense" cents={ytdExpenseCents} max={Math.max(ytdIncomeCents, ytdExpenseCents)} color="var(--red)" />
               </div>
             </CardContent>
           </Card>
@@ -184,8 +182,7 @@ export function ReportsClient({
           <Card>
             <CardHeader>
               <div>
-                <CardSubTag>NET_WORTH</CardSubTag>
-                <CardTitle className="mt-0.5">NET WORTH BREAKDOWN</CardTitle>
+                <CardTitle className="mt-0.5">Net worth breakdown</CardTitle>
               </div>
               <div className="tabular text-[15px] font-bold" style={{ color: netWorth.netWorthCents >= 0 ? "var(--cyan)" : "var(--red)" }}>
                 <Money cents={netWorth.netWorthCents} />
@@ -193,11 +190,11 @@ export function ReportsClient({
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                <BarCompare label="ASSETS" cents={netWorth.assetsCents} max={Math.max(netWorth.assetsCents, netWorth.depositoryBalanceCents, netWorth.creditCardDebtCents + netWorth.promoDebtCents)} color="var(--cyan)" />
-                <BarCompare label="BANK DEPOSITS" cents={netWorth.depositoryBalanceCents} max={Math.max(netWorth.assetsCents, netWorth.depositoryBalanceCents, netWorth.creditCardDebtCents + netWorth.promoDebtCents)} color="var(--phosphor)" />
-                <BarCompare label="CREDIT CARD DEBT" cents={netWorth.creditCardDebtCents} max={Math.max(netWorth.assetsCents, netWorth.depositoryBalanceCents, netWorth.creditCardDebtCents + netWorth.promoDebtCents)} color="var(--red)" />
+                <BarCompare label="Assets" cents={netWorth.assetsCents} max={Math.max(netWorth.assetsCents, netWorth.depositoryBalanceCents, netWorth.creditCardDebtCents + netWorth.promoDebtCents)} color="var(--cyan)" />
+                <BarCompare label="Bank deposits" cents={netWorth.depositoryBalanceCents} max={Math.max(netWorth.assetsCents, netWorth.depositoryBalanceCents, netWorth.creditCardDebtCents + netWorth.promoDebtCents)} color="var(--phosphor)" />
+                <BarCompare label="Credit card debt" cents={netWorth.creditCardDebtCents} max={Math.max(netWorth.assetsCents, netWorth.depositoryBalanceCents, netWorth.creditCardDebtCents + netWorth.promoDebtCents)} color="var(--red)" />
                 {netWorth.promoDebtCents > 0 && (
-                  <BarCompare label="PROMO BALANCES" cents={netWorth.promoDebtCents} max={Math.max(netWorth.assetsCents, netWorth.depositoryBalanceCents, netWorth.creditCardDebtCents + netWorth.promoDebtCents)} color="var(--amber)" />
+                  <BarCompare label="Promo balances" cents={netWorth.promoDebtCents} max={Math.max(netWorth.assetsCents, netWorth.depositoryBalanceCents, netWorth.creditCardDebtCents + netWorth.promoDebtCents)} color="var(--amber)" />
                 )}
               </div>
             </CardContent>
@@ -211,22 +208,21 @@ export function ReportsClient({
           <Card>
             <CardHeader>
               <div>
-                <CardSubTag>FILTER_01</CardSubTag>
-                <CardTitle className="mt-0.5">CATEGORY QUERY</CardTitle>
+                <CardTitle className="mt-0.5">Category query</CardTitle>
               </div>
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap items-end gap-4">
                 <div>
-                  <label className="mb-1 block text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    CATEGORY
+                  <label className="mb-1 block text-2xs text-[var(--text-3)]">
+                    Category
                   </label>
                   <select
                     value={selectedCategory}
                     onChange={(e) => setSelectedCategory(e.target.value)}
-                    className="h-8 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 text-[11px] text-[var(--text-0)] uppercase tracking-[0.08em] focus:border-[var(--cyan)] focus:outline-none"
+                    className="h-8 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 text-[11px] text-[var(--text-0)] focus:border-[var(--cyan)] focus:outline-none"
                   >
-                    <option value="all">ALL CATEGORIES</option>
+                    <option value="all">All categories</option>
                     {expenseCategories.map((c) => (
                       <option key={c.name} value={c.name}>
                         {c.name}
@@ -235,8 +231,8 @@ export function ReportsClient({
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1 block text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    FROM
+                  <label className="mb-1 block text-2xs text-[var(--text-3)]">
+                    From
                   </label>
                   <input
                     type="date"
@@ -246,8 +242,8 @@ export function ReportsClient({
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    TO
+                  <label className="mb-1 block text-2xs text-[var(--text-3)]">
+                    To
                   </label>
                   <input
                     type="date"
@@ -265,8 +261,8 @@ export function ReportsClient({
             <Card>
               <CardHeader>
                 <div>
-                  <CardSubTag>RECURRING</CardSubTag>
-                  <CardTitle className="mt-0.5">MONTHLY RECURRING</CardTitle>
+                  <CardSubTag>Recurring</CardSubTag>
+                  <CardTitle className="mt-0.5">Monthly recurring</CardTitle>
                 </div>
                 <div className="tabular text-[11px] font-bold text-[var(--text-0)]">
                   <Money cents={filteredMonthlyBillTotal} />/mo
@@ -278,7 +274,7 @@ export function ReportsClient({
                     key={b.name}
                     className="flex items-center justify-between px-5 py-2.5"
                   >
-                    <span className="text-[11px] uppercase tracking-[0.08em] text-[var(--text-1)]">
+                    <span className="text-[11px] text-[var(--text-1)]">
                       {b.name}
                     </span>
                     <span className="tabular text-[11px] text-[var(--text-0)]">
@@ -294,15 +290,14 @@ export function ReportsClient({
           <Card>
             <CardHeader>
               <div>
-                <CardSubTag>TABLE_02</CardSubTag>
-                <CardTitle className="mt-0.5">ONE-TIME EXPENSES</CardTitle>
+                <CardTitle className="mt-0.5">One-time expenses</CardTitle>
               </div>
-              <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
+              <div className="text-2xs text-[var(--text-2)]">
                 {filteredExpenses.length} items · <Money cents={filteredExpenses.reduce((s, e) => s + e.amountCents, 0)} />
               </div>
             </CardHeader>
             {filteredExpenses.length === 0 ? (
-              <div className="px-5 py-6 text-center text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+              <div className="px-5 py-6 text-center text-2xs text-[var(--text-3)]">
                 No expenses match the current filter
               </div>
             ) : (
@@ -316,7 +311,7 @@ export function ReportsClient({
                       <div className="truncate text-[11px] text-[var(--text-0)]">
                         {e.description}
                       </div>
-                      <div className="mt-0.5 text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                      <div className="mt-0.5 text-2xs text-[var(--text-3)]">
                         {e.date} · {e.category}
                       </div>
                     </div>
@@ -333,8 +328,8 @@ export function ReportsClient({
           <Card>
             <CardHeader>
               <div>
-                <CardSubTag>TOTALS</CardSubTag>
-                <CardTitle className="mt-0.5">ANNUALIZED BY CATEGORY</CardTitle>
+                <CardSubTag>Totals</CardSubTag>
+                <CardTitle className="mt-0.5">Annualized by category</CardTitle>
               </div>
             </CardHeader>
             <div className="divide-y divide-[var(--border-raw)]">
@@ -351,7 +346,7 @@ export function ReportsClient({
                         className="inline-block h-2 w-2 rounded-full"
                         style={{ backgroundColor: c.color }}
                       />
-                      <span className="text-[11px] uppercase tracking-[0.08em] text-[var(--text-1)]">
+                      <span className="text-[11px] text-[var(--text-1)]">
                         {c.name}
                       </span>
                     </div>
@@ -383,7 +378,7 @@ function BarCompare({
   return (
     <div>
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+        <span className="text-2xs text-[var(--text-2)]">
           {label}
         </span>
         <span className="tabular text-[11px] font-bold" style={{ color }}>

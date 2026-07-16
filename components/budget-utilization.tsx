@@ -26,11 +26,11 @@ export function BudgetUtilization({
                   className="inline-block h-2 w-2 rounded-full"
                   style={{ backgroundColor: r.color }}
                 />
-                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-1)]">
+                <span className="text-2xs font-semibold text-[var(--text-1)]">
                   {r.category}
                 </span>
               </div>
-              <div className="flex items-center gap-2 tabular text-[10px] tracking-[0.08em]">
+              <div className="flex items-center gap-2 tabular text-2xs">
                 <span className={cn(over ? "text-[var(--red)]" : "text-[var(--text-1)]")}>
                   <Money cents={r.spentCents} />
                 </span>

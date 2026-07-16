@@ -19,6 +19,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -109,7 +110,7 @@ export function CardDetailClient({
   const refresh = () => router.refresh();
 
   const archiveCard = async () => {
-    if (!confirm("Archive this card? Statement history is kept.")) return;
+    if (!(await confirmDialog({ title: "Archive this card?", description: "Statement history is kept.", confirmText: "Archive" }))) return;
     const res = await fetch(`/api/credit-cards/${card.id}`, { method: "DELETE" });
     if (!res.ok) {
       toast.error("Archive failed");
@@ -169,7 +170,7 @@ export function CardDetailClient({
         href="/credit-cards"
         className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--text-3)] transition-colors hover:text-[var(--text-1)]"
       >
-        <ArrowLeft className="h-3.5 w-3.5" /> CREDIT CARDS
+        <ArrowLeft className="h-3.5 w-3.5" /> Credit cards
       </Link>
 
       {/* ── hero: the card + identity + balance + actions ─────────────────── */}
@@ -187,12 +188,12 @@ export function CardDetailClient({
             <h1 className="text-[26px] font-extrabold leading-tight text-[var(--text-0)] md:text-[30px]">
               {name}
             </h1>
-            {!card.isActive ? <StatusPill variant="off">ARCHIVED</StatusPill> : null}
-            {card.plaidAccountId ? <StatusPill>LINKED</StatusPill> : null}
+            {!card.isActive ? <StatusPill variant="off">Archived</StatusPill> : null}
+            {card.plaidAccountId ? <StatusPill>Linked</StatusPill> : null}
           </div>
           <div className="mt-1.5 text-[13px] text-[var(--text-2)]">
             {digits ? (
-              <span className="mr-2 tracking-[0.12em] tabular">•••• {digits}</span>
+              <span className="mr-2 tabular">•••• {digits}</span>
             ) : null}
             {statementCycleLabel(card)} · Due day {card.dueDay}
             {card.autoPay ? " · Autopay" : ""}
@@ -201,7 +202,7 @@ export function CardDetailClient({
           <div className="mt-5 flex flex-wrap items-end gap-x-10 gap-y-4">
             <div>
               <div className="mb-1 text-[12px] font-medium text-[var(--text-2)]">
-                CURRENT BALANCE
+                Current balance
               </div>
               <div className="text-[32px] font-bold leading-none tracking-tight tabular text-[var(--text-0)]">
                 {card.plaidAccountId == null ? (
@@ -220,7 +221,7 @@ export function CardDetailClient({
             {promoRemainingCents > 0 ? (
               <div>
                 <div className="mb-1 text-[12px] font-medium text-[var(--text-2)]">
-                  PROMO BALANCE
+                  Promo balance
                 </div>
                 <div className="text-[20px] font-bold leading-none tabular text-[var(--cyan)]">
                   <Money cents={promoRemainingCents} />
@@ -231,14 +232,14 @@ export function CardDetailClient({
 
           <div className="mt-6 flex flex-wrap gap-2">
             <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
-              EDIT CARD
+              Edit card
             </Button>
             <Button size="sm" variant="outline" onClick={() => setStatementOpen(true)}>
-              <FileText className="h-3 w-3" /> ENTER STATEMENT
+              <FileText className="h-3 w-3" /> Enter statement
             </Button>
             {card.isActive ? (
               <Button size="sm" variant="ghost" onClick={archiveCard} title="Archive card">
-                <Trash2 className="h-3 w-3" /> ARCHIVE
+                <Trash2 className="h-3 w-3" /> Archive
               </Button>
             ) : null}
           </div>
@@ -252,7 +253,7 @@ export function CardDetailClient({
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
                 <div className="mb-1 text-[12px] font-medium text-[var(--text-2)]">
-                  DUE TO AVOID INTEREST
+                  Due to avoid interest
                 </div>
                 <div className="text-[14px] text-[var(--text-2)]">
                   No statement yet — next expected{" "}
@@ -262,29 +263,29 @@ export function CardDetailClient({
                 </div>
               </div>
               <Button variant="primary" onClick={() => setStatementOpen(true)}>
-                <FileText className="h-3 w-3" /> ENTER STATEMENT
+                <FileText className="h-3 w-3" /> Enter statement
               </Button>
             </div>
           ) : (
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
                 <div className="mb-1 flex items-center gap-2 text-[12px] font-medium text-[var(--text-2)]">
-                  {isOpen ? "DUE TO AVOID INTEREST" : "LAST PAID"}
+                  {isOpen ? "Due to avoid interest" : "Last paid"}
                   {isOpen ? (
                     days != null && days < 0 ? (
                       <StatusPill variant="danger">{`${Math.abs(days)}D OVERDUE`}</StatusPill>
                     ) : days != null && days <= 7 ? (
-                      <StatusPill variant="warn">{`DUE IN ${days}D`}</StatusPill>
+                      <StatusPill variant="warn">{`Due in ${days}D`}</StatusPill>
                     ) : (
-                      <StatusPill>{`DUE IN ${days}D`}</StatusPill>
+                      <StatusPill>{`Due in ${days}D`}</StatusPill>
                     )
                   ) : safe ? (
                     <StatusPill>
                       <CheckCircle2 className="mr-1 inline h-3 w-3 -mt-px" />
-                      ON TIME
+                      On time
                     </StatusPill>
                   ) : (
-                    <StatusPill variant="warn">PAID LATE</StatusPill>
+                    <StatusPill variant="warn">Paid late</StatusPill>
                   )}
                 </div>
                 <div
@@ -320,11 +321,11 @@ export function CardDetailClient({
               </div>
               {isOpen ? (
                 <Button variant="primary" onClick={() => setEditStatement(current)}>
-                  MARK PAID
+                  Mark paid
                 </Button>
               ) : (
                 <Button variant="outline" onClick={() => setStatementOpen(true)}>
-                  <FileText className="h-3 w-3" /> NEW STATEMENT
+                  <FileText className="h-3 w-3" /> New statement
                 </Button>
               )}
             </div>
@@ -402,14 +403,14 @@ export function CardDetailClient({
               </CardDescription>
             </div>
             <Button size="sm" variant="outline" onClick={() => setStatementOpen(true)}>
-              <Plus className="h-3 w-3" /> NEW
+              <Plus className="h-3 w-3" /> New
             </Button>
           </CardHeader>
           <CardContent className="pt-2">
             {hasSummary ? (
               <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <SummaryStat
-                  label="LAST STMT"
+                  label="Last stmt"
                   cents={summary.lastClosedCents}
                   sub={
                     summary.lastClosedDate ? (
@@ -441,10 +442,10 @@ export function CardDetailClient({
                 <table className="w-full text-[12px] tabular">
                   <thead>
                     <tr className="border-b border-[var(--border-raw)] text-left text-[11px] font-medium text-[var(--text-3)]">
-                      <th className="py-1.5 pr-2 font-medium">CLOSED</th>
-                      <th className="py-1.5 pr-2 text-right font-medium">BALANCE</th>
-                      <th className="py-1.5 pr-2 font-medium">DUE</th>
-                      <th className="py-1.5 text-right font-medium">STATUS</th>
+                      <th className="py-1.5 pr-2 font-medium">Closed</th>
+                      <th className="py-1.5 pr-2 text-right font-medium">Balance</th>
+                      <th className="py-1.5 pr-2 font-medium">Due</th>
+                      <th className="py-1.5 text-right font-medium">Status</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -473,12 +474,12 @@ export function CardDetailClient({
                                   s.dueDate < today ? "text-[var(--red)]" : "text-[var(--amber)]",
                                 )}
                               >
-                                {s.dueDate < today ? "OVERDUE" : "UNPAID"}
+                                {s.dueDate < today ? "Overdue" : "Unpaid"}
                               </span>
                             ) : ok ? (
-                              <span className="font-semibold text-[var(--mint)]">PAID</span>
+                              <span className="font-semibold text-[var(--mint)]">Paid</span>
                             ) : (
-                              <span className="font-semibold text-[var(--amber)]">LATE</span>
+                              <span className="font-semibold text-[var(--amber)]">Late</span>
                             )}
                           </td>
                         </tr>
@@ -518,10 +519,10 @@ export function CardDetailClient({
                 onClick={() => setReconcileOpen(true)}
                 title="Reconcile from a pasted issuer promo list (PayPal page or Chase statement table)"
               >
-                <ClipboardPaste className="h-3 w-3" /> RECONCILE
+                <ClipboardPaste className="h-3 w-3" /> Reconcile
               </Button>
               <Button size="sm" variant="outline" onClick={() => setCreatePromoOpen(true)}>
-                <Plus className="h-3 w-3" /> ADD
+                <Plus className="h-3 w-3" /> Add
               </Button>
             </div>
           </CardHeader>
@@ -536,12 +537,12 @@ export function CardDetailClient({
                   <span className="text-[20px] font-bold tabular text-[var(--text-0)]">
                     <Money cents={promoRemainingCents} />
                   </span>
-                  <span className="text-[11px] font-medium text-[var(--text-3)]">REMAINING</span>
+                  <span className="text-[11px] font-medium text-[var(--text-3)]">Remaining</span>
                 </div>
 
                 {scheduledCardPaymentCents > 0 ? (
-                  <div className="mb-3 rounded-[10px] border border-[var(--cyan)]/40 bg-[var(--cyan)]/5 px-3 py-2.5 text-[11px] leading-relaxed text-[var(--text-2)]">
-                    <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--cyan)]">
+                  <div className="mb-3 rounded-md border border-[var(--cyan)]/40 bg-[var(--cyan)]/5 px-3 py-2.5 text-[11px] leading-relaxed text-[var(--text-2)]">
+                    <div className="mb-1 flex items-center gap-1.5 text-2xs font-semibold text-[var(--cyan)]">
                       <CalendarDays className="h-3 w-3" /> Scheduled on calendar
                     </div>
                     <span className="font-semibold tabular text-[var(--text-0)]">
@@ -590,7 +591,7 @@ export function CardDetailClient({
                     return (
                       <li
                         key={p.id}
-                        className="flex items-center justify-between gap-2 rounded-[10px] border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2"
+                        className="flex items-center justify-between gap-2 rounded-md border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2"
                       >
                         <button
                           type="button"
@@ -600,8 +601,8 @@ export function CardDetailClient({
                           <div className="flex items-center gap-1.5 truncate text-[13px] text-[var(--text-0)]">
                             <span className="truncate">{p.description}</span>
                             {hasManualSchedule ? (
-                              <span className="shrink-0 rounded-full border border-[var(--cyan)] px-1.5 py-[1px] text-[9px] font-bold tracking-wide text-[var(--cyan)]">
-                                PLAN
+                              <span className="shrink-0 rounded-full border border-[var(--cyan)] px-1.5 py-[1px] text-2xs font-bold tracking-wide text-[var(--cyan)]">
+                                Plan
                               </span>
                             ) : null}
                           </div>
@@ -649,7 +650,7 @@ export function CardDetailClient({
                     className="mt-3"
                     onClick={() => setWhatIfAll(true)}
                   >
-                    <Scale className="h-3 w-3" /> COMPARE PAY ALL VS SCHEDULE
+                    <Scale className="h-3 w-3" /> Compare pay all vs schedule
                   </Button>
                 ) : null}
               </>
@@ -779,7 +780,7 @@ function ActualVsEstimate({
         : "text-[var(--text-2)]";
   return (
     <div className="mt-3 flex items-center justify-between border-t border-[var(--border-raw)] pt-2.5 text-[11px] font-medium text-[var(--text-3)]">
-      <span>VS CURRENT STATEMENT</span>
+      <span>vs current statement</span>
       <span className={cn("tabular", tone)}>
         {delta >= 0 ? "+" : "−"}
         <Money cents={Math.abs(delta)} />
@@ -798,14 +799,14 @@ function SummaryStat({
   sub: React.ReactNode;
 }) {
   return (
-    <div className="rounded-[10px] border border-[var(--border-raw)] bg-[var(--bg-1)] px-2.5 py-2">
-      <div className="mb-0.5 text-[10px] font-medium tracking-wide text-[var(--text-3)]">
+    <div className="rounded-md border border-[var(--border-raw)] bg-[var(--bg-1)] px-2.5 py-2">
+      <div className="mb-0.5 text-2xs font-medium tracking-wide text-[var(--text-3)]">
         {label}
       </div>
       <div className="text-[14px] font-bold leading-none tabular text-[var(--text-0)]">
         {cents == null ? <span className="text-[var(--text-3)]">—</span> : <Money cents={cents} />}
       </div>
-      <div className="mt-1 text-[10px] text-[var(--text-3)]">{sub}</div>
+      <div className="mt-1 text-2xs text-[var(--text-3)]">{sub}</div>
     </div>
   );
 }

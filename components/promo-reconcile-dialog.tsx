@@ -3,7 +3,6 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { CardSubTag } from "@/components/ui/page-head";
 import {
   Dialog,
   DialogContent,
@@ -29,8 +28,8 @@ import {
 type Source = "paypal_promo_list" | "chase_flex_plan_list";
 
 const SOURCE_LABEL: Record<Source, string> = {
-  paypal_promo_list: "PAYPAL LIST",
-  chase_flex_plan_list: "CHASE FLEX PLANS",
+  paypal_promo_list: "PayPal list",
+  chase_flex_plan_list: "Chase Flex plans",
 };
 
 /**
@@ -132,14 +131,13 @@ export function PromoReconcileDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <CardSubTag>{`${card.name.toUpperCase()} // RECONCILE_PROMOS`}</CardSubTag>
-          <DialogTitle>RECONCILE FROM ISSUER LIST</DialogTitle>
+          <DialogTitle>Reconcile from issuer list</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label htmlFor="promo-list-text">
-              PASTE THE ISSUER&apos;S PROMO SECTION (PAYPAL PAGE OR CHASE STATEMENT TABLE)
+              Paste the issuer&apos;S Promo section (Paypal page or chase statement table)
             </Label>
             <textarea
               id="promo-list-text"
@@ -149,10 +147,10 @@ export function PromoReconcileDialog({
               placeholder={
                 "Equal Pay Promo $146.75 $73.37 10/07/2026 ---- ---- ---- $24.46\n…or…\nWhisker City\n$391.02\nNo interest if paid in full by Sep 21, 2026"
               }
-              className="w-full rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2 font-mono text-[12px] text-[var(--text-0)] outline-none focus:border-[var(--mint)]"
+              className="w-full rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2 text-[12px] text-[var(--text-0)] outline-none focus:border-[var(--mint)]"
             />
             <div className="flex items-center justify-between">
-              <p className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+              <p className="text-2xs text-[var(--text-3)]">
                 Copy the whole promo section — balances, dates, and plan payments per entry
               </p>
               {text.trim() ? (
@@ -164,7 +162,7 @@ export function PromoReconcileDialog({
                     )
                   }
                   title="Wrong format detected? Click to switch"
-                  className="shrink-0 rounded-sm border border-[var(--border-raw)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--cyan)] hover:border-[var(--cyan)]"
+                  className="shrink-0 rounded-sm border border-[var(--border-raw)] px-1.5 py-0.5 text-2xs font-semibold text-[var(--cyan)] hover:border-[var(--cyan)]"
                 >
                   {SOURCE_LABEL[source]}
                   {sourceOverride == null ? " (AUTO)" : ""}
@@ -186,7 +184,7 @@ export function PromoReconcileDialog({
             <div className="space-y-2 text-[12px]">
               {plan.updates.length > 0 ? (
                 <div>
-                  <div className="mb-1 text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  <div className="mb-1 text-2xs text-[var(--text-3)]">
                     {"// UPDATE"} ({plan.updates.length})
                   </div>
                   {plan.updates.map(({ promoId, row }) => {
@@ -221,7 +219,7 @@ export function PromoReconcileDialog({
 
               {plan.creates.length > 0 ? (
                 <div>
-                  <div className="mb-1 text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  <div className="mb-1 text-2xs text-[var(--text-3)]">
                     {"// CREATE"} ({plan.creates.length})
                   </div>
                   {plan.creates.map((row, i) => (
@@ -240,8 +238,8 @@ export function PromoReconcileDialog({
 
               {plan.archives.length > 0 ? (
                 <div>
-                  <div className="mb-1 text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    {"// NOT IN LIST"} ({plan.archives.length})
+                  <div className="mb-1 text-2xs text-[var(--text-3)]">
+                    {"// Not in list"} ({plan.archives.length})
                   </div>
                   {plan.archives.map((a) => (
                     <div
@@ -251,13 +249,13 @@ export function PromoReconcileDialog({
                       <span className="min-w-0 truncate text-[var(--text-2)] line-through">
                         {a.description}
                       </span>
-                      <span className="shrink-0 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                      <span className="shrink-0 text-2xs text-[var(--text-3)]">
                         {archiveMissing ? "will archive (paid off)" : "kept as-is"}
                       </span>
                     </div>
                   ))}
                   <label className="mt-2 flex cursor-pointer items-center justify-between">
-                    <Label>ARCHIVE PROMOS MISSING FROM THE LIST</Label>
+                    <Label>Archive promos missing from the list</Label>
                     <Switch checked={archiveMissing} onCheckedChange={setArchiveMissing} />
                   </label>
                 </div>
@@ -268,14 +266,14 @@ export function PromoReconcileDialog({
 
         <div className="flex justify-end gap-2 pt-3">
           <Button variant="outline" onClick={onClose} disabled={applying}>
-            CANCEL
+            Cancel
           </Button>
           <Button
             variant="primary"
             onClick={apply}
             disabled={applying || rows.length === 0}
           >
-            {applying ? "APPLYING…" : `APPLY ${rows.length} ROW${rows.length === 1 ? "" : "S"}`}
+            {applying ? "Applying…" : `APPLY ${rows.length} ROW${rows.length === 1 ? "" : "S"}`}
           </Button>
         </div>
       </DialogContent>

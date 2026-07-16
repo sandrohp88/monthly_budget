@@ -35,12 +35,12 @@ const CASH_OPTION = "__cash__";
 const CUSTOM_PRESET = "custom";
 
 const INTERVAL_PRESETS: ReadonlyArray<{ value: string; months: number; label: string }> = [
-  { value: "1", months: 1, label: "MONTHLY" },
-  { value: "2", months: 2, label: "EVERY 2 MONTHS" },
-  { value: "3", months: 3, label: "QUARTERLY (3 MO)" },
-  { value: "6", months: 6, label: "EVERY 6 MONTHS" },
-  { value: "12", months: 12, label: "ANNUAL" },
-  { value: CUSTOM_PRESET, months: 0, label: "CUSTOM…" },
+  { value: "1", months: 1, label: "Monthly" },
+  { value: "2", months: 2, label: "Every 2 months" },
+  { value: "3", months: 3, label: "Quarterly (3 mo)" },
+  { value: "6", months: 6, label: "Every 6 months" },
+  { value: "12", months: 12, label: "Annual" },
+  { value: CUSTOM_PRESET, months: 0, label: "Custom…" },
 ];
 
 function presetForMonths(m: number): string {
@@ -126,24 +126,24 @@ export function BillForm({
         });
       }}
     >
-      <div className="grid grid-cols-2 gap-4">
-        <div className="col-span-2 space-y-1.5">
-          <Label htmlFor="name">NAME</Label>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label htmlFor="name">Name</Label>
           <Input id="name" required value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="amount">AMOUNT ($)</Label>
+          <Label htmlFor="amount">Amount ($)</Label>
           <MoneyInput id="amount" valueCents={amountCents} onChangeCents={setAmountCents} />
         </div>
         <div className="space-y-1.5">
           <Label className="flex items-center justify-between">
-            <span>CATEGORY</span>
+            <span>Category</span>
             <button
               type="button"
               onClick={() => setCategoryDialogOpen(true)}
-              className="inline-flex items-center gap-1 normal-case tracking-normal text-[10px] text-[var(--mint)] hover:text-[var(--mint-bright)] cursor-pointer"
+              className="inline-flex items-center gap-1 tracking-normal text-2xs text-[var(--mint)] hover:text-[var(--mint-bright)] cursor-pointer"
             >
-              <Plus className="h-3 w-3" /> ADD NEW
+              <Plus className="h-3 w-3" /> Add new
             </button>
           </Label>
           <Select value={category} onValueChange={setCategory}>
@@ -160,7 +160,7 @@ export function BillForm({
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label>FREQUENCY</Label>
+          <Label>Frequency</Label>
           <Select value={intervalPreset} onValueChange={onPresetChange}>
             <SelectTrigger>
               <SelectValue />
@@ -175,7 +175,7 @@ export function BillForm({
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="anchorDate">NEXT DUE DATE</Label>
+          <Label htmlFor="anchorDate">Next due date</Label>
           <Input
             id="anchorDate"
             type="date"
@@ -186,7 +186,7 @@ export function BillForm({
         </div>
         {intervalPreset === CUSTOM_PRESET ? (
           <div className="col-span-2 space-y-1.5">
-            <Label htmlFor="intervalMonths">EVERY N MONTHS</Label>
+            <Label htmlFor="intervalMonths">Every N months</Label>
             <Input
               id="intervalMonths"
               type="number"
@@ -196,28 +196,28 @@ export function BillForm({
               value={intervalMonths}
               onChange={(e) => setIntervalMonths(Math.max(1, Number(e.target.value) || 1))}
             />
-            <p className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-              1=monthly · 12=annual · 24=every 2 years · etc.
+            <p className="text-2xs text-[var(--text-3)]">
+              1 = monthly · 12 = annual · 24 = every 2 years · etc.
             </p>
           </div>
         ) : null}
-        <div className="col-span-2 space-y-1.5">
-          <Label>PAID VIA</Label>
+        <div className="col-span-1 space-y-1.5 sm:col-span-2">
+          <Label>Paid via</Label>
           <Select value={paidViaCardId} onValueChange={setPaidViaCardId}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={CASH_OPTION}>BANK / CASH</SelectItem>
+              <SelectItem value={CASH_OPTION}>Bank / cash</SelectItem>
               {cardOptions.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
-                  {c.name.toUpperCase()}
-                  {!c.isActive ? " (ARCHIVED)" : ""}
+                  {c.name}
+                  {!c.isActive ? " (archived)" : ""}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <p className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+          <p className="text-2xs text-[var(--text-3)]">
             {paidViaCardId === CASH_OPTION
               ? "Deducts from balance on due day"
               : cards.find((c) => c.id === paidViaCardId)?.isActive
@@ -225,19 +225,19 @@ export function BillForm({
                 : "Linked card is archived — falling back to cash deduction"}
           </p>
         </div>
-        <div className="col-span-2">
+        <div className="col-span-1 sm:col-span-2">
           <label className="flex cursor-pointer items-center justify-between">
-            <Label>AUTOPAY</Label>
+            <Label>Autopay</Label>
             <Switch checked={autoPay} onCheckedChange={setAutoPay} />
           </label>
         </div>
-        <div className="col-span-2 space-y-1.5">
-          <Label htmlFor="notes">NOTES</Label>
+        <div className="col-span-1 space-y-1.5 sm:col-span-2">
+          <Label htmlFor="notes">Notes</Label>
           <Input id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </div>
-        <div className="col-span-2 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2.5">
-          <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
-            <span>MONTHLY EQUIVALENT</span>
+        <div className="col-span-1 rounded-md border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2.5 sm:col-span-2">
+          <div className="flex items-center justify-between text-2xs text-[var(--text-2)]">
+            <span>Monthly equivalent</span>
             <span className="text-[13px] font-bold text-[var(--mint)] tabular">
               <Money cents={monthlyEq} />
             </span>
@@ -247,10 +247,10 @@ export function BillForm({
       {hideActions ? null : (
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
-            CANCEL
+            Cancel
           </Button>
           <Button type="submit" variant="primary" disabled={submitting || !name.trim()}>
-            {submitting ? "SAVING…" : "SAVE"}
+            {submitting ? "Saving…" : "Save"}
           </Button>
         </div>
       )}

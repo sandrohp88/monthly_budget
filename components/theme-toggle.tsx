@@ -50,7 +50,7 @@ export function ThemeToggle() {
       <DropdownMenuContent
         align="end"
         sideOffset={6}
-        className="z-50 min-w-[15rem] rounded-[14px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-1.5 shadow-[var(--shadow-md)]"
+        className="z-50 min-w-[15rem] rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] p-1.5 shadow-[var(--shadow-md)]"
       >
         <DropdownMenuLabel className="px-3 py-2 text-[12px] font-semibold text-[var(--text-3)]">
           Theme
@@ -61,7 +61,7 @@ export function ThemeToggle() {
             key={t.id}
             onSelect={() => setTheme(t.id)}
             className={cn(
-              "flex cursor-pointer flex-col gap-0.5 rounded-[10px] px-3 py-2 text-[12px] outline-none",
+              "flex cursor-pointer flex-col gap-0.5 rounded-md px-3 py-2 text-[12px] outline-none",
               "focus:bg-[var(--bg-2)]",
               active === t.id && "bg-[var(--mint-glow)] text-[var(--mint)]",
             )}
@@ -81,7 +81,7 @@ export function ThemeToggle() {
         <DropdownMenuItem
           onSelect={() => setTheme("system")}
           className={cn(
-            "flex cursor-pointer items-center gap-2 rounded-[10px] px-3 py-2 text-[12px] outline-none",
+            "flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-[12px] outline-none",
             "focus:bg-[var(--bg-2)]",
             theme === "system" && "bg-[var(--mint-glow)] text-[var(--mint)]",
           )}

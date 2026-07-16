@@ -130,7 +130,7 @@ export function InlineBalanceEditor({
         }}
         onBlur={() => void save()}
         className={cn(
-          "h-7 w-24 rounded-[8px] border border-[var(--mint-dim)] bg-[var(--bg-1)] px-2",
+          "h-7 w-24 rounded-md border border-[var(--mint-dim)] bg-[var(--bg-1)] px-2",
           "text-right text-[13px] font-semibold tabular text-[var(--text-0)]",
           "focus:outline-none focus:ring-2 focus:ring-[var(--mint-dim)]",
           inputClassName,

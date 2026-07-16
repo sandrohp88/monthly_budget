@@ -6,7 +6,6 @@ import { usePlaidLink } from "react-plaid-link";
 import { toast } from "sonner";
 import { PLAID_LINK_TOKEN_STORAGE_KEY } from "@/lib/plaid-link-storage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CardSubTag } from "@/components/ui/page-head";
 
 /**
  * OAuth return handler for Plaid Link.
@@ -17,7 +16,7 @@ import { CardSubTag } from "@/components/ui/page-head";
  *   2. User picks an OAuth-required institution (e.g. Navy Federal). Plaid
  *      navigates the browser to the bank's OAuth page.
  *   3. Bank redirects back to APP_URL/plaid/oauth-return?oauth_state_id=…
- *   4. THIS PAGE: read link_token from localStorage, re-open Link with
+ *   4. This page: read link_token from localStorage, re-open Link with
  *      `receivedRedirectUri = window.location.href`. Link picks up where it
  *      left off and finishes the connection.
  *   5. onSuccess: exchange the public_token for a permanent access_token via
@@ -92,16 +91,15 @@ export function OAuthReturnClient() {
     <div className="fade-in flex justify-center pt-12">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardSubTag>PLAID_OAUTH</CardSubTag>
-          <CardTitle>FINISHING LINK…</CardTitle>
+          <CardTitle>Finishing link…</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2 text-sm tracking-[0.12em]">
+        <CardContent className="space-y-2 text-sm">
           {error ? (
             <p className="text-[color:var(--destructive)]">{error}</p>
           ) : exchanging ? (
-            <p>EXCHANGING TOKEN…</p>
+            <p>Exchanging token…</p>
           ) : (
-            <p>RETURNING FROM BANK. ONE MOMENT.</p>
+            <p>Returning from bank. One moment.</p>
           )}
         </CardContent>
       </Card>

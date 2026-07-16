@@ -10,7 +10,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CardSubTag } from "@/components/ui/page-head";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -131,12 +130,11 @@ export function PlaidDraftApproveDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>DRAFT_REVIEW</CardSubTag>
-          <DialogTitle>APPROVE TRANSACTION</DialogTitle>
+          <DialogTitle>Approve transaction</DialogTitle>
         </DialogHeader>
 
         {/* Source info */}
-        <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-[10px] uppercase tracking-wide text-[var(--text-2)]">
+        <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-2xs tracking-wide text-[var(--text-2)]">
           <span className="text-[var(--text-3)]">SOURCE: </span>
           {draft.accountName}
           {draft.accountMask ? ` ****${draft.accountMask}` : ""}
@@ -160,25 +158,25 @@ export function PlaidDraftApproveDialog({
                 type="button"
                 onClick={() => setMode("promo")}
                 className={cn(
-                  "rounded-sm px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors",
+                  "rounded-sm px-3 py-2 text-2xs font-semibold transition-colors",
                   mode === "promo"
                     ? "bg-[var(--mint)] text-black"
                     : "text-[var(--text-2)] hover:text-[var(--text-0)]",
                 )}
               >
-                DEFERRED-INTEREST PROMO
+                Deferred-interest promo
               </button>
               <button
                 type="button"
                 onClick={() => setMode("expense")}
                 className={cn(
-                  "rounded-sm px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors",
+                  "rounded-sm px-3 py-2 text-2xs font-semibold transition-colors",
                   mode === "expense"
                     ? "bg-[var(--mint)] text-black"
                     : "text-[var(--text-2)] hover:text-[var(--text-0)]",
                 )}
               >
-                EXPENSE
+                Expense
               </button>
             </div>
           )}
@@ -186,7 +184,7 @@ export function PlaidDraftApproveDialog({
           {mode === "expense" ? (
             <>
               <div className="space-y-1.5">
-                <Label htmlFor="draft-date">DATE</Label>
+                <Label htmlFor="draft-date">Date</Label>
                 <Input
                   id="draft-date"
                   type="date"
@@ -196,7 +194,7 @@ export function PlaidDraftApproveDialog({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="draft-desc">DESCRIPTION</Label>
+                <Label htmlFor="draft-desc">Description</Label>
                 <Input
                   id="draft-desc"
                   required
@@ -206,16 +204,16 @@ export function PlaidDraftApproveDialog({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>AMOUNT</Label>
+                <Label>Amount</Label>
                 <MoneyInput valueCents={amountCents} onChangeCents={setAmountCents} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="draft-cat">CATEGORY</Label>
+                <Label htmlFor="draft-cat">Category</Label>
                 <select
                   id="draft-cat"
                   value={matchedCategory}
                   onChange={(e) => setCategory(e.target.value)}
-                  className="w-full rounded-sm border border-[var(--border-2)] bg-[var(--bg-1)] px-3 py-2 text-[11px] uppercase tracking-[0.08em] text-[var(--text-0)] focus:outline-none focus:ring-1 focus:ring-[var(--mint)]"
+                  className="w-full rounded-sm border border-[var(--border-2)] bg-[var(--bg-1)] px-3 py-2 text-[11px] text-[var(--text-0)] focus:outline-none focus:ring-1 focus:ring-[var(--mint)]"
                 >
                   {categories.map((c) => (
                     <option key={c} value={c}>
@@ -229,7 +227,7 @@ export function PlaidDraftApproveDialog({
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="promo-start-date">PURCHASE DATE</Label>
+                  <Label htmlFor="promo-start-date">Purchase date</Label>
                   <Input
                     id="promo-start-date"
                     type="date"
@@ -239,7 +237,7 @@ export function PlaidDraftApproveDialog({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="promo-end-date">PAY IN FULL BY</Label>
+                  <Label htmlFor="promo-end-date">Pay in full by</Label>
                   <Input
                     id="promo-end-date"
                     type="date"
@@ -250,7 +248,7 @@ export function PlaidDraftApproveDialog({
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="promo-desc">DESCRIPTION</Label>
+                <Label htmlFor="promo-desc">Description</Label>
                 <Input
                   id="promo-desc"
                   required
@@ -261,7 +259,7 @@ export function PlaidDraftApproveDialog({
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label>ORIGINAL AMOUNT</Label>
+                  <Label>Original amount</Label>
                   <MoneyInput
                     valueCents={promoOriginalCents}
                     onChangeCents={(next) => {
@@ -271,7 +269,7 @@ export function PlaidDraftApproveDialog({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>REMAINING BALANCE</Label>
+                  <Label>Remaining balance</Label>
                   <MoneyInput
                     valueCents={promoRemainingCents}
                     onChangeCents={setPromoRemainingCents}
@@ -279,14 +277,14 @@ export function PlaidDraftApproveDialog({
                 </div>
               </div>
               <label className="flex cursor-pointer items-center justify-between rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-1)]">
-                  SET DESIRED CYCLE PAYMENT
+                <span className="text-2xs font-semibold text-[var(--text-1)]">
+                  Set desired cycle payment
                 </span>
                 <Switch checked={useDesiredPayment} onCheckedChange={setUseDesiredPayment} />
               </label>
               {useDesiredPayment && (
                 <div className="space-y-1.5">
-                  <Label>DESIRED CYCLE PAYMENT</Label>
+                  <Label>Desired cycle payment</Label>
                   <MoneyInput
                     valueCents={desiredPaymentCents}
                     onChangeCents={setDesiredPaymentCents}
@@ -297,7 +295,7 @@ export function PlaidDraftApproveDialog({
           )}
 
           <div className="space-y-1.5">
-            <Label htmlFor="draft-notes">NOTES</Label>
+            <Label htmlFor="draft-notes">Notes</Label>
             <Input
               id="draft-notes"
               value={notes}
@@ -308,7 +306,7 @@ export function PlaidDraftApproveDialog({
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-              CANCEL
+              Cancel
             </Button>
             <Button
               type="submit"
@@ -325,7 +323,7 @@ export function PlaidDraftApproveDialog({
                     !promoEndDate))
               }
             >
-              {saving ? "SAVING…" : mode === "promo" ? "CREATE PROMO" : "APPROVE & ADD"}
+              {saving ? "Saving…" : mode === "promo" ? "Create promo" : "APPROVE & ADD"}
             </Button>
           </DialogFooter>
         </form>

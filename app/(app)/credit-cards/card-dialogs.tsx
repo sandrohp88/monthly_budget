@@ -6,8 +6,8 @@
 import * as React from "react";
 import { Plus, Trash2, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Button } from "@/components/ui/button";
-import { CardSubTag } from "@/components/ui/page-head";
 import {
   Dialog,
   DialogContent,
@@ -136,12 +136,11 @@ export function CardDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>{editing ? "EDIT_CARD" : "NEW_CARD"}</CardSubTag>
-          <DialogTitle>{editing ? card!.name.toUpperCase() : "ADD CREDIT CARD"}</DialogTitle>
+          <DialogTitle>{editing ? card!.name : "Add credit card"}</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4 pt-2">
           <div className="space-y-1.5">
-            <Label htmlFor="cc-name">NAME</Label>
+            <Label htmlFor="cc-name">Name</Label>
             <Input
               id="cc-name"
               required
@@ -152,7 +151,7 @@ export function CardDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label>STATEMENT CYCLE</Label>
+            <Label>Statement cycle</Label>
             <Select
               value={statementCycleMode}
               onValueChange={(value) => setStatementCycleMode(value as StatementCycleMode)}
@@ -161,14 +160,14 @@ export function CardDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="calendar_day">FIXED DAY OF MONTH</SelectItem>
-                <SelectItem value="interval_days">EVERY N DAYS</SelectItem>
+                <SelectItem value="calendar_day">Fixed day of month</SelectItem>
+                <SelectItem value="interval_days">Every N days</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="cc-stmt">STATEMENT DAY (1-31)</Label>
+              <Label htmlFor="cc-stmt">Statement day (1-31)</Label>
               <Input
                 id="cc-stmt"
                 type="number"
@@ -181,7 +180,7 @@ export function CardDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="cc-due">DUE DAY (1-31)</Label>
+              <Label htmlFor="cc-due">Due day (1-31)</Label>
               <Input
                 id="cc-due"
                 type="number"
@@ -194,7 +193,7 @@ export function CardDialog({
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="cc-grace">GRACE DAYS (STATEMENT → DUE)</Label>
+            <Label htmlFor="cc-grace">Grace days (statement → due)</Label>
             <Input
               id="cc-grace"
               type="number"
@@ -204,14 +203,14 @@ export function CardDialog({
               value={gracePeriodDays}
               onChange={(e) => setGracePeriodDays(Number(e.target.value))}
             />
-            <p className="text-[10px] tracking-wide text-[var(--text-3)]">
+            <p className="text-2xs tracking-wide text-[var(--text-3)]">
               Minimum days between statement close and payment due — most US issuers grant 21–25.
             </p>
           </div>
           {statementCycleMode === "interval_days" ? (
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label htmlFor="cc-cycle-anchor">ANCHOR STATEMENT DATE</Label>
+                <Label htmlFor="cc-cycle-anchor">Anchor statement date</Label>
                 <Input
                   id="cc-cycle-anchor"
                   type="date"
@@ -221,7 +220,7 @@ export function CardDialog({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="cc-cycle-days">CYCLE DAYS</Label>
+                <Label htmlFor="cc-cycle-days">Cycle days</Label>
                 <Input
                   id="cc-cycle-days"
                   type="number"
@@ -234,24 +233,24 @@ export function CardDialog({
               </div>
             </div>
           ) : null}
-          <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-[10px] uppercase tracking-wide text-[var(--text-2)]">
+          <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-2xs tracking-wide text-[var(--text-2)]">
             {statementCycleMode === "interval_days"
-              ? `STATEMENT CLOSES EVERY ${statementCycleIntervalDays} DAYS FROM ${statementCycleAnchorDate}`
-              : `STATEMENT CLOSES ON DAY ${statementDay}`}
+              ? `Statement closes every ${statementCycleIntervalDays} days from ${statementCycleAnchorDate}`
+              : `Statement closes on day ${statementDay}`}
             {" -> "}
-            PAYMENT DUE ON DAY {dueDay}
+            Payment due on day {dueDay}
             {statementCycleMode === "calendar_day" && dueDay === statementDay ? (
-              <span className="ml-2 text-[var(--red)]">DAYS MUST DIFFER</span>
+              <span className="ml-2 text-[var(--red)]">Days must differ</span>
             ) : null}
           </div>
           <label className="flex cursor-pointer items-center justify-between">
-            <Label>AUTOPAY</Label>
+            <Label>Autopay</Label>
             <Switch checked={autoPay} onCheckedChange={setAutoPay} />
           </label>
           <label className="flex cursor-pointer items-center justify-between border-y border-[var(--border-raw)] py-3">
             <div>
-              <Label>TRACK CURRENT BALANCE</Label>
-              <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+              <Label>Track current balance</Label>
+              <div className="mt-1 text-2xs text-[var(--text-3)]">
                 Used to project the next card payment before a statement exists
               </div>
             </div>
@@ -259,17 +258,17 @@ export function CardDialog({
           </label>
           {trackCurrentBalance ? (
             <div className="space-y-1.5">
-              <Label>CURRENT BALANCE</Label>
+              <Label>Current balance</Label>
               <MoneyInput valueCents={currentBalanceCents} onChangeCents={setCurrentBalance} />
             </div>
           ) : null}
           <div className="space-y-1.5">
-            <Label htmlFor="cc-notes">NOTES</Label>
+            <Label htmlFor="cc-notes">Notes</Label>
             <Input id="cc-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-              CANCEL
+              Cancel
             </Button>
             <Button
               type="submit"
@@ -282,7 +281,7 @@ export function CardDialog({
                   (!statementCycleAnchorDate || statementCycleIntervalDays < 1))
               }
             >
-              {saving ? "SAVING…" : editing ? "SAVE CHANGES" : "ADD CARD"}
+              {saving ? "Saving…" : editing ? "Save changes" : "Add card"}
             </Button>
           </DialogFooter>
         </form>
@@ -353,13 +352,12 @@ export function StatementCreateDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>{`${card.name.toUpperCase()} // NEW_STATEMENT`}</CardSubTag>
-          <DialogTitle>ENTER STATEMENT</DialogTitle>
+          <DialogTitle>Enter statement</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4 pt-2">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="stmt-date">STATEMENT DATE</Label>
+              <Label htmlFor="stmt-date">Statement date</Label>
               <Input
                 id="stmt-date"
                 type="date"
@@ -372,7 +370,7 @@ export function StatementCreateDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="due-date">DUE DATE</Label>
+              <Label htmlFor="due-date">Due date</Label>
               <Input
                 id="due-date"
                 type="date"
@@ -383,29 +381,29 @@ export function StatementCreateDialog({
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>STATEMENT BALANCE (PAY THIS TO AVOID INTEREST)</Label>
+            <Label>Statement balance (pay this to avoid interest)</Label>
             <MoneyInput valueCents={statementBalanceCents} onChangeCents={setBalance} />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="stmt-notes">NOTES</Label>
+            <Label htmlFor="stmt-notes">Notes</Label>
             <Input id="stmt-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
           </div>
           {dup ? (
-            <div className="flex items-center gap-2 rounded-sm border border-[rgba(251,191,36,0.3)] bg-[rgba(251,191,36,0.08)] px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-[var(--amber)]">
+            <div className="flex items-center gap-2 rounded-sm border border-[rgba(251,191,36,0.3)] bg-[rgba(251,191,36,0.08)] px-3 py-2 text-2xs text-[var(--amber)]">
               <AlertTriangle className="h-3 w-3" />
               A statement already exists for this date
             </div>
           ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-              CANCEL
+              Cancel
             </Button>
             <Button
               type="submit"
               variant="primary"
               disabled={saving || statementBalanceCents < 0}
             >
-              {saving ? "SAVING…" : "SAVE STATEMENT"}
+              {saving ? "Saving…" : "Save statement"}
             </Button>
           </DialogFooter>
         </form>
@@ -469,7 +467,7 @@ export function StatementEditDialog({
   };
 
   const remove = async () => {
-    if (!confirm("Delete this statement? This cannot be undone.")) return;
+    if (!(await confirmDialog({ title: "Delete this statement?", description: "This cannot be undone.", confirmText: "Delete", tone: "danger" }))) return;
     const res = await fetch(`/api/credit-cards/statements/${statement.id}`, { method: "DELETE" });
     if (!res.ok) {
       toast.error("Delete failed");
@@ -489,13 +487,12 @@ export function StatementEditDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>EDIT_STATEMENT</CardSubTag>
           <DialogTitle>STATEMENT — {statement.statementDate}</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4 pt-2">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label>STATEMENT DATE</Label>
+              <Label>Statement date</Label>
               <Input
                 type="date"
                 value={statementDate}
@@ -503,7 +500,7 @@ export function StatementEditDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>DUE DATE</Label>
+              <Label>Due date</Label>
               <Input
                 type="date"
                 value={dueDate}
@@ -523,11 +520,11 @@ export function StatementEditDialog({
             <>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label>PAID AMOUNT</Label>
+                  <Label>Paid amount</Label>
                   <MoneyInput valueCents={paidAmountCents} onChangeCents={setPaidAmount} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>PAID DATE</Label>
+                  <Label>Paid date</Label>
                   <Input
                     type="date"
                     value={paidDate}
@@ -537,7 +534,7 @@ export function StatementEditDialog({
               </div>
               <div
                 className={cn(
-                  "flex items-center gap-2 rounded-sm border px-3 py-2 text-[10px] uppercase tracking-[0.12em]",
+                  "flex items-center gap-2 rounded-sm border px-3 py-2 text-2xs",
                   willAvoidInterest
                     ? "border-[var(--mint-dim)] bg-[var(--mint-glow)] text-[var(--mint)]"
                     : "border-[rgba(251,191,36,0.3)] bg-[rgba(251,191,36,0.08)] text-[var(--amber)]",
@@ -545,33 +542,33 @@ export function StatementEditDialog({
               >
                 {willAvoidInterest ? (
                   <>
-                    <CheckCircle2 className="h-3 w-3" /> NO INTEREST — FULL BALANCE PAID ON TIME
+                    <CheckCircle2 className="h-3 w-3" /> No interest — full balance paid on time
                   </>
                 ) : (
                   <>
                     <AlertTriangle className="h-3 w-3" />
                     {paidAmountCents < cashDueCents
-                      ? "PARTIAL PAYMENT — INTEREST WILL ACCRUE ON REMAINDER"
-                      : "PAID AFTER DUE DATE — INTEREST MAY APPLY"}
+                      ? "Partial payment — interest will accrue on remainder"
+                      : "Paid after due date — interest may apply"}
                   </>
                 )}
               </div>
             </>
           ) : null}
           <div className="space-y-1.5">
-            <Label>NOTES</Label>
+            <Label>Notes</Label>
             <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
           </div>
           <DialogFooter>
             <Button type="button" variant="destructive" onClick={remove} disabled={saving}>
-              <Trash2 className="h-3 w-3" /> DELETE
+              <Trash2 className="h-3 w-3" /> Delete
             </Button>
             <div className="flex gap-2">
               <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-                CANCEL
+                Cancel
               </Button>
               <Button type="submit" variant="primary" disabled={saving}>
-                {saving ? "SAVING…" : "SAVE"}
+                {saving ? "Saving…" : "Save"}
               </Button>
             </div>
           </DialogFooter>
@@ -680,7 +677,7 @@ export function PromoDialog({
 
   const archive = async () => {
     if (!promo) return;
-    if (!confirm("Archive this promo? Future projection chunks will stop.")) return;
+    if (!(await confirmDialog({ title: "Archive this promo?", description: "Future projection chunks will stop.", confirmText: "Archive" }))) return;
     const res = await fetch(`/api/credit-cards/promos/${promo.id}`, { method: "DELETE" });
     if (!res.ok) {
       toast.error("Archive failed");
@@ -694,12 +691,11 @@ export function PromoDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>{`${card.name.toUpperCase()} // ${editing ? "EDIT_PROMO" : "NEW_PROMO"}`}</CardSubTag>
-          <DialogTitle>{editing ? "EDIT PROMO" : "ADD DEFERRED-INTEREST PROMO"}</DialogTitle>
+          <DialogTitle>{editing ? "Edit promo" : "Add deferred-interest promo"}</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4 pt-2">
           <div className="space-y-1.5">
-            <Label htmlFor="promo-desc">DESCRIPTION</Label>
+            <Label htmlFor="promo-desc">Description</Label>
             <Input
               id="promo-desc"
               required
@@ -711,17 +707,17 @@ export function PromoDialog({
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label>ORIGINAL AMOUNT</Label>
+              <Label>Original amount</Label>
               <MoneyInput valueCents={originalAmountCents} onChangeCents={setOriginalAmount} />
             </div>
             <div className="space-y-1.5">
-              <Label>REMAINING</Label>
+              <Label>Remaining</Label>
               <MoneyInput valueCents={remainingAmountCents} onChangeCents={setRemaining} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label>START DATE</Label>
+              <Label>Start date</Label>
               <Input
                 type="date"
                 required
@@ -730,7 +726,7 @@ export function PromoDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>END DATE (PAY-OFF DEADLINE)</Label>
+              <Label>End date (pay-off deadline)</Label>
               <Input
                 type="date"
                 required
@@ -741,29 +737,29 @@ export function PromoDialog({
           </div>
           <label className="flex cursor-pointer items-center justify-between border-y border-[var(--border-raw)] py-3">
             <div>
-              <Label>SET DESIRED MONTHLY PAYMENT</Label>
-              <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+              <Label>Set desired monthly payment</Label>
+              <div className="mt-1 text-2xs text-[var(--text-3)]">
                 {overrideMonthly
-                  ? "INCLUDED IN EACH PROJECTED CYCLE"
-                  : "AUTO: REMAINING ÷ MONTHS LEFT"}
+                  ? "Included in each projected cycle"
+                  : "AUTO: REMAINING ÷ Months left"}
               </div>
             </div>
             <Switch checked={overrideMonthly} onCheckedChange={setOverrideMonthly} />
           </label>
           {overrideMonthly ? (
             <div className="space-y-1.5">
-              <Label>DESIRED MONTHLY PAYMENT</Label>
+              <Label>Desired monthly payment</Label>
               <MoneyInput valueCents={monthlyPaymentCents} onChangeCents={setMonthlyPayment} />
             </div>
           ) : null}
-          <div className="rounded-sm border border-[var(--cyan-dim,var(--border-raw))] bg-[var(--bg-2)] px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
-            PROJECTED MONTHLY CHUNK:{" "}
+          <div className="rounded-sm border border-[var(--cyan-dim,var(--border-raw))] bg-[var(--bg-2)] px-3 py-2 text-2xs text-[var(--text-2)]">
+            Projected monthly chunk:{" "}
             <span className="text-[var(--cyan)] tabular">
               <Money cents={computedChunk} />
             </span>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="promo-notes">NOTES</Label>
+            <Label htmlFor="promo-notes">Notes</Label>
             <Input
               id="promo-notes"
               value={notes}
@@ -774,15 +770,15 @@ export function PromoDialog({
           <DialogFooter>
             {editing ? (
               <Button type="button" variant="destructive" onClick={archive} disabled={saving}>
-                <Trash2 className="h-3 w-3" /> ARCHIVE
+                <Trash2 className="h-3 w-3" /> Archive
               </Button>
             ) : null}
             <div className="flex gap-2">
               <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-                CANCEL
+                Cancel
               </Button>
               <Button type="submit" variant="primary" disabled={saving}>
-                {saving ? "SAVING…" : editing ? "SAVE CHANGES" : "ADD PROMO"}
+                {saving ? "Saving…" : editing ? "Save changes" : "Add promo"}
               </Button>
             </div>
           </DialogFooter>
@@ -827,14 +823,13 @@ export function PromoWhatIfSheet({
 
   const title =
     scope === "promo" && promos.length === 1
-      ? promos[0]!.description.toUpperCase()
-      : `${card.name.toUpperCase()} — ALL PROMOS`;
+      ? promos[0]!.description
+      : `${card.name} — all promos`;
 
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent>
         <SheetHeader>
-          <CardSubTag>{`${card.name.toUpperCase()} // WHAT_IF`}</CardSubTag>
           <SheetTitle>{title}</SheetTitle>
         </SheetHeader>
         <SheetBody className="space-y-4">
@@ -845,56 +840,56 @@ export function PromoWhatIfSheet({
           <div className="grid grid-cols-2 gap-3">
             {/* Pay off now */}
             <div className="rounded-sm border border-[var(--border-2)] bg-[var(--bg-1)] p-3">
-              <div className="mb-1 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
-                {`// PAY OFF TODAY`}
+              <div className="mb-1 text-2xs text-[var(--text-3)]">
+                {`// Pay off today`}
               </div>
               <div className="mb-1 text-[22px] font-bold leading-none tabular text-[var(--cyan)]">
                 <Money cents={whatIf.payOffNow.totalCents} />
               </div>
-              <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
-                CASH OUT <DateLabel iso={whatIf.payOffNow.cashOutDate} format="short" />
+              <div className="text-2xs text-[var(--text-2)]">
+                Cash out <DateLabel iso={whatIf.payOffNow.cashOutDate} format="short" />
               </div>
-              <div className="mt-3 border-t border-[var(--border-raw)] pt-2 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-                FUTURE CHUNKS: <span className="text-[var(--mint)]">NONE</span>
+              <div className="mt-3 border-t border-[var(--border-raw)] pt-2 text-2xs text-[var(--text-3)]">
+                Future chunks: <span className="text-[var(--mint)]">None</span>
               </div>
             </div>
 
             {/* Continue schedule */}
             <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-3">
-              <div className="mb-1 text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
-                {`// CONTINUE SCHEDULE`}
+              <div className="mb-1 text-2xs text-[var(--text-3)]">
+                {`// Continue schedule`}
               </div>
               <div className="mb-1 text-[22px] font-bold leading-none tabular text-[var(--text-0)]">
                 <Money cents={whatIf.continueSchedule.totalCents} />
               </div>
-              <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+              <div className="text-2xs text-[var(--text-2)]">
                 {whatIf.continueSchedule.finalDueDate ? (
                   <>
                     THROUGH{" "}
                     <DateLabel iso={whatIf.continueSchedule.finalDueDate} format="short" />
                   </>
                 ) : (
-                  "NO FUTURE CHUNKS"
+                  "No future chunks"
                 )}
               </div>
-              <div className="mt-3 border-t border-[var(--border-raw)] pt-2 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-                {whatIf.continueSchedule.chunks.length} PAYMENT
-                {whatIf.continueSchedule.chunks.length === 1 ? "" : "S"}
+              <div className="mt-3 border-t border-[var(--border-raw)] pt-2 text-2xs text-[var(--text-3)]">
+                {whatIf.continueSchedule.chunks.length} payment
+                {whatIf.continueSchedule.chunks.length === 1 ? "" : "s"}
               </div>
             </div>
           </div>
 
           {whatIf.continueSchedule.chunks.length > 0 ? (
             <div>
-              <div className="mb-2 text-[9px] uppercase tracking-[0.18em] text-[var(--text-3)]">
+              <div className="mb-2 text-2xs text-[var(--text-3)]">
                 {`// SCHEDULE`}
               </div>
               <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)]">
                 <table className="w-full text-[11px] tabular">
                   <thead>
-                    <tr className="border-b border-[var(--border-raw)] text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-                      <th className="px-3 py-1.5 text-left">DUE</th>
-                      <th className="px-3 py-1.5 text-right">AMOUNT</th>
+                    <tr className="border-b border-[var(--border-raw)] text-2xs text-[var(--text-3)]">
+                      <th className="px-3 py-1.5 text-left">Due</th>
+                      <th className="px-3 py-1.5 text-right">Amount</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -917,22 +912,22 @@ export function PromoWhatIfSheet({
             </div>
           ) : null}
 
-          <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
-            BOTH PATHS PAY THE SAME PRINCIPAL ASSUMING YOU MEET THE DEADLINE.
-            DIFFERENCE IS{" "}
-            <span className="text-[var(--cyan)]">CASH-FLOW TIMING</span> ONLY — INTEREST IS
-            ZERO EITHER WAY WHEN PAID BY{" "}
+          <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-2xs text-[var(--text-2)]">
+            Both paths pay the same principal assuming you meet the deadline.
+            Difference is{" "}
+            <span className="text-[var(--cyan)]">Cash-flow timing</span> ONLY — Interest is
+            Zero either way when paid by{" "}
             {scope === "promo" && promos.length === 1 ? (
               <DateLabel iso={promos[0]!.endDate} format="short" />
             ) : (
-              "EACH PROMO'S DEADLINE"
+              "Each promo's deadline"
             )}
             .
           </div>
         </SheetBody>
         <SheetFooter>
           <Button variant="outline" onClick={onClose}>
-            CLOSE
+            Close
           </Button>
         </SheetFooter>
       </SheetContent>
@@ -1146,9 +1141,9 @@ export function PromoScheduleSheet({
     }
   };
 
-  const clearAll = () => {
+  const clearAll = async () => {
     if (drafts.length === 0) return;
-    if (!confirm("Clear all scheduled payments? Promo will fall back to auto-spread.")) return;
+    if (!(await confirmDialog({ title: "Clear all scheduled payments?", description: "Promo will fall back to auto-spread.", confirmText: "Clear all", tone: "danger" }))) return;
     setDrafts([]);
   };
 
@@ -1164,26 +1159,25 @@ export function PromoScheduleSheet({
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent>
         <SheetHeader>
-          <CardSubTag>{`${card.name.toUpperCase()} // PAYMENT_PLAN`}</CardSubTag>
-          <SheetTitle>{promo.description.toUpperCase()}</SheetTitle>
+          <SheetTitle>{promo.description}</SheetTitle>
         </SheetHeader>
         <SheetBody className="space-y-4">
-          <div className="grid grid-cols-3 gap-2 text-[10px] uppercase tracking-[0.12em]">
+          <div className="grid grid-cols-3 gap-2 text-2xs">
             <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-2">
-              <div className="text-[var(--text-3)]">ORIGINAL</div>
+              <div className="text-[var(--text-3)]">Original</div>
               <div className="mt-0.5 text-[14px] font-bold tabular text-[var(--text-1)]">
                 <Money cents={original} />
               </div>
             </div>
             <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-2">
-              <div className="text-[var(--text-3)]">REMAINING</div>
+              <div className="text-[var(--text-3)]">Remaining</div>
               <div className="mt-0.5 text-[14px] font-bold tabular text-[var(--text-0)]">
                 <Money cents={remaining} />
               </div>
             </div>
             <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-2">
-              <div className="text-[var(--text-3)]">DEADLINE</div>
-              <div className="mt-0.5 text-[12px] font-bold uppercase tracking-[0.12em] text-[var(--text-1)]">
+              <div className="text-[var(--text-3)]">Deadline</div>
+              <div className="mt-0.5 text-[12px] font-bold text-[var(--text-1)]">
                 <DateLabel iso={promo.endDate} format="short" />
               </div>
             </div>
@@ -1210,10 +1204,10 @@ export function PromoScheduleSheet({
           {/* Quick add — schedule a single payment; amount defaults to what's
               left so previous payments are never double-counted. */}
           <div className="space-y-2 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)] p-3">
-            <div className="flex items-baseline justify-between text-[10px] uppercase tracking-[0.14em] text-[var(--text-3)]">
-              <span>ADD A PAYMENT</span>
+            <div className="flex items-baseline justify-between text-2xs text-[var(--text-3)]">
+              <span>Add a payment</span>
               <span>
-                LEFT TO SCHEDULE{" "}
+                Left to schedule{" "}
                 <span
                   className={cn(
                     "font-bold tabular",
@@ -1226,8 +1220,8 @@ export function PromoScheduleSheet({
             </div>
             <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
               <div className="space-y-1">
-                <Label htmlFor="promo-quick-date" className="text-[9px]">
-                  DATE
+                <Label htmlFor="promo-quick-date" className="text-2xs">
+                  Date
                 </Label>
                 <Input
                   id="promo-quick-date"
@@ -1240,8 +1234,8 @@ export function PromoScheduleSheet({
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="promo-quick-amount" className="text-[9px]">
-                  AMOUNT
+                <Label htmlFor="promo-quick-amount" className="text-2xs">
+                  Amount
                 </Label>
                 <MoneyInput
                   id="promo-quick-amount"
@@ -1256,7 +1250,7 @@ export function PromoScheduleSheet({
                 disabled={quickAmountCents <= 0 || !quickDate || leftToSchedule <= 0}
                 title={leftToSchedule <= 0 ? "Fully scheduled" : "Add this payment"}
               >
-                <Plus className="h-3 w-3" /> ADD
+                <Plus className="h-3 w-3" /> Add
               </Button>
             </div>
           </div>
@@ -1268,13 +1262,13 @@ export function PromoScheduleSheet({
               disabled={promo.endDate < today}
               className="border border-[var(--border-raw)] bg-[var(--bg-1)] p-3 text-left transition-colors hover:border-[var(--cyan)] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--cyan)]">
-                PAY FULL BY DEADLINE
+              <div className="text-2xs text-[var(--cyan)]">
+                Pay full by deadline
               </div>
               <div className="mt-1 text-[16px] font-bold tabular text-[var(--text-0)]">
                 <Money cents={remaining} />
               </div>
-              <div className="mt-1 text-[10px] text-[var(--text-2)]">
+              <div className="mt-1 text-2xs text-[var(--text-2)]">
                 One planned payment on <DateLabel iso={promo.endDate} format="short" />.
               </div>
             </button>
@@ -1284,32 +1278,32 @@ export function PromoScheduleSheet({
               disabled={promo.endDate < today}
               className="border border-[var(--border-raw)] bg-[var(--bg-1)] p-3 text-left transition-colors hover:border-[var(--cyan)] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--cyan)]">
-                SCHEDULE THROUGH PROMO
+              <div className="text-2xs text-[var(--cyan)]">
+                Schedule through promo
               </div>
               <div className="mt-1 text-[16px] font-bold tabular text-[var(--text-0)]">
-                MONTHLY
+                Monthly
               </div>
-              <div className="mt-1 text-[10px] text-[var(--text-2)]">
+              <div className="mt-1 text-2xs text-[var(--text-2)]">
                 Auto-fill card-cycle payments through the promotional deadline.
               </div>
             </button>
           </div>
 
           {sorted.length === 0 ? (
-            <div className="rounded-sm border border-dashed border-[var(--border-raw)] bg-[var(--bg-2)] p-4 text-center text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-              NO MANUAL PAYMENTS — PROMO USES AUTO-SPREAD
+            <div className="rounded-sm border border-dashed border-[var(--border-raw)] bg-[var(--bg-2)] p-4 text-center text-2xs text-[var(--text-3)]">
+              No manual payments — Promo uses auto-spread
               <div className="mt-1 lowercase tracking-normal">
                 add a payment above, or use a preset, to plan it yourself
               </div>
             </div>
           ) : (
             <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-1)]">
-              <div className="grid grid-cols-[1fr_1fr_1.2fr_1fr_auto] items-center gap-2 border-b border-[var(--border-raw)] px-3 py-1.5 text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-                <span>DUE</span>
-                <span className="text-right">AMOUNT</span>
-                <span>NOTE</span>
-                <span className="text-right">REMAINING AFTER</span>
+              <div className="grid grid-cols-[1fr_1fr_1.2fr_1fr_auto] items-center gap-2 border-b border-[var(--border-raw)] px-3 py-1.5 text-2xs text-[var(--text-3)]">
+                <span>Due</span>
+                <span className="text-right">Amount</span>
+                <span>Note</span>
+                <span className="text-right">Remaining after</span>
                 <span className="w-6"></span>
               </div>
               {rowsWithRunning.map((r) => {
@@ -1363,26 +1357,26 @@ export function PromoScheduleSheet({
           {sorted.length > 0 ? (
             <div className="flex flex-wrap items-center gap-2">
               <Button size="sm" variant="outline" onClick={addRow}>
-                <Plus className="h-3 w-3" /> ADD ROW
+                <Plus className="h-3 w-3" /> Add row
               </Button>
               <Button size="sm" variant="outline" onClick={fillEvenly}>
-                FILL EVENLY ACROSS ROWS
+                Fill evenly across rows
               </Button>
               <Button size="sm" variant="ghost" onClick={clearAll}>
-                CLEAR ALL
+                Clear all
               </Button>
             </div>
           ) : null}
 
-          <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+          <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-2xs text-[var(--text-2)]">
             <div className="flex items-baseline justify-between">
-              <span>SCHEDULED TOTAL</span>
+              <span>Scheduled total</span>
               <span className="text-[14px] font-bold tabular text-[var(--text-0)]">
                 <Money cents={totalScheduled} />
               </span>
             </div>
             <div className="mt-1 flex items-baseline justify-between">
-              <span>VS REMAINING</span>
+              <span>vs remaining</span>
               <span
                 className={cn(
                   "text-[12px] font-bold tabular",
@@ -1402,13 +1396,13 @@ export function PromoScheduleSheet({
                     OVER <Money cents={-gap} />
                   </>
                 ) : (
-                  "FULLY SCHEDULED"
+                  "Fully scheduled"
                 )}
               </span>
             </div>
             {sorted.length > 0 ? (
               <div className="mt-2 text-[var(--text-3)]">
-                LAST PAYMENT{" "}
+                Last payment{" "}
                 <DateLabel iso={sorted[sorted.length - 1]!.dueDate} format="short" />
               </div>
             ) : null}
@@ -1416,10 +1410,10 @@ export function PromoScheduleSheet({
         </SheetBody>
         <SheetFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            CANCEL
+            Cancel
           </Button>
           <Button variant="primary" onClick={save} disabled={saving}>
-            {saving ? "SAVING…" : "SAVE SCHEDULE"}
+            {saving ? "Saving…" : "Save schedule"}
           </Button>
         </SheetFooter>
       </SheetContent>

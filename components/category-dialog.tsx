@@ -3,7 +3,6 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { CardSubTag } from "@/components/ui/page-head";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -75,12 +74,11 @@ export function CategoryDialog({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>NEW_CATEGORY</CardSubTag>
-          <DialogTitle>ADD CATEGORY</DialogTitle>
+          <DialogTitle>Add category</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4 pt-2">
           <div className="space-y-1.5">
-            <Label htmlFor="cat-name">NAME</Label>
+            <Label htmlFor="cat-name">Name</Label>
             <Input
               id="cat-name"
               required
@@ -91,19 +89,19 @@ export function CategoryDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label>KIND</Label>
+            <Label>Kind</Label>
             <Select value={kind} onValueChange={(v) => setKind(v as "expense" | "income")}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="expense">EXPENSE</SelectItem>
-                <SelectItem value="income">INCOME</SelectItem>
+                <SelectItem value="expense">Expense</SelectItem>
+                <SelectItem value="income">Income</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label>COLOR</Label>
+            <Label>Color</Label>
             <div className="flex flex-wrap gap-2">
               {PALETTE.map((c) => (
                 <button
@@ -121,17 +119,17 @@ export function CategoryDialog({
                 />
               ))}
             </div>
-            <div className="mt-1 flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+            <div className="mt-1 flex items-center gap-2 text-2xs text-[var(--text-3)]">
               <span className="h-3 w-3 rounded-sm border border-[var(--border-raw)]" style={{ background: color }} />
               <span className="tabular">{color}</span>
             </div>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-              CANCEL
+              Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={saving || !name.trim()}>
-              {saving ? "SAVING…" : "ADD CATEGORY"}
+              {saving ? "Saving…" : "Add category"}
             </Button>
           </DialogFooter>
         </form>

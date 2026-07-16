@@ -37,7 +37,7 @@ export function AlertBar({
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-[14px] border px-4 py-3 text-[13px] text-[var(--text-1)]",
+        "flex items-center gap-3 rounded-lg border px-4 py-3 text-[13px] text-[var(--text-1)]",
         tone.wrap,
         className,
       )}

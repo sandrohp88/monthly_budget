@@ -26,7 +26,7 @@ export function LedgerTabs({
       type="button"
       onClick={() => setTab(id)}
       className={cn(
-        "cursor-pointer rounded-full border px-4 py-1.5 text-[12px] font-semibold tracking-[0.12em] uppercase transition-colors",
+        "cursor-pointer rounded-full border px-4 py-1.5 text-[12px] font-semibold transition-colors",
         tab === id
           ? "border-[var(--mint)] bg-[var(--mint-glow)] text-[var(--mint)]"
           : "border-[var(--border-raw)] text-[var(--text-2)] hover:border-[var(--border-2)] hover:text-[var(--text-0)]",

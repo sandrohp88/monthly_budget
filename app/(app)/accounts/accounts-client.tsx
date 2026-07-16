@@ -9,6 +9,7 @@ import {
   Unlink,
 } from "lucide-react";
 import { toast } from "sonner";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHead } from "@/components/ui/page-head";
@@ -123,7 +124,7 @@ export function AccountsClient({
   };
 
   const unlinkItem = async (id: string, name: string) => {
-    if (!confirm(`Unlink ${name}? This cannot be undone.`)) return;
+    if (!(await confirmDialog({ title: `Unlink ${name}?`, description: "This cannot be undone.", confirmText: "Unlink", tone: "danger" }))) return;
     const res = await fetch(`/api/plaid/items/${id}`, { method: "DELETE" });
     if (!res.ok) { toast.error("Unlink failed"); return; }
     toast.success(`${name} unlinked`);
@@ -169,8 +170,7 @@ export function AccountsClient({
   return (
     <div className="space-y-6 fade-in">
       <PageHead
-        module="MODULE_08"
-        title="ACCOUNTS"
+        title="Accounts"
         subtitle="Link bank accounts and credit cards via Plaid to automate transaction import"
         actions={
           <div className="flex gap-2">
@@ -181,7 +181,7 @@ export function AccountsClient({
               disabled={syncing || items.length === 0}
             >
               <RefreshCw className={cn("h-3 w-3", syncing && "animate-spin")} />
-              {syncing ? "SYNCING…" : "SYNC NOW"}
+              {syncing ? "Syncing…" : "Sync now"}
             </Button>
             <PlaidLinkButton
               onLinked={async () => {
@@ -194,16 +194,16 @@ export function AccountsClient({
       />
 
       <TileGrid cols="auto">
-        <Tile label="LINKED INSTITUTIONS" value={items.length} delta={`${totalAccounts} account${totalAccounts !== 1 ? "s" : ""}`} />
+        <Tile label="Linked institutions" value={items.length} delta={`${totalAccounts} account${totalAccounts !== 1 ? "s" : ""}`} />
         <Tile
-          label="TRANSACTION IMPORT"
+          label="Transaction import"
           value="AUTO"
           variant="mint"
           delta="approved on sync"
           badge={<Badge variant="success">ON</Badge>}
         />
         <Tile
-          label="LAST SYNC"
+          label="Last sync"
           value={lastSynced ? <DateLabel iso={new Date(lastSynced).toISOString().slice(0, 10)} format="short" /> : "—"}
           delta={lastSynced ? `${new Date().toLocaleTimeString()}` : "never synced"}
         />
@@ -212,7 +212,7 @@ export function AccountsClient({
       <div className="space-y-4">
         {items.length === 0 ? (
           <Card>
-            <CardHeader><CardTitle>NO LINKED ACCOUNTS</CardTitle></CardHeader>
+            <CardHeader><CardTitle>No linked accounts</CardTitle></CardHeader>
             <div className="px-4 py-8 text-center space-y-3">
               <p className="text-[11px] tracking-wide text-[var(--text-2)]">
                 Link a bank account or credit card to start importing transactions automatically.
@@ -284,15 +284,15 @@ function InstitutionCard({
             <Building2 className="h-4 w-4" />
           </div>
           <div>
-            <div className="text-[13px] font-bold uppercase tracking-[0.1em] text-[var(--text-0)]">
+            <div className="text-[13px] font-bold text-[var(--text-0)]">
               {item.institutionName}
             </div>
-            <div className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-              {item.accounts.length} ACCOUNT{item.accounts.length !== 1 ? "S" : ""}
+            <div className="text-2xs text-[var(--text-3)]">
+              {item.accounts.length} account{item.accounts.length !== 1 ? "s" : ""}
               {item.lastSyncedAt ? (
-                <> · LAST SYNC <DateLabel iso={new Date(item.lastSyncedAt).toISOString().slice(0, 10)} format="short" /></>
+                <> · Last sync <DateLabel iso={new Date(item.lastSyncedAt).toISOString().slice(0, 10)} format="short" /></>
               ) : (
-                " · NEVER SYNCED"
+                " · Never synced"
               )}
             </div>
           </div>
@@ -352,11 +352,11 @@ function AccountRow({
         {/* identity + card linkage */}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-0)] truncate">
+            <span className="text-[11px] font-semibold text-[var(--text-0)] truncate">
               {account.name}
             </span>
             {account.mask && (
-              <span className="text-[9px] text-[var(--text-3)] shrink-0">
+              <span className="text-2xs text-[var(--text-3)] shrink-0">
                 ****{account.mask}
               </span>
             )}
@@ -365,7 +365,7 @@ function AccountRow({
           {isCredit && (
             <div className="mt-1.5">
               {link ? (
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-[var(--text-2)]">
                   <span className="flex items-center gap-1 font-bold text-[var(--mint)]">
                     <Link2 className="h-2.5 w-2.5" />
                     {link.card.name}
@@ -373,11 +373,11 @@ function AccountRow({
                   <span>
                     {link.card.statementCycleMode === "interval_days"
                       ? `${link.card.statementCycleIntervalDays}D CYCLE`
-                      : `STMT DAY ${link.card.statementDay}`}{" "}
-                    · DUE DAY {link.card.dueDay}
+                      : `Stmt day ${link.card.statementDay}`}{" "}
+                    · Due day {link.card.dueDay}
                     {latestStatement && (
                       <>
-                        {" · NEXT DUE "}
+                        {" · Next due "}
                         <DateLabel iso={latestStatement.dueDate} format="short" />
                         {" · "}
                         <Money cents={interestSavingCashDueCents(latestStatement, link.promos)} />
@@ -397,8 +397,8 @@ function AccountRow({
                 </div>
               ) : (
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-                    NOT LINKED TO A CREDIT CARD
+                  <span className="text-2xs text-[var(--text-3)]">
+                    Not linked to a credit card
                   </span>
                   <Button
                     id={`link-card-${account.id}`}
@@ -407,7 +407,7 @@ function AccountRow({
                     onClick={() => onLinkCard(account)}
                   >
                     <Link2 className="h-3 w-3" />
-                    LINK CARD
+                    Link card
                   </Button>
                 </div>
               )}
@@ -416,12 +416,12 @@ function AccountRow({
         </div>
 
         {/* toggles */}
-        <div className="flex shrink-0 items-center gap-4 text-[9px] uppercase tracking-[0.12em] text-[var(--text-2)]">
+        <div className="flex shrink-0 items-center gap-4 text-2xs text-[var(--text-2)]">
           <label
             className="flex cursor-pointer items-center gap-1.5"
             title="Use this account's live balance as the projection's starting balance"
           >
-            <span>BALANCE SOURCE</span>
+            <span>Balance source</span>
             <Switch
               id={`starting-balance-${account.id}`}
               checked={account.useAsStartingBalance}
@@ -432,7 +432,7 @@ function AccountRow({
             className="flex cursor-pointer items-center gap-1.5"
             title="Include this account in transaction sync"
           >
-            <span>SYNC</span>
+            <span>Sync</span>
             <Switch
               id={`sync-enabled-${account.id}`}
               checked={account.syncEnabled}

@@ -6,7 +6,6 @@ import { AlertTriangle, ChevronLeft, ChevronRight, CreditCard, Plus, Trash2 } fr
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { CardSubTag } from "@/components/ui/page-head";
 import {
   Dialog,
   DialogContent,
@@ -33,10 +32,10 @@ import { cardPaymentMoveError } from "@/lib/card-payments";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
 
 const MONTH_NAMES = [
-  "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
-  "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
 ];
-const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MAX_CHIPS_PER_DAY = 3;
 
 type EventTone =
@@ -250,7 +249,7 @@ function WeekdayHeader() {
       {WEEKDAYS.map((d) => (
         <div
           key={d}
-          className="px-2 py-2 text-center text-[10px] font-semibold tracking-[0.2em] text-[var(--text-3)]"
+          className="px-2 py-2 text-center text-2xs font-semibold text-[var(--text-3)]"
         >
           {d}
         </div>
@@ -384,7 +383,7 @@ function DayCell({
         {row ? (
           <span
             className={cn(
-              "tabular rounded-[2px] px-1 text-[10px] font-semibold",
+              "tabular rounded-[2px] px-1 text-2xs font-semibold",
               balanceToneClass(row.balanceCents),
               balanceSurfaceClass(row.balanceCents),
             )}
@@ -420,7 +419,7 @@ function DayCell({
               }
               onDragEnd={draggable ? () => onPaymentDragEnd?.() : undefined}
               className={cn(
-                "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-[10px] leading-tight",
+                "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-2xs leading-tight",
                 TONE_CLASSES[tone],
                 draggable ? "cursor-grab active:cursor-grabbing" : "",
               )}
@@ -433,7 +432,7 @@ function DayCell({
               }
             >
               <span className="min-w-0 truncate">
-                {cardDue ? `CARD DUE · ${ev.label}` : ev.label}
+                {cardDue ? `Card due · ${ev.label}` : ev.label}
               </span>
               <span className="tabular shrink-0">
                 {onCard ? "" : credit ? "+" : "−"}
@@ -449,10 +448,10 @@ function DayCell({
               e.stopPropagation();
               setExpanded(true);
             }}
-            className="w-full rounded-[2px] px-1 py-0.5 text-left text-[10px] text-[var(--text-3)] transition-colors hover:bg-[var(--bg-2)] hover:text-[var(--text-1)]"
+            className="w-full rounded-[2px] px-1 py-0.5 text-left text-2xs text-[var(--text-3)] transition-colors hover:bg-[var(--bg-2)] hover:text-[var(--text-1)]"
             title="Show all — reveals hidden payments so they can be dragged"
           >
-            +{overflow} MORE
+            +{overflow} more
           </button>
         ) : null}
         {canCollapse ? (
@@ -462,9 +461,9 @@ function DayCell({
               e.stopPropagation();
               setExpanded(false);
             }}
-            className="w-full rounded-[2px] px-1 py-0.5 text-left text-[10px] text-[var(--text-3)] transition-colors hover:bg-[var(--bg-2)] hover:text-[var(--text-1)]"
+            className="w-full rounded-[2px] px-1 py-0.5 text-left text-2xs text-[var(--text-3)] transition-colors hover:bg-[var(--bg-2)] hover:text-[var(--text-1)]"
           >
-            SHOW LESS
+            Show less
           </button>
         ) : null}
       </div>
@@ -509,7 +508,7 @@ function CompactDayRow({
       )}
     >
       <div className="w-9 shrink-0 pt-0.5 text-center">
-        <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--text-3)]">
+        <div className="text-2xs font-semibold text-[var(--text-3)]">
           {WEEKDAYS[weekdayOfIso(iso)]}
         </div>
         <div
@@ -531,13 +530,13 @@ function CompactDayRow({
             <div
               key={`${iso}-${j}`}
               className={cn(
-                "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-[10px] leading-tight",
+                "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-2xs leading-tight",
                 TONE_CLASSES[tone],
               )}
               title={onCard ? `Charged to ${ev.chargedToCardName}` : undefined}
             >
               <span className="min-w-0 truncate">
-                {cardDue ? `CARD DUE · ${ev.label}` : ev.label}
+                {cardDue ? `Card due · ${ev.label}` : ev.label}
               </span>
               <span className="tabular shrink-0">
                 {onCard ? "" : credit ? "+" : "−"}
@@ -549,7 +548,7 @@ function CompactDayRow({
       </div>
       <span
         className={cn(
-          "tabular mt-0.5 shrink-0 rounded-[2px] px-1 text-[10px] font-semibold",
+          "tabular mt-0.5 shrink-0 rounded-[2px] px-1 text-2xs font-semibold",
           balanceToneClass(row.balanceCents),
           balanceSurfaceClass(row.balanceCents),
         )}
@@ -575,14 +574,14 @@ function CycleSummaryTile({
 }) {
   return (
     <div className="bg-[var(--bg-1)] px-3 py-2.5">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-3)]">
+      <div className="text-2xs font-semibold text-[var(--text-3)]">
         {label}
       </div>
       <div className={cn("tabular mt-1 text-[16px] font-semibold text-[var(--text-0)]", valueClass)}>
         {value}
       </div>
       {sub ? (
-        <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+        <div className="mt-0.5 text-2xs text-[var(--text-3)]">
           {sub}
         </div>
       ) : null}
@@ -1127,7 +1126,7 @@ export function CalendarClient({
                 onClick={() => setView(v)}
                 aria-pressed={view === v}
                 className={cn(
-                  "cursor-pointer rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] transition-colors",
+                  "cursor-pointer rounded-full px-3 py-1 text-[11px] font-semibold transition-colors",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--mint-dim)]",
                   view === v
                     ? "bg-[var(--mint)] text-[var(--button-primary-fg)]"
@@ -1155,14 +1154,14 @@ export function CalendarClient({
             <ChevronRight className="h-4 w-4" />
           </Button>
           <Button variant="outline" onClick={goToToday}>
-            TODAY
+            Today
           </Button>
           {view === "month" ? (
-            <div className="ml-2 text-[18px] font-bold tracking-[0.08em] text-[var(--text-0)]">
+            <div className="ml-2 text-[18px] font-bold text-[var(--text-0)]">
               {MONTH_NAMES[month - 1]} <span className="text-[var(--text-2)]">{year}</span>
             </div>
           ) : view === "compact" ? (
-            <div className="ml-2 text-[18px] font-bold tracking-[0.08em] text-[var(--text-0)]">
+            <div className="ml-2 text-[18px] font-bold text-[var(--text-0)]">
               {MONTH_NAMES[month - 1]?.slice(0, 3)}
               {year !== compactEndYear ? (
                 <span className="text-[var(--text-2)]"> {year}</span>
@@ -1172,8 +1171,8 @@ export function CalendarClient({
               <span className="text-[var(--text-2)]">{compactEndYear}</span>
             </div>
           ) : activeCycle ? (
-            <div className="ml-2 flex items-center gap-2 text-[16px] font-bold tracking-[0.02em] text-[var(--text-0)]">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-3)]">
+            <div className="ml-2 flex items-center gap-2 text-[16px] font-bold text-[var(--text-0)]">
+              <span className="text-2xs font-semibold text-[var(--text-3)]">
                 Paycheck
               </span>
               <DateLabel iso={activeCycle.start} format="short" />
@@ -1252,7 +1251,7 @@ export function CalendarClient({
             {compactMonths.map((m) => (
               <Card key={m.prefix} className="overflow-hidden p-0">
                 <div className="flex items-center justify-between gap-3 border-b border-[var(--border-raw)] bg-[var(--bg-2)] px-4 py-2.5">
-                  <span className="text-[12px] font-bold tracking-[0.1em] text-[var(--text-0)]">
+                  <span className="text-[12px] font-bold text-[var(--text-0)]">
                     {MONTH_NAMES[m.month - 1]} <span className="text-[var(--text-3)]">{m.year}</span>
                   </span>
                   <span
@@ -1267,7 +1266,7 @@ export function CalendarClient({
                   </span>
                 </div>
                 {m.eventRows.length === 0 ? (
-                  <p className="px-4 py-6 text-center text-[11px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                  <p className="px-4 py-6 text-center text-[11px] text-[var(--text-3)]">
                     No scheduled events
                   </p>
                 ) : (
@@ -1365,53 +1364,53 @@ export function CalendarClient({
         </p>
       )}
 
-      <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-[var(--text-3)]">
-        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.income)}>PAYCHECK / CREDIT</span>
-        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.expense)}>BILL / EXPENSE</span>
-        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.card)}>CARD PAYMENT (CASH OUT)</span>
-        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.onCard)}>CHARGED TO CARD</span>
-        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.settled)}>PAID / SETTLED</span>
-        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.posted)}>POSTED (HISTORY)</span>
+      <div className="flex flex-wrap items-center gap-3 text-2xs text-[var(--text-3)]">
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.income)}>Paycheck / credit</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.expense)}>Bill / expense</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.card)}>Card payment (cash out)</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.onCard)}>Charged to card</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.settled)}>Paid / settled</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.posted)}>Posted (history)</span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-[var(--text-3)]">
-        <span className="text-[var(--text-2)]">CARD DUE DATES (NO CASH — SHOW WHAT&apos;S OWED):</span>
+      <div className="flex flex-wrap items-center gap-3 text-2xs text-[var(--text-3)]">
+        <span className="text-[var(--text-2)]">Card due dates (No cash — Show what&apos;S OWED):</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.dueCovered)}>
-          COVERED
+          Covered
         </span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.duePartial)}>
-          PARTLY COVERED
+          Partly covered
         </span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.dueUncovered)}>
-          WILL ACCRUE INTEREST
+          Will accrue interest
         </span>
       </div>
 
       {view === "compact" ? (
-        <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-[var(--text-3)]">
-          <span className="text-[var(--text-2)]">PAYCHECK CYCLES:</span>
+        <div className="flex flex-wrap items-center gap-3 text-2xs text-[var(--text-3)]">
+          <span className="text-[var(--text-2)]">Paycheck cycles:</span>
           <span className="inline-flex overflow-hidden rounded-[2px] border border-[var(--border-raw)]">
             <span className="border-l-[3px] border-[var(--border-2)] bg-[var(--bg-1)] px-1.5 py-0.5">
-              CYCLE
+              Cycle
             </span>
             <span className="border-l-[3px] border-[var(--mint)] bg-[color-mix(in_oklch,var(--mint)_11%,var(--bg-1))] px-1.5 py-0.5">
-              NEXT CYCLE
+              Next cycle
             </span>
           </span>
-          <span>TINT SWITCHES AT EACH PAYDAY</span>
+          <span>Tint switches at each payday</span>
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-[var(--text-3)]">
-        <span className="text-[var(--text-2)]">BALANCE LEFT AFTER DAY:</span>
+      <div className="flex flex-wrap items-center gap-3 text-2xs text-[var(--text-3)]">
+        <span className="text-[var(--text-2)]">Balance left after day:</span>
         <span className={cn("tabular rounded-[2px] px-1.5 py-0.5", balanceToneClass(1_000_00), balanceSurfaceClass(1_000_00))}>
-          COMFORTABLE
+          Comfortable
         </span>
         <span className={cn("tabular rounded-[2px] px-1.5 py-0.5", balanceToneClass(100_00), balanceSurfaceClass(100_00))}>
           LOW (&lt; $500)
         </span>
         <span className={cn("tabular rounded-[2px] px-1.5 py-0.5", balanceToneClass(-1), balanceSurfaceClass(-1))}>
-          NEGATIVE
+          Negative
         </span>
       </div>
 
@@ -1429,7 +1428,6 @@ export function CalendarClient({
           {selectedDate ? (
             <>
               <DialogHeader>
-                <CardSubTag>DAY_DETAIL</CardSubTag>
                 <DialogTitle>
                   <DateLabel iso={selectedDate} format="long" />
                 </DialogTitle>
@@ -1482,26 +1480,26 @@ export function CalendarClient({
                           <div className="break-words text-[13px] text-[var(--text-0)]">{ev.label}</div>
                           <div
                             className={cn(
-                              "text-[10px] uppercase tracking-[0.12em]",
+                              "text-2xs",
                               ev.isPaid ? "font-semibold text-[var(--mint)]" : "text-[var(--text-3)]",
                             )}
                           >
                             {statusLabel}
                           </div>
                           {isCardCharge ? (
-                            <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--olive)]">
+                            <div className="mt-1 text-2xs text-[var(--olive)]">
                               Charged to {ev.chargedToCardName} — carried by that card&apos;s payment,
                               no cash out this day
                             </div>
                           ) : null}
                           {isPaydown && !isPastDay && !ev.isPaid ? (
-                            <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--amber)]">
+                            <div className="mt-1 text-2xs text-[var(--amber)]">
                               Pays down the card payment due{" "}
                               <DateLabel iso={ev.paydownTargetDate!} format="short" />
                             </div>
                           ) : null}
                           {isDueMarker && !isPastDay ? (
-                            <div className="mt-1.5 space-y-1 text-[10px] uppercase tracking-[0.12em]">
+                            <div className="mt-1.5 space-y-1 text-2xs">
                               <div className="flex items-center justify-between gap-3 text-[var(--text-3)]">
                                 <span>
                                   {ev.estimated ? "Estimated balance" : "Statement balance"}
@@ -1521,7 +1519,7 @@ export function CalendarClient({
                               {uncoveredCents > 0 ? (
                                 <div
                                   className={cn(
-                                    "flex gap-1.5 border p-2 text-[10px] normal-case tracking-normal",
+                                    "flex gap-1.5 border p-2 text-2xs normal-case tracking-normal",
                                     coverCents > 0
                                       ? "border-[var(--amber)]/50 bg-[var(--amber)]/10 text-[var(--amber)]"
                                       : "border-[var(--red)]/50 bg-[var(--red)]/10 text-[var(--red)]",
@@ -1535,7 +1533,7 @@ export function CalendarClient({
                                   </span>
                                 </div>
                               ) : (
-                                <div className="flex gap-1.5 border border-[var(--mint-dim)] bg-[var(--mint-glow)] p-2 text-[10px] normal-case tracking-normal text-[var(--mint)]">
+                                <div className="flex gap-1.5 border border-[var(--mint-dim)] bg-[var(--mint-glow)] p-2 text-2xs normal-case tracking-normal text-[var(--mint)]">
                                   <span>
                                     Covered by scheduled payments — no interest on this due date.
                                   </span>
@@ -1544,7 +1542,7 @@ export function CalendarClient({
                             </div>
                           ) : null}
                           {isCardPayment && !isDueMarker && !isPaydown && paymentDueCents > 0 ? (
-                            <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[var(--amber)]">
+                            <div className="mt-1 text-2xs text-[var(--amber)]">
                               {dueLabel} · due <DateLabel iso={originalDueDate} format="short" /> ·{" "}
                               <Money cents={paymentDueCents} />
                             </div>
@@ -1573,7 +1571,7 @@ export function CalendarClient({
                                   })
                                 }
                               >
-                                <CreditCard className="mr-1 h-3.5 w-3.5" /> EDIT PLAN
+                                <CreditCard className="mr-1 h-3.5 w-3.5" /> Edit plan
                               </Button>
                             ) : (
                               <Button
@@ -1597,7 +1595,7 @@ export function CalendarClient({
                                 }
                               >
                                 <CreditCard className="mr-1 h-3.5 w-3.5" />{" "}
-                                {isDueMarker ? "SCHEDULE PAYMENT" : "PROGRAM PAYMENT"}
+                                {isDueMarker ? "Schedule payment" : "Program payment"}
                               </Button>
                             )
                           ) : null}
@@ -1623,7 +1621,7 @@ export function CalendarClient({
                 )}
                 {selectedRow ? (
                   <div className="flex items-center justify-between border-t border-[var(--border-raw)] pt-2 text-[12px] text-[var(--text-2)]">
-                    <span>END-OF-DAY BALANCE</span>
+                    <span>End-of-day balance</span>
                     <span className={cn("tabular font-semibold", balanceToneClass(selectedRow.balanceCents))}>
                       <Money cents={selectedRow.balanceCents} />
                     </span>
@@ -1632,18 +1630,18 @@ export function CalendarClient({
               </div>
               <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <Button variant="outline" onClick={() => setSelectedDate(null)}>
-                  CLOSE
+                  Close
                 </Button>
                 {activeCards.length > 0 && selectedDate >= today ? (
                   <Button
                     variant="outline"
                     onClick={() => setSchedulingPayment({ date: selectedDate })}
                   >
-                    <CreditCard className="mr-1 h-4 w-4" /> PLAN CARD PAYMENT
+                    <CreditCard className="mr-1 h-4 w-4" /> Plan card payment
                   </Button>
                 ) : null}
                 <Button variant="primary" onClick={() => setAddBillFor(selectedDate)}>
-                  <Plus className="mr-1 h-4 w-4" /> ADD BILL
+                  <Plus className="mr-1 h-4 w-4" /> Add bill
                 </Button>
               </div>
             </>
@@ -1681,9 +1679,8 @@ export function CalendarClient({
           {addBillFor ? (
             <>
               <DialogHeader>
-                <CardSubTag>NEW_BILL</CardSubTag>
                 <DialogTitle>
-                  ADD BILL — <DateLabel iso={addBillFor} format="short" />
+                  Add bill — <DateLabel iso={addBillFor} format="short" />
                 </DialogTitle>
               </DialogHeader>
               <BillForm
@@ -1735,8 +1732,7 @@ function CardPaymentPlanDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>CARD_PAYMENT_PLAN</CardSubTag>
-          <DialogTitle>{plan.label.toUpperCase()}</DialogTitle>
+          <DialogTitle>{plan.label}</DialogTitle>
         </DialogHeader>
         <form
           className="space-y-4 pt-2"
@@ -1745,7 +1741,7 @@ function CardPaymentPlanDialog({
             void onSave(plan, amountCents, plannedDate);
           }}
         >
-          <div className="grid gap-3 border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-[10px] uppercase tracking-[0.14em] text-[var(--text-2)]">
+          <div className="grid gap-3 border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-2xs text-[var(--text-2)]">
             <div className="flex items-center justify-between gap-3">
               <span>Card due date</span>
               <span className="text-[var(--amber)]">
@@ -1769,7 +1765,7 @@ function CardPaymentPlanDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="calendar-card-payment-date">PROGRAMMED PAYMENT DATE</Label>
+            <Label htmlFor="calendar-card-payment-date">Programmed payment date</Label>
             <Input
               id="calendar-card-payment-date"
               type="date"
@@ -1782,7 +1778,7 @@ function CardPaymentPlanDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="calendar-card-payment-amount">PROGRAMMED PAYMENT AMOUNT</Label>
+            <Label htmlFor="calendar-card-payment-amount">Programmed payment amount</Label>
             <MoneyInput
               id="calendar-card-payment-amount"
               valueCents={amountCents}
@@ -1797,7 +1793,7 @@ function CardPaymentPlanDialog({
                 onClick={() => setAmountCents(plan.paymentDueCents)}
                 disabled={saving}
               >
-                PAY AMOUNT DUE
+                Pay amount due
               </Button>
               {plan.paymentBalanceCents != null ? (
                 <Button
@@ -1807,7 +1803,7 @@ function CardPaymentPlanDialog({
                   onClick={() => setAmountCents(plan.paymentBalanceCents!)}
                   disabled={saving}
                 >
-                  PAY CARD BALANCE
+                  Pay card balance
                 </Button>
               ) : null}
             </div>
@@ -1851,20 +1847,20 @@ function CardPaymentPlanDialog({
                 onClick={() => void onReset(plan)}
                 disabled={saving}
               >
-                RESET PLAN
+                Reset plan
               </Button>
             ) : (
               <span />
             )}
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-              CANCEL
+              Cancel
             </Button>
             <Button
               type="submit"
               variant="primary"
               disabled={saving || amountCents <= 0 || !plannedDate || afterDueDate || beforeToday}
             >
-              {saving ? "SAVING…" : "SAVE PAYMENT PLAN"}
+              {saving ? "Saving…" : "Save payment plan"}
             </Button>
           </DialogFooter>
         </form>
@@ -1921,8 +1917,7 @@ function ScheduleCardPaymentDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>SCHEDULE_CARD_PAYMENT</CardSubTag>
-          <DialogTitle>PLAN CARD PAYMENT</DialogTitle>
+          <DialogTitle>Plan card payment</DialogTitle>
         </DialogHeader>
         <form
           className="space-y-4 pt-2"
@@ -1932,7 +1927,7 @@ function ScheduleCardPaymentDialog({
           }}
         >
           <div className="space-y-1.5">
-            <Label>CARD</Label>
+            <Label>Card</Label>
             <Select value={cardId} onValueChange={setCardId}>
               <SelectTrigger>
                 <SelectValue />
@@ -1940,7 +1935,7 @@ function ScheduleCardPaymentDialog({
               <SelectContent>
                 {cards.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
-                    {c.name.toUpperCase()}
+                    {c.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1948,7 +1943,7 @@ function ScheduleCardPaymentDialog({
           </div>
 
           {target ? (
-            <div className="grid gap-3 border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-[10px] uppercase tracking-[0.14em] text-[var(--text-2)]">
+            <div className="grid gap-3 border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-2xs text-[var(--text-2)]">
               <div className="flex items-center justify-between gap-3">
                 <span>Next card payment</span>
                 <span className="text-[var(--amber)]">
@@ -1978,7 +1973,7 @@ function ScheduleCardPaymentDialog({
           )}
 
           <div className="space-y-1.5">
-            <Label htmlFor="schedule-card-payment-date">PAYMENT DATE</Label>
+            <Label htmlFor="schedule-card-payment-date">Payment date</Label>
             <Input
               id="schedule-card-payment-date"
               type="date"
@@ -1990,7 +1985,7 @@ function ScheduleCardPaymentDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="schedule-card-payment-amount">PAYMENT AMOUNT</Label>
+            <Label htmlFor="schedule-card-payment-amount">Payment amount</Label>
             <MoneyInput
               id="schedule-card-payment-amount"
               valueCents={amountCents}
@@ -2006,7 +2001,7 @@ function ScheduleCardPaymentDialog({
                   onClick={() => setAmountCents(dueCents)}
                   disabled={saving}
                 >
-                  PAY AMOUNT DUE
+                  Pay amount due
                 </Button>
                 {target.balanceCents != null ? (
                   <Button
@@ -2016,7 +2011,7 @@ function ScheduleCardPaymentDialog({
                     onClick={() => setAmountCents(target.balanceCents!)}
                     disabled={saving}
                   >
-                    PAY CARD BALANCE
+                    Pay card balance
                   </Button>
                 ) : null}
               </div>
@@ -2065,20 +2060,20 @@ function ScheduleCardPaymentDialog({
                 onClick={() => void onDelete(draft.existing!.cardId, draft.existing!.date)}
                 disabled={saving}
               >
-                REMOVE
+                Remove
               </Button>
             ) : (
               <span />
             )}
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-              CANCEL
+              Cancel
             </Button>
             <Button
               type="submit"
               variant="primary"
               disabled={saving || !cardId || amountCents <= 0 || !date || beforeToday}
             >
-              {saving ? "SAVING…" : "SCHEDULE PAYMENT"}
+              {saving ? "Saving…" : "Schedule payment"}
             </Button>
           </DialogFooter>
         </form>

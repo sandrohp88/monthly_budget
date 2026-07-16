@@ -4,6 +4,14 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Link2, Pencil, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { CardSubTag, PageHead } from "@/components/ui/page-head";
@@ -103,7 +111,7 @@ export function TransactionsClient({
   };
 
   const remove = async (txn: DraftWithAccount) => {
-    if (!confirm(`Delete ${displayName(txn)}?`)) return;
+    if (!(await confirmDialog({ title: `Delete ${displayName(txn)}?`, confirmText: "Delete", tone: "danger" }))) return;
     const previous = transactions;
     setTransactions((rows) => rows.filter((r) => r.id !== txn.id));
     try {
@@ -163,29 +171,28 @@ export function TransactionsClient({
   return (
     <div className="space-y-6 fade-in">
       <PageHead
-        module="MODULE_09"
-        title="TRANSACTIONS"
+        title="Transactions"
         subtitle="Linked account transaction history"
         actions={
           <Button variant="outline" onClick={sync} disabled={syncing}>
             <RefreshCw className={cn("h-3 w-3", syncing && "animate-spin")} />
-            {syncing ? "SYNCING..." : "SYNC NOW"}
+            {syncing ? "SYNCING..." : "Sync now"}
           </Button>
         }
       />
 
       <TileGrid cols="auto">
-        <Tile label="IMPORTED" value={transactions.length} delta="approved automatically" />
-        <Tile label="DEBITS" value={debits.length} delta={<Money cents={debits.reduce((s, t) => s + t.amountCents, 0)} />} />
-        <Tile label="CREDITS" value={credits.length} delta={<Money cents={Math.abs(credits.reduce((s, t) => s + t.amountCents, 0))} />} />
-        <Tile label="CARD PAYMENTS" value={cardPayments.length} delta={<Money cents={cardPaymentsNetCents} />} />
+        <Tile label="Imported" value={transactions.length} delta="approved automatically" />
+        <Tile label="Debits" value={debits.length} delta={<Money cents={debits.reduce((s, t) => s + t.amountCents, 0)} />} />
+        <Tile label="Credits" value={credits.length} delta={<Money cents={Math.abs(credits.reduce((s, t) => s + t.amountCents, 0))} />} />
+        <Tile label="Card payments" value={cardPayments.length} delta={<Money cents={cardPaymentsNetCents} />} />
         <Tile
-          label="BILLS PAID"
+          label="Bills paid"
           value={billsPaid.length}
           variant={billsPaid.length ? "mint" : "default"}
           delta="auto-matched to scheduled bills"
         />
-        <Tile label="PROMO CANDIDATES" value={promoCandidates.length} variant={promoCandidates.length ? "amber" : "default"} delta="API evidence or PayPal > $150" />
+        <Tile label="Promo candidates" value={promoCandidates.length} variant={promoCandidates.length ? "amber" : "default"} delta="API evidence or PayPal > $150" />
       </TileGrid>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -195,7 +202,7 @@ export function TransactionsClient({
               key={key}
               onClick={() => setFilter(key)}
               className={cn(
-                "rounded-sm border px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.15em] transition-colors",
+                "rounded-sm border px-3 py-1.5 text-2xs font-medium transition-colors",
                 filter === key
                   ? "border-[var(--mint-dim)] bg-[var(--mint-glow)] text-[var(--mint)]"
                   : "border-[var(--border-raw)] bg-[var(--bg-2)] text-[var(--text-2)] hover:text-[var(--text-0)]",
@@ -219,13 +226,12 @@ export function TransactionsClient({
       <Card>
         <CardHeader>
           <div>
-            <CardSubTag>TRANSACTION_LEDGER</CardSubTag>
-            <CardTitle className="mt-0.5">HISTORY</CardTitle>
+            <CardTitle className="mt-0.5">History</CardTitle>
           </div>
         </CardHeader>
         {visible.length === 0 ? (
-          <div className="px-4 py-10 text-center text-[11px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-            NO TRANSACTIONS
+          <div className="px-4 py-10 text-center text-[11px] text-[var(--text-3)]">
+            No transactions
           </div>
         ) : (
           <div className="divide-y divide-[var(--border-raw)]">
@@ -237,20 +243,20 @@ export function TransactionsClient({
                   key={txn.id}
                   className="grid grid-cols-[88px_1fr_auto] items-center gap-3 px-4 py-3 transition-colors hover:bg-[var(--bg-2)] lg:grid-cols-[88px_1fr_150px_130px_auto]"
                 >
-                  <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--text-2)]">
+                  <div className="text-2xs text-[var(--text-2)]">
                     <DateLabel iso={txn.date} format="short" />
                   </div>
                   <div className="min-w-0">
-                    <div className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-0)]">
+                    <div className="truncate text-[11px] font-semibold text-[var(--text-0)]">
                       {displayName(txn)}
                     </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[9px] uppercase tracking-[0.1em] text-[var(--text-3)]">
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-2xs text-[var(--text-3)]">
                       <span>{txn.accountName}{txn.accountMask ? ` ****${txn.accountMask}` : ""}</span>
                       {txn.linkedCreditCardName ? <span className="text-[var(--mint)]">· {txn.linkedCreditCardName}</span> : null}
                       {txn.plaidCategory ? <span>· {txn.plaidCategory}</span> : null}
                       {billMatch ? (
                         <StatusPill>
-                          PAID BILL · {billMatch.billName}{" "}
+                          Paid bill · {billMatch.billName}{" "}
                           <DateLabel iso={billMatch.occurrenceDate} format="short" />
                         </StatusPill>
                       ) : null}
@@ -261,18 +267,18 @@ export function TransactionsClient({
                             title="Manually linked — click to change or unlink"
                             onClick={() => setLinkingTxn(txn)}
                           >
-                            LINKED · {billNameById.get(txn.linkedBillId)?.toUpperCase() ?? "BILL"}
+                            Linked · {billNameById.get(txn.linkedBillId) ?? "Bill"}
                           </button>
                         </StatusPill>
                       ) : null}
-                      {txn.kind === "card_payment" ? <StatusPill>CARD PAYMENT</StatusPill> : null}
+                      {txn.kind === "card_payment" ? <StatusPill>Card payment</StatusPill> : null}
                       {txn.promoPayoffDate ? (
-                        <StatusPill variant="amber">PAYOFF <DateLabel iso={txn.promoPayoffDate} format="short" /></StatusPill>
+                        <StatusPill variant="amber">Payoff <DateLabel iso={txn.promoPayoffDate} format="short" /></StatusPill>
                       ) : null}
-                      {txn.linkedPromoId ? <StatusPill>PROMO</StatusPill> : null}
+                      {txn.linkedPromoId ? <StatusPill>Promo</StatusPill> : null}
                     </div>
                     {txn.originalDescription ? (
-                      <div className="mt-1 truncate text-[9px] tracking-wide text-[var(--text-3)]">
+                      <div className="mt-1 truncate text-2xs tracking-wide text-[var(--text-3)]">
                         {txn.originalDescription}
                       </div>
                     ) : null}
@@ -283,7 +289,7 @@ export function TransactionsClient({
                   <div className="hidden justify-end lg:flex">
                     {isPromoCandidate(txn) ? (
                       <Button size="sm" variant="outline" onClick={() => setPromoTxn(txn)}>
-                        <Sparkles className="h-3 w-3" /> PROMO
+                        <Sparkles className="h-3 w-3" /> Promo
                       </Button>
                     ) : null}
                   </div>
@@ -363,7 +369,9 @@ function TransactionBillLinkDialog({
   onSaved: (updated: DraftWithAccount) => void;
 }) {
   const router = useRouter();
-  const [billId, setBillId] = React.useState<string>(transaction.linkedBillId ?? "");
+  // Radix Select can't use an empty-string item value, so "not linked" gets a sentinel.
+  const NONE = "__none__";
+  const [billId, setBillId] = React.useState<string>(transaction.linkedBillId ?? NONE);
   const [saving, setSaving] = React.useState(false);
 
   const submit = async (e: React.FormEvent) => {
@@ -373,11 +381,11 @@ function TransactionBillLinkDialog({
       const res = await fetch(`/api/plaid/drafts/${transaction.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "link_bill", billId: billId === "" ? null : billId }),
+        body: JSON.stringify({ action: "link_bill", billId: billId === NONE ? null : billId }),
       });
       const json = (await res.json()) as { draft?: DraftWithAccount; error?: string };
       if (!res.ok || !json.draft) throw new Error(json.error ?? "Link failed");
-      toast.success(billId === "" ? "Link removed" : "Transaction linked to bill");
+      toast.success(billId === NONE ? "Link removed" : "Transaction linked to bill");
       onSaved({ ...transaction, ...json.draft });
       // The PAID BILL markers come from the server-side reconciliation —
       // refresh re-renders the page with the new match (and learned alias).
@@ -393,41 +401,41 @@ function TransactionBillLinkDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>BILL_LINK</CardSubTag>
-          <DialogTitle>LINK TRANSACTION TO BILL</DialogTitle>
+          <CardSubTag>Link to bill</CardSubTag>
+          <DialogTitle>Link transaction to bill</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
-          <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-[11px]">
-            <div className="font-semibold uppercase tracking-[0.08em] text-[var(--text-0)]">
+          <div className="rounded-md border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-[13px]">
+            <div className="font-semibold text-[var(--text-0)]">
               {displayName(transaction)}
             </div>
-            <div className="mt-0.5 text-[10px] uppercase tracking-[0.1em] text-[var(--text-3)]">
+            <div className="mt-0.5 text-2xs text-[var(--text-3)]">
               <DateLabel iso={transaction.date} format="short" /> ·{" "}
               <Money cents={Math.abs(transaction.amountCents)} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="link-bill">BILL</Label>
-            <select
-              id="link-bill"
-              value={billId}
-              onChange={(e) => setBillId(e.target.value)}
-              className="w-full rounded-sm border border-[var(--border-2)] bg-[var(--bg-1)] px-3 py-2 text-[11px] uppercase tracking-[0.08em] text-[var(--text-0)] focus:outline-none focus:ring-1 focus:ring-[var(--mint)]"
-            >
-              <option value="">— NOT LINKED —</option>
-              {bills.map((b) => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </select>
+            <Label htmlFor="link-bill">Bill</Label>
+            <Select value={billId} onValueChange={setBillId}>
+              <SelectTrigger id="link-bill">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>Not linked</SelectItem>
+                {bills.map((b) => (
+                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <p className="text-[10px] leading-relaxed tracking-wide text-[var(--text-3)]">
+          <p className="text-2xs leading-relaxed text-[var(--text-3)]">
             The reconciliation treats this transaction as paying the selected bill, and future
             transactions with the same wording become match candidates for it automatically.
           </p>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose} disabled={saving}>CANCEL</Button>
+            <Button type="button" variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
             <Button type="submit" variant="primary" disabled={saving}>
-              {saving ? "SAVING..." : "SAVE LINK"}
+              {saving ? "Saving…" : "Save link"}
             </Button>
           </DialogFooter>
         </form>
@@ -485,43 +493,43 @@ function TransactionEditDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>TRANSACTION</CardSubTag>
-          <DialogTitle>EDIT TRANSACTION</DialogTitle>
+          <CardSubTag>Transaction</CardSubTag>
+          <DialogTitle>Edit transaction</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="txn-date">DATE</Label>
+              <Label htmlFor="txn-date">Date</Label>
               <Input id="txn-date" type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>AMOUNT</Label>
+              <Label>Amount</Label>
               <MoneyInput valueCents={amountCents} onChangeCents={setAmountCents} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="txn-desc">DESCRIPTION</Label>
+            <Label htmlFor="txn-desc">Description</Label>
             <Input id="txn-desc" required maxLength={120} value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           <label className="flex cursor-pointer items-center justify-between rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-1)]">CREDIT / REFUND</span>
+            <span className="text-2xs font-semibold text-[var(--text-1)]">Credit / refund</span>
             <Switch checked={isCredit} onCheckedChange={setIsCredit} />
           </label>
           <div className="space-y-1.5">
-            <Label htmlFor="txn-category">CATEGORY</Label>
+            <Label htmlFor="txn-category">Category</Label>
             <select
               id="txn-category"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              className="w-full rounded-sm border border-[var(--border-2)] bg-[var(--bg-1)] px-3 py-2 text-[11px] uppercase tracking-[0.08em] text-[var(--text-0)] focus:outline-none focus:ring-1 focus:ring-[var(--mint)]"
+              className="w-full rounded-sm border border-[var(--border-2)] bg-[var(--bg-1)] px-3 py-2 text-[11px] text-[var(--text-0)] focus:outline-none focus:ring-1 focus:ring-[var(--mint)]"
             >
               {categories.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose} disabled={saving}>CANCEL</Button>
+            <Button type="button" variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
             <Button type="submit" variant="primary" disabled={saving || !description.trim() || amountCents < 0}>
-              {saving ? "SAVING..." : "SAVE"}
+              {saving ? "SAVING..." : "Save"}
             </Button>
           </DialogFooter>
         </form>
@@ -582,54 +590,54 @@ function TransactionPromoDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>{transaction.linkedCreditCardName ?? "LINKED CARD"}</CardSubTag>
-          <DialogTitle>CREATE PROMO</DialogTitle>
+          <CardSubTag>{transaction.linkedCreditCardName ?? "Linked card"}</CardSubTag>
+          <DialogTitle>Create promo</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="promo-start">PURCHASE DATE</Label>
+              <Label htmlFor="promo-start">Purchase date</Label>
               <Input id="promo-start" type="date" required value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="promo-end">PAY IN FULL BY</Label>
+              <Label htmlFor="promo-end">Pay in full by</Label>
               <Input id="promo-end" type="date" required value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="promo-desc">DESCRIPTION</Label>
+            <Label htmlFor="promo-desc">Description</Label>
             <Input id="promo-desc" required maxLength={120} value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>ORIGINAL AMOUNT</Label>
+              <Label>Original amount</Label>
               <MoneyInput valueCents={originalAmountCents} onChangeCents={(next) => {
                 setOriginalAmountCents(next);
                 setRemainingAmountCents((current) => Math.min(current, next));
               }} />
             </div>
             <div className="space-y-1.5">
-              <Label>REMAINING BALANCE</Label>
+              <Label>Remaining balance</Label>
               <MoneyInput valueCents={remainingAmountCents} onChangeCents={setRemainingAmountCents} />
             </div>
           </div>
           <label className="flex cursor-pointer items-center justify-between rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-1)]">SET DESIRED CYCLE PAYMENT</span>
+            <span className="text-2xs font-semibold text-[var(--text-1)]">Set desired cycle payment</span>
             <Switch checked={useDesiredPayment} onCheckedChange={setUseDesiredPayment} />
           </label>
           {useDesiredPayment ? (
             <div className="space-y-1.5">
-              <Label>DESIRED CYCLE PAYMENT</Label>
+              <Label>Desired cycle payment</Label>
               <MoneyInput valueCents={monthlyPaymentCents} onChangeCents={setMonthlyPaymentCents} />
             </div>
           ) : null}
           {transaction.originalDescription ? (
-            <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-[10px] tracking-wide text-[var(--text-2)]">
+            <div className="rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-2xs tracking-wide text-[var(--text-2)]">
               {transaction.originalDescription}
             </div>
           ) : null}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose} disabled={saving}>CANCEL</Button>
+            <Button type="button" variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
             <Button
               type="submit"
               variant="primary"
@@ -642,7 +650,7 @@ function TransactionPromoDialog({
                 (useDesiredPayment && monthlyPaymentCents <= 0)
               }
             >
-              {saving ? "SAVING..." : "CREATE PROMO"}
+              {saving ? "SAVING..." : "Create promo"}
             </Button>
           </DialogFooter>
         </form>

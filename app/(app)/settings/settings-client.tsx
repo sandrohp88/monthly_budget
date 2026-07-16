@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Download, Upload, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CardSubTag, PageHead } from "@/components/ui/page-head";
+import { PageHead } from "@/components/ui/page-head";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -161,14 +161,13 @@ export function SettingsClient({
   return (
     <div className="space-y-6 fade-in">
       <PageHead
-        module="MODULE_06"
-        title="SETTINGS"
+        title="Settings"
         subtitle={`System configuration · v${version}`}
         actions={
           <>
             <Button variant="outline" asChild>
               <a href="/api/backup/export">
-                <Download className="h-3 w-3" /> EXPORT JSON
+                <Download className="h-3 w-3" /> Export JSON
               </a>
             </Button>
             <input
@@ -183,15 +182,15 @@ export function SettingsClient({
               }}
             />
             <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
-              <Upload className="h-3 w-3" /> IMPORT JSON
+              <Upload className="h-3 w-3" /> Import JSON
             </Button>
           </>
         }
       />
 
-      <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.15em] text-[var(--mint)]">
+      <div className="flex items-center gap-2 text-2xs text-[var(--mint)]">
         <span>{">"}</span>
-        <span>CONFIGURING_RUNTIME_PARAMETERS</span>
+        <span>Configuring…</span>
         <span className="blink">_</span>
       </div>
 
@@ -199,19 +198,18 @@ export function SettingsClient({
         <Card>
           <CardHeader>
             <div>
-              <CardSubTag>CONFIG_01</CardSubTag>
-              <CardTitle className="mt-0.5">PROJECTION</CardTitle>
+              <CardTitle className="mt-0.5">Projection</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
             <form onSubmit={save} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label>STARTING BALANCE</Label>
+                  <Label>Starting balance</Label>
                   <MoneyInput valueCents={startingBalanceCents} onChangeCents={setStartingBalance} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="startingBalanceAsOf">STARTING BALANCE AS OF</Label>
+                  <Label htmlFor="startingBalanceAsOf">Starting balance as of</Label>
                   <Input
                     id="startingBalanceAsOf"
                     type="date"
@@ -221,11 +219,11 @@ export function SettingsClient({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>DEFAULT PAYCHECK</Label>
+                  <Label>Default paycheck</Label>
                   <MoneyInput valueCents={defaultPaycheckCents} onChangeCents={setDefaultPaycheck} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="firstPayday">FIRST PAYDAY</Label>
+                  <Label htmlFor="firstPayday">First payday</Label>
                   <Input
                     id="firstPayday"
                     type="date"
@@ -235,7 +233,7 @@ export function SettingsClient({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="payFreq">PAY FREQUENCY (DAYS)</Label>
+                  <Label htmlFor="payFreq">Pay frequency (days)</Label>
                   <Input
                     id="payFreq"
                     type="number"
@@ -246,7 +244,7 @@ export function SettingsClient({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="projMonths">PROJECTION MONTHS</Label>
+                  <Label htmlFor="projMonths">Projection months</Label>
                   <Input
                     id="projMonths"
                     type="number"
@@ -257,7 +255,7 @@ export function SettingsClient({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="currency">CURRENCY</Label>
+                  <Label htmlFor="currency">Currency</Label>
                   <Input
                     id="currency"
                     required
@@ -267,13 +265,13 @@ export function SettingsClient({
                   />
                 </div>
                 <div className="col-span-2 space-y-1.5">
-                  <Label htmlFor="tz">TIMEZONE</Label>
+                  <Label htmlFor="tz">Timezone</Label>
                   <Input id="tz" required value={timezone} onChange={(e) => setTimezone(e.target.value)} />
                 </div>
               </div>
               <div className="flex justify-end pt-1">
                 <Button type="submit" variant="primary" disabled={submitting}>
-                  {submitting ? "SAVING…" : "SAVE SETTINGS"}
+                  {submitting ? "Saving…" : "Save settings"}
                 </Button>
               </div>
             </form>
@@ -286,35 +284,34 @@ export function SettingsClient({
       <Card>
         <CardHeader>
           <div>
-            <CardSubTag>CATEGORIES_01</CardSubTag>
-            <CardTitle className="mt-0.5">CATEGORIES</CardTitle>
+            <CardTitle className="mt-0.5">Categories</CardTitle>
           </div>
           <Button variant="primary" size="sm" onClick={() => setCategoryDialogOpen(true)}>
-            <Plus className="h-3 w-3" /> ADD CATEGORY
+            <Plus className="h-3 w-3" /> Add category
           </Button>
         </CardHeader>
         <div className="overflow-x-auto">
-          <table className="w-full text-[11px] font-mono tabular">
+          <table className="w-full text-[11px] tabular">
             <thead>
               <tr className="border-b border-[var(--border-raw)] bg-[var(--bg-1)] text-left">
-                <th className="px-4 py-3 text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                  COLOR
+                <th className="px-4 py-3 text-2xs font-medium text-[var(--text-3)]">
+                  Color
                 </th>
-                <th className="px-4 py-3 text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                  NAME
+                <th className="px-4 py-3 text-2xs font-medium text-[var(--text-3)]">
+                  Name
                 </th>
-                <th className="px-4 py-3 text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                  KIND
+                <th className="px-4 py-3 text-2xs font-medium text-[var(--text-3)]">
+                  Kind
                 </th>
-                <th className="px-4 py-3 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                  ACTIONS
+                <th className="px-4 py-3 text-right text-2xs font-medium text-[var(--text-3)]">
+                  Actions
                 </th>
               </tr>
             </thead>
             <tbody>
               {categories.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-6 text-center text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+                  <td colSpan={4} className="px-4 py-6 text-center text-2xs text-[var(--text-3)]">
                     No categories yet
                   </td>
                 </tr>
@@ -353,28 +350,27 @@ export function SettingsClient({
         <Card>
           <CardHeader>
             <div>
-              <CardSubTag>USERS_01</CardSubTag>
-              <CardTitle className="mt-0.5">FAMILY MEMBERS</CardTitle>
+              <CardTitle className="mt-0.5">Family members</CardTitle>
             </div>
             <Button variant="primary" size="sm" onClick={openCreate}>
-              <Plus className="h-3 w-3" /> ADD MEMBER
+              <Plus className="h-3 w-3" /> Add member
             </Button>
           </CardHeader>
           <div className="overflow-x-auto">
-            <table className="w-full text-[11px] font-mono tabular">
+            <table className="w-full text-[11px] tabular">
               <thead>
                 <tr className="border-b border-[var(--border-raw)] bg-[var(--bg-1)] text-left">
-                  <th className="px-4 py-3 text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    NAME
+                  <th className="px-4 py-3 text-2xs font-medium text-[var(--text-3)]">
+                    Name
                   </th>
-                  <th className="px-4 py-3 text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    EMAIL
+                  <th className="px-4 py-3 text-2xs font-medium text-[var(--text-3)]">
+                    Email
                   </th>
-                  <th className="px-4 py-3 text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    ROLE
+                  <th className="px-4 py-3 text-2xs font-medium text-[var(--text-3)]">
+                    Role
                   </th>
-                  <th className="px-4 py-3 text-right text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-3)]">
-                    ACTIONS
+                  <th className="px-4 py-3 text-right text-2xs font-medium text-[var(--text-3)]">
+                    Actions
                   </th>
                 </tr>
               </thead>
@@ -384,7 +380,7 @@ export function SettingsClient({
                     <td className="px-4 py-3 font-semibold text-[var(--text-0)]">
                       {u.displayName}
                       {u.id === currentUser.id ? (
-                        <span className="ml-2 text-[9px] uppercase tracking-[0.15em] text-[var(--text-3)]">
+                        <span className="ml-2 text-2xs text-[var(--text-3)]">
                           (YOU)
                         </span>
                       ) : null}
@@ -396,7 +392,7 @@ export function SettingsClient({
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-1">
                         <Button size="sm" variant="ghost" onClick={() => openEdit(u)}>
-                          EDIT
+                          Edit
                         </Button>
                         {u.id !== currentUser.id ? (
                           <Button
@@ -404,7 +400,7 @@ export function SettingsClient({
                             variant="destructive"
                             onClick={() => setDeleteTarget(u)}
                           >
-                            REMOVE
+                            Remove
                           </Button>
                         ) : null}
                       </div>
@@ -420,10 +416,9 @@ export function SettingsClient({
       <Card>
         <CardHeader>
           <div>
-            <CardSubTag>SYSTEM_INFO</CardSubTag>
-            <CardTitle className="mt-0.5">RUNTIME</CardTitle>
+            <CardTitle className="mt-0.5">Runtime</CardTitle>
           </div>
-          <StatusPill>ONLINE</StatusPill>
+          <StatusPill>Online</StatusPill>
         </CardHeader>
         <CardContent>
           <div className="space-y-1.5 text-[11px] tabular text-[var(--text-2)]">
@@ -559,17 +554,16 @@ function AccountCard({ currentUser }: { currentUser: CurrentUser }) {
     <Card>
       <CardHeader>
         <div>
-          <CardSubTag>CONFIG_02</CardSubTag>
-          <CardTitle className="mt-0.5">ACCOUNT</CardTitle>
+          <CardTitle className="mt-0.5">Account</CardTitle>
         </div>
-        <span className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
+        <span className="text-2xs text-[var(--text-2)]">
           {currentUser.email}
         </span>
       </CardHeader>
       <CardContent className="space-y-5">
         <form onSubmit={saveName} className="space-y-3">
           <div className="space-y-1.5">
-            <Label htmlFor="displayName">DISPLAY NAME</Label>
+            <Label htmlFor="displayName">Display name</Label>
             <Input
               id="displayName"
               required
@@ -580,18 +574,18 @@ function AccountCard({ currentUser }: { currentUser: CurrentUser }) {
           </div>
           <div className="flex justify-end">
             <Button type="submit" variant="outline" size="sm" disabled={savingName}>
-              {savingName ? "SAVING…" : "SAVE NAME"}
+              {savingName ? "Saving…" : "Save name"}
             </Button>
           </div>
         </form>
 
         <div className="border-t border-[var(--border-raw)] pt-4">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--text-1)]">
-            CHANGE PASSWORD
+          <p className="mb-3 text-[11px] font-semibold text-[var(--text-1)]">
+            Change password
           </p>
           <form onSubmit={savePassword} className="space-y-3">
             <div className="space-y-1.5">
-              <Label htmlFor="curPw">CURRENT PASSWORD</Label>
+              <Label htmlFor="curPw">Current password</Label>
               <Input
                 id="curPw"
                 type="password"
@@ -601,7 +595,7 @@ function AccountCard({ currentUser }: { currentUser: CurrentUser }) {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="newPw">NEW PASSWORD</Label>
+              <Label htmlFor="newPw">New password</Label>
               <Input
                 id="newPw"
                 type="password"
@@ -612,7 +606,7 @@ function AccountCard({ currentUser }: { currentUser: CurrentUser }) {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="confirmPw">CONFIRM</Label>
+              <Label htmlFor="confirmPw">Confirm</Label>
               <Input
                 id="confirmPw"
                 type="password"
@@ -624,7 +618,7 @@ function AccountCard({ currentUser }: { currentUser: CurrentUser }) {
             </div>
             <div className="flex justify-end">
               <Button type="submit" variant="outline" size="sm" disabled={savingPw}>
-                {savingPw ? "SAVING…" : "CHANGE PASSWORD"}
+                {savingPw ? "Saving…" : "Change password"}
               </Button>
             </div>
           </form>
@@ -671,12 +665,11 @@ function UserCreateDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>NEW_USER</CardSubTag>
-          <DialogTitle>ADD FAMILY MEMBER</DialogTitle>
+          <DialogTitle>Add family member</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4 pt-2">
           <div className="space-y-1.5">
-            <Label htmlFor="new-email">EMAIL</Label>
+            <Label htmlFor="new-email">Email</Label>
             <Input
               id="new-email"
               type="email"
@@ -686,7 +679,7 @@ function UserCreateDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="new-name">DISPLAY NAME</Label>
+            <Label htmlFor="new-name">Display name</Label>
             <Input
               id="new-name"
               required
@@ -696,7 +689,7 @@ function UserCreateDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="new-pw">PASSWORD</Label>
+            <Label htmlFor="new-pw">Password</Label>
             <Input
               id="new-pw"
               type="password"
@@ -707,23 +700,23 @@ function UserCreateDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label>ROLE</Label>
+            <Label>Role</Label>
             <Select value={role} onValueChange={(v) => setRole(v as "admin" | "member")}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="member">MEMBER</SelectItem>
-                <SelectItem value="admin">ADMIN</SelectItem>
+                <SelectItem value="member">Member</SelectItem>
+                <SelectItem value="admin">Admin</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
-              CANCEL
+              Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={saving}>
-              {saving ? "ADDING…" : "ADD MEMBER"}
+              {saving ? "Adding…" : "Add member"}
             </Button>
           </DialogFooter>
         </form>
@@ -783,16 +776,15 @@ function UserEditDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>EDIT_USER</CardSubTag>
-          <DialogTitle>{user.displayName.toUpperCase()}</DialogTitle>
+          <DialogTitle>{user.displayName}</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4 pt-2">
           <div className="space-y-1.5">
-            <Label>EMAIL</Label>
+            <Label>Email</Label>
             <Input value={user.email} disabled className="opacity-60" />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="edit-name">DISPLAY NAME</Label>
+            <Label htmlFor="edit-name">Display name</Label>
             <Input
               id="edit-name"
               required
@@ -803,21 +795,21 @@ function UserEditDialog({
           </div>
           {!isSelf ? (
             <div className="space-y-1.5">
-              <Label>ROLE</Label>
+              <Label>Role</Label>
               <Select value={role} onValueChange={(v) => setRole(v as "admin" | "member")}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="member">MEMBER</SelectItem>
-                  <SelectItem value="admin">ADMIN</SelectItem>
+                  <SelectItem value="member">Member</SelectItem>
+                  <SelectItem value="admin">Admin</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           ) : null}
           <div className="space-y-1.5">
             <Label htmlFor="reset-pw">
-              NEW PASSWORD{" "}
+              New password{" "}
               <span className="normal-case text-[var(--text-3)] tracking-normal">(optional)</span>
             </Label>
             <Input
@@ -831,10 +823,10 @@ function UserEditDialog({
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
-              CANCEL
+              Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={saving}>
-              {saving ? "SAVING…" : "SAVE CHANGES"}
+              {saving ? "Saving…" : "Save changes"}
             </Button>
           </DialogFooter>
         </form>
@@ -856,18 +848,17 @@ function ConfirmDeleteDialog({
     <Dialog open onOpenChange={(open) => !open && onCancel()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>CONFIRM_DELETE</CardSubTag>
-          <DialogTitle>REMOVE {name.toUpperCase()}?</DialogTitle>
+          <DialogTitle>Remove {name}?</DialogTitle>
         </DialogHeader>
         <p className="pt-1 text-[11px] tracking-wide text-[var(--text-2)]">
           This will permanently delete their account and all their budget data. This cannot be undone.
         </p>
         <DialogFooter>
           <Button variant="outline" onClick={onCancel}>
-            CANCEL
+            Cancel
           </Button>
           <Button variant="destructive" onClick={onConfirm}>
-            REMOVE
+            Remove
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -882,7 +873,7 @@ function SignOutButton() {
   };
   return (
     <Button variant="outline" onClick={handleSignOut}>
-      SIGN OUT
+      Sign out
     </Button>
   );
 }

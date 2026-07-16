@@ -5,7 +5,7 @@ import { Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { CardSubTag, PageHead } from "@/components/ui/page-head";
+import { PageHead } from "@/components/ui/page-head";
 import {
   Dialog,
   DialogContent,
@@ -40,13 +40,13 @@ import { todayIso } from "@/lib/dates";
 import type { AssetRow } from "@/lib/db/schema";
 
 const ASSET_CATEGORIES = [
-  { value: "real_estate", label: "REAL ESTATE" },
-  { value: "vehicle", label: "VEHICLE" },
-  { value: "investment", label: "INVESTMENT" },
-  { value: "savings", label: "SAVINGS" },
-  { value: "retirement", label: "RETIREMENT" },
-  { value: "crypto", label: "CRYPTO" },
-  { value: "other", label: "OTHER" },
+  { value: "real_estate", label: "Real estate" },
+  { value: "vehicle", label: "Vehicle" },
+  { value: "investment", label: "Investment" },
+  { value: "savings", label: "Savings" },
+  { value: "retirement", label: "Retirement" },
+  { value: "crypto", label: "Crypto" },
+  { value: "other", label: "Other" },
 ] as const;
 
 const CATEGORY_LABEL: Record<string, string> = Object.fromEntries(
@@ -108,8 +108,7 @@ export function AssetsClient({
   return (
     <div className="space-y-6 fade-in">
       <PageHead
-        module="MODULE_09"
-        title="ASSETS"
+        title="Assets"
         subtitle="Track asset values for net worth calculation"
         actions={
           <Button
@@ -119,19 +118,19 @@ export function AssetsClient({
               setDialogOpen(true);
             }}
           >
-            <Plus className="h-3 w-3" /> ADD ASSET
+            <Plus className="h-3 w-3" /> Add asset
           </Button>
         }
       />
 
       <TileGrid cols={3}>
         <Tile
-          label="TOTAL ASSETS"
+          label="Total assets"
           value={<Money cents={totalCents} />}
           delta={`${items.length} asset${items.length === 1 ? "" : "s"}`}
         />
         <Tile
-          label="LARGEST"
+          label="Largest"
           value={
             largest ? (
               <Money cents={largest.valueCents} />
@@ -141,13 +140,13 @@ export function AssetsClient({
           }
           delta={largest ? largest.name : "no assets"}
         />
-        <Tile label="CATEGORIES" value={categoryCount} delta="distinct" />
+        <Tile label="Categories" value={categoryCount} delta="distinct" />
       </TileGrid>
 
       {items.length === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>NO ASSETS TRACKED</CardTitle>
+            <CardTitle>No assets tracked</CardTitle>
           </CardHeader>
           <div className="px-4 py-8 text-center">
             <p className="mb-4 text-[11px] tracking-wide text-[var(--text-2)]">
@@ -161,7 +160,7 @@ export function AssetsClient({
                 setDialogOpen(true);
               }}
             >
-              <Plus className="h-3 w-3" /> ADD ASSET
+              <Plus className="h-3 w-3" /> Add asset
             </Button>
           </div>
         </Card>
@@ -169,18 +168,17 @@ export function AssetsClient({
         <Card>
           <CardHeader>
             <div>
-              <CardSubTag>TABLE_ASSETS</CardSubTag>
-              <CardTitle className="mt-0.5">TRACKED ASSETS</CardTitle>
+              <CardTitle className="mt-0.5">Tracked assets</CardTitle>
             </div>
           </CardHeader>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>NAME</TableHead>
-                <TableHead>CATEGORY</TableHead>
-                <TableHead>AS OF</TableHead>
-                <TableHead className="text-right">VALUE</TableHead>
-                <TableHead>NOTES</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Category</TableHead>
+                <TableHead>As of</TableHead>
+                <TableHead className="text-right">Value</TableHead>
+                <TableHead>Notes</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -229,10 +227,10 @@ export function AssetsClient({
               <TableRow>
                 <TableCell
                   colSpan={3}
-                  className="text-[var(--text-0)] uppercase tracking-[0.15em]"
+                  className="text-[var(--text-0)]"
                 >
-                  TOTAL &middot; {items.length} ASSET
-                  {items.length === 1 ? "" : "S"}
+                  Total &middot; {items.length} asset
+                  {items.length === 1 ? "" : "s"}
                 </TableCell>
                 <TableCell className="text-right text-[var(--mint)]">
                   <Money cents={totalCents} />
@@ -253,9 +251,8 @@ export function AssetsClient({
       >
         <DialogContent>
           <DialogHeader>
-            <CardSubTag>{editing ? "EDIT_ASSET" : "NEW_ASSET"}</CardSubTag>
             <DialogTitle>
-              {editing ? "EDIT ASSET" : "ADD ASSET"}
+              {editing ? "Edit asset" : "Add asset"}
             </DialogTitle>
           </DialogHeader>
           <AssetForm
@@ -345,7 +342,7 @@ function AssetForm({
     >
       <div className="grid grid-cols-2 gap-4">
         <div className="col-span-2 space-y-1.5">
-          <Label htmlFor="name">NAME</Label>
+          <Label htmlFor="name">Name</Label>
           <Input
             id="name"
             required
@@ -363,7 +360,7 @@ function AssetForm({
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="asOfDate">AS OF DATE</Label>
+          <Label htmlFor="asOfDate">As of date</Label>
           <Input
             id="asOfDate"
             type="date"
@@ -373,7 +370,7 @@ function AssetForm({
           />
         </div>
         <div className="col-span-2 space-y-1.5">
-          <Label>CATEGORY</Label>
+          <Label>Category</Label>
           <Select value={category} onValueChange={setCategory}>
             <SelectTrigger>
               <SelectValue />
@@ -388,7 +385,7 @@ function AssetForm({
           </Select>
         </div>
         <div className="col-span-2 space-y-1.5">
-          <Label htmlFor="notes">NOTES</Label>
+          <Label htmlFor="notes">Notes</Label>
           <Input
             id="notes"
             value={notes}
@@ -404,14 +401,14 @@ function AssetForm({
           onClick={onCancel}
           disabled={submitting}
         >
-          CANCEL
+          Cancel
         </Button>
         <Button
           type="submit"
           variant="primary"
           disabled={submitting || !name.trim()}
         >
-          {submitting ? "SAVING…" : "SAVE"}
+          {submitting ? "Saving…" : "Save"}
         </Button>
       </DialogFooter>
     </form>

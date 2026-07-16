@@ -5,7 +5,7 @@ import { Plus, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { CardSubTag, PageHead } from "@/components/ui/page-head";
+import { PageHead } from "@/components/ui/page-head";
 import {
   Dialog,
   DialogContent,
@@ -129,16 +129,15 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
   return (
     <div className="space-y-6 fade-in">
       <PageHead
-        module="MODULE_03"
-        title="PAYCHECKS"
+        title="Paychecks"
         subtitle="Income schedule · scheduled and actual income reconciliation"
         actions={
           <>
             <Button variant="outline" onClick={previewRegen}>
-              <RefreshCw className="h-3 w-3" /> REGEN FROM SETTINGS
+              <RefreshCw className="h-3 w-3" /> Regen from settings
             </Button>
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-3 w-3" /> ADD PAYCHECK
+              <Plus className="h-3 w-3" /> Add paycheck
             </Button>
           </>
         }
@@ -146,12 +145,12 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
 
       <TileGrid cols={3}>
         <Tile
-          label="UPCOMING"
+          label="Upcoming"
           value={upcoming.length}
           delta="paychecks scheduled"
         />
         <Tile
-          label="NEXT PAYDAY"
+          label="Next payday"
           value={
             nextPayday ? (
               <DateLabel iso={nextPayday.payDate} format="short" />
@@ -163,7 +162,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
           variant="mint"
         />
         <Tile
-          label="HISTORY"
+          label="History"
           value={reconciled.length}
           delta="received"
         />
@@ -172,7 +171,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
       {items.length === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>NO PAYCHECKS YET</CardTitle>
+            <CardTitle>No paychecks yet</CardTitle>
           </CardHeader>
           <div className="px-4 py-8 text-center">
             <p className="mb-4 text-[11px] tracking-wide text-[var(--text-2)]">
@@ -186,21 +185,20 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
             <Card>
               <CardHeader>
                 <div>
-                  <CardSubTag>LIST_PAYCHECK</CardSubTag>
                   <CardTitle className="mt-0.5">UPCOMING — NEXT {upcoming.length}</CardTitle>
                 </div>
-                <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
-                  CLICK FIELDS → INLINE EDIT
+                <div className="text-2xs text-[var(--text-2)]">
+                  Click fields → Inline edit
                 </div>
               </CardHeader>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>DATE</TableHead>
-                    <TableHead className="text-right">AMOUNT</TableHead>
-                    <TableHead>NOTE</TableHead>
-                    <TableHead>RECEIVED</TableHead>
-                    <TableHead className="text-right">ACTUAL</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead>Note</TableHead>
+                    <TableHead>Received</TableHead>
+                    <TableHead className="text-right">Actual</TableHead>
                     <TableHead />
                   </TableRow>
                 </TableHeader>
@@ -239,7 +237,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
                             onCheckedChange={(v) => updateRow(p, { actualReceived: v })}
                           />
                           {p.actualReceived && p.settledByDraftId ? (
-                            <StatusPill variant="default">AUTO</StatusPill>
+                            <StatusPill variant="default">Auto</StatusPill>
                           ) : null}
                         </div>
                       </TableCell>
@@ -277,19 +275,18 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
             <Card>
               <CardHeader>
                 <div>
-                  <CardSubTag>LOG_RECEIVED</CardSubTag>
                   <CardTitle className="mt-0.5">RECEIVED — RECONCILIATION</CardTitle>
                 </div>
               </CardHeader>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>DATE</TableHead>
-                    <TableHead className="text-right">EXPECTED</TableHead>
-                    <TableHead className="text-right">ACTUAL</TableHead>
-                    <TableHead className="text-right">DELTA</TableHead>
-                    <TableHead>NOTE</TableHead>
-                    <TableHead>STATUS</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead className="text-right">Expected</TableHead>
+                    <TableHead className="text-right">Actual</TableHead>
+                    <TableHead className="text-right">Delta</TableHead>
+                    <TableHead>Note</TableHead>
+                    <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -300,7 +297,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
                         <TableCell className="font-semibold text-[var(--text-0)]">
                           <DateLabel iso={p.actualDate ?? p.payDate} format="short" />
                           {p.actualDate && p.actualDate !== p.payDate ? (
-                            <div className="text-[10px] font-normal text-[var(--text-2)]">
+                            <div className="text-2xs font-normal text-[var(--text-2)]">
                               sched <DateLabel iso={p.payDate} format="short" />
                             </div>
                           ) : null}
@@ -329,13 +326,13 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
                             />
                             {p.actualReceived ? (
                               <span className="inline-flex items-center gap-1.5">
-                                <StatusPill variant={delta === 0 ? "default" : "warn"}>RECEIVED</StatusPill>
+                                <StatusPill variant={delta === 0 ? "default" : "warn"}>Received</StatusPill>
                                 {p.settledByDraftId ? (
-                                  <StatusPill variant="default">AUTO</StatusPill>
+                                  <StatusPill variant="default">Auto</StatusPill>
                                 ) : null}
                               </span>
                             ) : (
-                              <StatusPill variant="off">PENDING</StatusPill>
+                              <StatusPill variant="off">Pending</StatusPill>
                             )}
                           </div>
                         </TableCell>
@@ -352,8 +349,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <CardSubTag>NEW_PAYCHECK</CardSubTag>
-            <DialogTitle>ADD PAYCHECK</DialogTitle>
+            <DialogTitle>Add paycheck</DialogTitle>
           </DialogHeader>
           <CreatePaycheckForm
             onCancel={() => setCreateOpen(false)}
@@ -368,8 +364,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
       <Dialog open={regenPreview !== null} onOpenChange={(o) => !o && setRegenPreview(null)}>
         <DialogContent>
           <DialogHeader>
-            <CardSubTag>REGEN_DIFF</CardSubTag>
-            <DialogTitle>REGENERATE PAYCHECKS</DialogTitle>
+            <DialogTitle>Regenerate paychecks</DialogTitle>
             <DialogDescription>
               {regenPreview && regenPreview.length > 0
                 ? `Add ${regenPreview.length} new paycheck${regenPreview.length === 1 ? "" : "s"}:`
@@ -377,7 +372,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
             </DialogDescription>
           </DialogHeader>
           {regenPreview && regenPreview.length > 0 ? (
-            <AlertBar tag="DIFF" variant="mint">
+            <AlertBar tag="Diff" variant="mint">
               Will append <strong className="text-[var(--mint)]">{regenPreview.length}</strong> future paycheck{regenPreview.length === 1 ? "" : "s"} matching defaults. Existing rows are left untouched.
             </AlertBar>
           ) : null}
@@ -398,14 +393,14 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
           </ul>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRegenPreview(null)}>
-              CANCEL
+              Cancel
             </Button>
             <Button
               variant="primary"
               onClick={applyRegen}
               disabled={submitting || !regenPreview || regenPreview.length === 0}
             >
-              {submitting ? "APPLYING…" : "APPLY"}
+              {submitting ? "Applying…" : "Apply"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -451,7 +446,7 @@ function CreatePaycheckForm({
       }}
     >
       <div className="space-y-1.5">
-        <Label htmlFor="payDate">DATE</Label>
+        <Label htmlFor="payDate">Date</Label>
         <Input
           id="payDate"
           type="date"
@@ -465,15 +460,15 @@ function CreatePaycheckForm({
         <MoneyInput valueCents={amountCents} onChangeCents={setAmountCents} />
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor="note">NOTE</Label>
+        <Label htmlFor="note">Note</Label>
         <Input id="note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Bonus, PTO…" />
       </div>
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
-          CANCEL
+          Cancel
         </Button>
         <Button type="submit" variant="primary" disabled={submitting}>
-          {submitting ? "SAVING…" : "SAVE"}
+          {submitting ? "Saving…" : "Save"}
         </Button>
       </DialogFooter>
     </form>

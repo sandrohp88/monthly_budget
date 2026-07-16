@@ -79,7 +79,7 @@ function FallbackFace({
         <span
           className={cn(
             "max-w-[70%] truncate text-[16px] font-bold leading-tight tracking-wide",
-            !brand.preserveCase && "uppercase",
+            !brand.preserveCase && "",
           )}
         >
           {brand.wordmark}
@@ -87,7 +87,7 @@ function FallbackFace({
         <Chip />
       </div>
       <div className="flex items-end justify-between">
-        <span className="text-[13px] font-semibold tracking-[0.18em] opacity-90 tabular">
+        <span className="text-[13px] font-semibold opacity-90 tabular">
           {digits ? `••••  ${digits}` : "••••  ••••"}
         </span>
         {network ? (

@@ -38,7 +38,7 @@ export function MobileTabBar() {
             href={item.href}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "flex flex-1 flex-col items-center gap-1 py-2 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors",
+              "flex flex-1 flex-col items-center gap-1 py-2 text-2xs font-semibold transition-colors",
               active ? "text-[var(--mint)]" : "text-[var(--text-2)] hover:text-[var(--text-0)]",
             )}
           >

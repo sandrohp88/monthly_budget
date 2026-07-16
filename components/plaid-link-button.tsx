@@ -87,7 +87,7 @@ export function PlaidLinkButton({ onLinked }: PlaidLinkButtonProps) {
       disabled={fetching || exchanging}
     >
       <Link2 className="h-3 w-3" />
-      {exchanging ? "LINKING…" : fetching ? "LOADING…" : "LINK A NEW ACCOUNT"}
+      {exchanging ? "Linking…" : fetching ? "Loading…" : "Link a new account"}
     </Button>
   );
 }

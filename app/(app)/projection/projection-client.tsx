@@ -31,7 +31,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CardSubTag } from "@/components/ui/page-head";
 import { Money } from "@/components/money";
 import { MoneyInput } from "@/components/money-input";
 import { DateLabel } from "@/components/date-label";
@@ -156,7 +155,7 @@ function buildLedgerSections(rows: ProjectionRow[]): LedgerSection[] {
   const sections: LedgerSection[] = [];
   let current: LedgerSection = {
     key: "opening-balance",
-    sourceLabel: "OPENING BALANCE",
+    sourceLabel: "Opening balance",
     sourceAmountCents: 0,
     expenseCents: 0,
     billCount: 0,
@@ -374,7 +373,7 @@ export function ProjectionClient({
     <div className="space-y-4 font-sans">
       {mode === "full" && insights ? (
         <>
-      <section className="overflow-hidden rounded-[18px] border border-[var(--border-raw)] bg-[var(--bg-card)] shadow-[0_10px_30px_rgba(0,0,0,0.10)]">
+      <section className="overflow-hidden rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] shadow-[0_10px_30px_rgba(0,0,0,0.10)]">
         <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.38fr)]">
           <div className="grid gap-px bg-[var(--border-raw)] sm:grid-cols-2 xl:grid-cols-4">
             <LedgerMetric
@@ -465,7 +464,7 @@ export function ProjectionClient({
                     <>
                       <DateLabel iso={summary.nextEvent.date} format="short" />
                       {" / "}
-                      {summary.nextEvent.events[0]?.label ?? "EVENT"}
+                      {summary.nextEvent.events[0]?.label ?? "Event"}
                     </>
                   ) : (
                     "none"
@@ -482,7 +481,7 @@ export function ProjectionClient({
         </>
       ) : null}
 
-      <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-3 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+      <div className="rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] p-3 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
         <div className="flex flex-wrap items-center gap-2">
           {FILTERS.map((f) => (
             <Tab key={f.key} active={filter === f.key} onClick={() => setFilter(f.key)}>
@@ -499,7 +498,7 @@ export function ProjectionClient({
         </div>
       </div>
 
-      <div className="max-h-[76vh] overflow-auto rounded-[18px] border border-[var(--border-raw)] bg-[var(--bg-card)] shadow-[0_10px_30px_rgba(0,0,0,0.10)]">
+      <div className="max-h-[76vh] overflow-auto rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] shadow-[0_10px_30px_rgba(0,0,0,0.10)]">
         <table className="tabular w-full text-[13px]">
           <thead className="sticky top-0 z-10 bg-[var(--bg-card)] shadow-[0_1px_0_var(--border-raw)]">
             <tr className="border-b border-[var(--border-raw)]">
@@ -701,7 +700,7 @@ function LedgerMetric({
     <div className="min-h-[8.5rem] bg-[var(--bg-card)] p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="text-[13px] font-medium text-[var(--text-3)]">{label}</div>
-        <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-[var(--bg-2)] text-[var(--text-2)]">
+        <span className="grid h-8 w-8 place-items-center rounded-md bg-[var(--bg-2)] text-[var(--text-2)]">
           <Icon className="h-4 w-4" strokeWidth={2} />
         </span>
       </div>
@@ -753,7 +752,7 @@ function ProjectionInsightsPanel({ insights }: { insights: ProjectionInsights })
         <InsightMetric
           icon={ShieldAlert}
           label="First shortfall"
-          value={shortfall ? <Money cents={shortfall.neededCents} /> : "CLEAR"}
+          value={shortfall ? <Money cents={shortfall.neededCents} /> : "Clear"}
           tone={shortfall ? "danger" : "good"}
           detail={
             shortfall ? (
@@ -772,7 +771,7 @@ function ProjectionInsightsPanel({ insights }: { insights: ProjectionInsights })
             monthRunway ? (
               <Money cents={monthRunway.leftAfterScheduledCents} />
             ) : (
-              "NO DATA"
+              "No data"
             )
           }
           tone={runwayTone}
@@ -790,7 +789,7 @@ function ProjectionInsightsPanel({ insights }: { insights: ProjectionInsights })
           icon={ListChecks}
           label="Remaining outflow"
           value={
-            monthRunway ? <Money cents={monthRunway.expenseRemainingCents} /> : "NO DATA"
+            monthRunway ? <Money cents={monthRunway.expenseRemainingCents} /> : "No data"
           }
           tone="warn"
           detail={
@@ -804,10 +803,10 @@ function ProjectionInsightsPanel({ insights }: { insights: ProjectionInsights })
           }
         />
       </div>
-      <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+      <div className="rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <div className="text-[12px] font-medium tracking-[0.12em] text-[var(--text-3)] uppercase">
+            <div className="text-[12px] font-medium text-[var(--text-3)]">
               Cash pressure
             </div>
             <div className="mt-1 text-[15px] font-semibold text-[var(--text-0)]">
@@ -924,9 +923,9 @@ function ProjectionAnalyticsPanel({ insights }: { insights: ProjectionInsights }
       </div>
 
       {paycheckCycles.length > 1 ? (
-        <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+        <div className="rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
           <div className="mb-3">
-            <div className="text-[12px] font-medium tracking-[0.12em] text-[var(--text-3)] uppercase">
+            <div className="text-[12px] font-medium text-[var(--text-3)]">
               Paycheck cycle analysis
             </div>
             <div className="mt-1 text-[15px] font-semibold text-[var(--text-0)]">
@@ -941,7 +940,7 @@ function ProjectionAnalyticsPanel({ insights }: { insights: ProjectionInsights }
                     <th
                       key={h}
                       className={cn(
-                        "px-3 py-2 text-[11px] font-medium tracking-[0.12em] text-[var(--text-3)] uppercase",
+                        "px-3 py-2 text-[11px] font-medium text-[var(--text-3)]",
                         i >= 1 ? "text-right" : "text-left",
                       )}
                     >
@@ -987,10 +986,10 @@ function ProjectionAnalyticsPanel({ insights }: { insights: ProjectionInsights }
       ) : null}
 
       {expenseClusters.length > 0 ? (
-        <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+        <div className="rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <div className="text-[12px] font-medium tracking-[0.12em] text-[var(--text-3)] uppercase">
+              <div className="text-[12px] font-medium text-[var(--text-3)]">
                 Expense clustering
               </div>
               <div className="mt-1 text-[15px] font-semibold text-[var(--text-0)]">
@@ -1044,12 +1043,12 @@ function InsightMetric({
         : "text-[var(--phosphor)]";
 
   return (
-    <div className="rounded-[16px] border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+    <div className="rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="text-[12px] font-medium tracking-[0.12em] text-[var(--text-3)] uppercase">
+        <div className="text-[12px] font-medium text-[var(--text-3)]">
           {label}
         </div>
-        <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-[var(--bg-2)] text-[var(--text-2)]">
+        <span className="grid h-8 w-8 place-items-center rounded-md bg-[var(--bg-2)] text-[var(--text-2)]">
           <Icon className="h-4 w-4" strokeWidth={2} />
         </span>
       </div>
@@ -1099,7 +1098,7 @@ function EventAvatar({ event, isIncomeEvent }: { event: ProjectionEvent; isIncom
       : "bg-[color-mix(in_oklch,var(--amber)_12%,transparent)] text-[var(--amber)]";
 
   return (
-    <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-[12px]", toneClass)}>
+    <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg", toneClass)}>
       <Icon className="h-4.5 w-4.5" strokeWidth={2} />
     </span>
   );
@@ -1113,7 +1112,7 @@ function NegativeBalanceMarker() {
       tabIndex={0}
     >
       <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-      <span className="pointer-events-none absolute top-5 left-0 z-20 hidden w-72 rounded-[12px] border border-[color-mix(in_oklch,var(--red)_30%,transparent)] bg-[var(--bg-card)] px-3 py-2 text-left text-[12px] leading-snug font-medium whitespace-normal text-[var(--text-1)] shadow-[0_8px_24px_rgba(0,0,0,0.18)] group-hover:block group-focus:block">
+      <span className="pointer-events-none absolute top-5 left-0 z-20 hidden w-72 rounded-lg border border-[color-mix(in_oklch,var(--red)_30%,transparent)] bg-[var(--bg-card)] px-3 py-2 text-left text-[12px] leading-snug font-medium whitespace-normal text-[var(--text-1)] shadow-[0_8px_24px_rgba(0,0,0,0.18)] group-hover:block group-focus:block">
         {NEGATIVE_BALANCE_TOOLTIP}
       </span>
     </span>
@@ -1360,8 +1359,7 @@ function PaymentAdjustmentDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <CardSubTag>PAYMENT_PLAN</CardSubTag>
-          <DialogTitle>{adjustment.targetName.toUpperCase()}</DialogTitle>
+          <DialogTitle>{adjustment.targetName}</DialogTitle>
         </DialogHeader>
         <form
           className="space-y-4 pt-2"
@@ -1370,7 +1368,7 @@ function PaymentAdjustmentDialog({
             void onSave(adjustment, amountCents, plannedDate);
           }}
         >
-          <div className="grid gap-3 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-[10px] tracking-[0.14em] text-[var(--text-2)] uppercase">
+          <div className="grid gap-3 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3 text-2xs text-[var(--text-2)]">
             <div className="flex items-center justify-between gap-3">
               <span>
                 {adjustment.targetType === "creditCardPayment" ? "Original cycle" : "Due date"}
@@ -1399,7 +1397,7 @@ function PaymentAdjustmentDialog({
             <div className="space-y-1.5">
               <label
                 htmlFor="planned-payment-date"
-                className="text-[10px] tracking-[0.15em] text-[var(--text-2)] uppercase"
+                className="text-2xs text-[var(--text-2)]"
               >
                 Planned payment date
               </label>
@@ -1416,7 +1414,7 @@ function PaymentAdjustmentDialog({
           <div className="space-y-1.5">
             <label
               htmlFor="planned-payment-cents"
-              className="text-[10px] tracking-[0.15em] text-[var(--text-2)] uppercase"
+              className="text-2xs text-[var(--text-2)]"
             >
               Planned payment for this cycle
             </label>
@@ -1427,7 +1425,7 @@ function PaymentAdjustmentDialog({
               disabled={saving}
             />
             {exceedsBalance ? (
-              <div className="text-[10px] tracking-[0.12em] text-[var(--amber)] uppercase">
+              <div className="text-2xs text-[var(--amber)]">
                 Exceeds the displayed card balance — OK if recent transactions haven&apos;t posted
                 yet.
               </div>
@@ -1441,7 +1439,7 @@ function PaymentAdjustmentDialog({
                   onClick={() => setAmountCents(paymentDueCents)}
                   disabled={saving}
                 >
-                  PAY DUE
+                  Pay due
                 </Button>
                 {paymentBalanceCents != null ? (
                   <Button
@@ -1451,7 +1449,7 @@ function PaymentAdjustmentDialog({
                     onClick={() => setAmountCents(paymentBalanceCents)}
                     disabled={saving}
                   >
-                    PAY BALANCE
+                    Pay balance
                   </Button>
                 ) : null}
               </div>
@@ -1460,9 +1458,9 @@ function PaymentAdjustmentDialog({
 
           {adjustment.targetType === "creditCardPayment" && promoSummaries.length > 0 ? (
             <div className="space-y-2 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3">
-              <div className="flex items-center justify-between gap-3 text-[10px] tracking-[0.15em] text-[var(--text-2)] uppercase">
+              <div className="flex items-center justify-between gap-3 text-2xs text-[var(--text-2)]">
                 <span>Remaining promo balance</span>
-                <span className="font-mono text-[var(--text-0)]">
+                <span className=" text-[var(--text-0)]">
                   <Money cents={promoRemainingCents} />
                 </span>
               </div>
@@ -1470,7 +1468,7 @@ function PaymentAdjustmentDialog({
                 {promoSummaries.map((promo) => (
                   <div
                     key={promo.id}
-                    className="grid gap-2 py-2 text-[10px] tracking-[0.12em] text-[var(--text-2)] uppercase sm:grid-cols-[1fr_auto_auto]"
+                    className="grid gap-2 py-2 text-2xs text-[var(--text-2)] sm:grid-cols-[1fr_auto_auto]"
                   >
                     <span className="min-w-0 truncate text-[var(--text-0)]">
                       {promo.description}
@@ -1502,21 +1500,21 @@ function PaymentAdjustmentDialog({
                 onClick={() => void onReset(adjustment)}
                 disabled={saving}
               >
-                RESET
+                Reset
               </Button>
             ) : (
               <span />
             )}
             <div className="flex gap-2">
               <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-                CANCEL
+                Cancel
               </Button>
               <Button
                 type="submit"
                 variant="primary"
                 disabled={saving || amountCents < 0 || !plannedDate}
               >
-                {saving ? "SAVING..." : "SAVE PLAN"}
+                {saving ? "SAVING..." : "Save plan"}
               </Button>
             </div>
           </DialogFooter>

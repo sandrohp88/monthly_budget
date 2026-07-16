@@ -5,7 +5,7 @@ import { Calculator, Plus, Download, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { CardSubTag, PageHead } from "@/components/ui/page-head";
+import { PageHead } from "@/components/ui/page-head";
 import {
   Dialog,
   DialogContent,
@@ -79,7 +79,7 @@ function intervalLabel(months: number): string {
     case 3: return "QUARTERLY";
     case 6: return "EVERY 6 MO";
     case 12: return "ANNUAL";
-    default: return `EVERY ${months} MO`;
+    default: return `Every ${months} mo`;
   }
 }
 
@@ -297,25 +297,24 @@ export function BillsClient({
   return (
     <div className="space-y-6 fade-in">
       <PageHead
-        module="MODULE_02"
-        title="BILLS"
+        title="Bills"
         subtitle="Recurring expenses · any cycle from monthly to multi-year"
         actions={
           <>
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <Switch checked={showArchived} onCheckedChange={setShowArchived} />
-              <span className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
-                SHOW ARCHIVED
+              <span className="text-2xs text-[var(--text-2)]">
+                Show archived
               </span>
             </label>
             <Button variant="outline">
-              <Download className="h-3 w-3" /> EXPORT
+              <Download className="h-3 w-3" /> Export
             </Button>
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-3 w-3" /> ADD BILL
+              <Plus className="h-3 w-3" /> Add bill
             </Button>
             <Button variant="outline" onClick={() => setCreateVariableOpen(true)}>
-              <Calculator className="h-3 w-3" /> ADD VARIABLE
+              <Calculator className="h-3 w-3" /> Add variable
             </Button>
           </>
         }
@@ -326,7 +325,7 @@ export function BillsClient({
           active={categoryFilter === "ALL"}
           onClick={() => setCategoryFilter("ALL")}
         >
-          ALL · {activeCount}
+          All · {activeCount}
         </Tab>
         {allCategories.map((c) => (
           <Tab key={c} active={categoryFilter === c} onClick={() => setCategoryFilter(c)}>
@@ -335,10 +334,10 @@ export function BillsClient({
         ))}
         <div className="ml-auto w-56">
           <Input
-            placeholder="FILTER…"
+            placeholder="Filter…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="text-[11px] uppercase tracking-[0.1em]"
+            className="text-[11px]"
           />
         </div>
       </div>
@@ -346,14 +345,14 @@ export function BillsClient({
       {visible.length === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>NO BILLS YET</CardTitle>
+            <CardTitle>No bills yet</CardTitle>
           </CardHeader>
           <div className="px-4 py-8 text-center">
             <p className="mb-4 text-[11px] tracking-wide text-[var(--text-2)]">
               Add your first recurring bill to start projecting.
             </p>
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-3 w-3" /> ADD YOUR FIRST BILL
+              <Plus className="h-3 w-3" /> Add your first bill
             </Button>
           </div>
         </Card>
@@ -361,33 +360,32 @@ export function BillsClient({
         <Card>
           <CardHeader>
             <div>
-              <CardSubTag>TABLE_BILL</CardSubTag>
               <CardTitle className="mt-0.5">
-                {activeCount} ACTIVE · {archivedCount} ARCHIVED
+                {activeCount} active · {archivedCount} archived
               </CardTitle>
             </div>
-            <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
-              CLICK ROW → EDIT
+            <div className="text-2xs text-[var(--text-2)]">
+              Click a row to edit
             </div>
           </CardHeader>
-          <Table>
+          <Table stackOnMobile>
             <TableHeader>
               <TableRow>
                 <TableHead onClick={() => setSortKey("name")} className="cursor-pointer">
-                  NAME ↕
+                  Name ↕
                 </TableHead>
-                <TableHead>CATEGORY</TableHead>
+                <TableHead>Category</TableHead>
                 <TableHead onClick={() => setSortKey("amount")} className="cursor-pointer text-right">
-                  AMOUNT ↕
+                  Amount ↕
                 </TableHead>
-                <TableHead>EVERY</TableHead>
+                <TableHead>Every</TableHead>
                 <TableHead onClick={() => setSortKey("next")} className="cursor-pointer text-right">
-                  NEXT DUE ↕
+                  Next due ↕
                 </TableHead>
-                {hasPaidData ? <TableHead className="text-right">LAST PAID</TableHead> : null}
-                <TableHead>AUTOPAY</TableHead>
+                {hasPaidData ? <TableHead className="text-right">Last paid</TableHead> : null}
+                <TableHead>Autopay</TableHead>
                 <TableHead onClick={() => setSortKey("monthly")} className="cursor-pointer text-right">
-                  MONTHLY EQ ↕
+                  Monthly eq ↕
                 </TableHead>
               </TableRow>
             </TableHeader>
@@ -398,11 +396,11 @@ export function BillsClient({
                   className={cn("cursor-pointer", !b.isActive && "opacity-60")}
                   onClick={() => setEditing(b)}
                 >
-                  <TableCell className="font-semibold text-[var(--text-0)]">
+                  <TableCell label="Bill" className="font-semibold text-[var(--text-0)]">
                     {b.name}
                     {!b.isActive ? (
                       <Badge variant="muted" className="ml-2">
-                        ARCHIVED
+                        Archived
                       </Badge>
                     ) : null}
                     {b.paidViaCardId ? (
@@ -415,24 +413,24 @@ export function BillsClient({
                             : "Linked card is archived — falling back to cash"
                         }
                       >
-                        VIA {cardById.get(b.paidViaCardId)?.name?.toUpperCase() ?? "UNKNOWN"}
+                        via {cardById.get(b.paidViaCardId)?.name ?? "Unknown"}
                       </Badge>
                     ) : null}
                   </TableCell>
-                  <TableCell className="text-[var(--text-2)]">{b.category}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell label="Category" className="text-[var(--text-2)]">{b.category}</TableCell>
+                  <TableCell label="Amount" className="text-right">
                     <Money cents={b.amountCents} />
                   </TableCell>
-                  <TableCell>
+                  <TableCell label="Every">
                     <StatusPill variant={b.intervalMonths === 1 ? "default" : "warn"}>
                       {intervalLabel(b.intervalMonths)}
                     </StatusPill>
                   </TableCell>
-                  <TableCell className="text-right tabular">
+                  <TableCell label="Next due" className="text-right tabular">
                     <DateLabel iso={nextBillOccurrence(b, today)} format="short" />
                   </TableCell>
                   {hasPaidData ? (
-                    <TableCell className="text-right tabular">
+                    <TableCell label="Last paid" className="text-right tabular">
                       {lastPaidByBill[b.id] ? (
                         <span
                           className="text-[var(--mint)]"
@@ -446,12 +444,12 @@ export function BillsClient({
                       )}
                     </TableCell>
                   ) : null}
-                  <TableCell>
+                  <TableCell label="Autopay">
                     <StatusPill variant={b.autoPay ? "default" : "off"}>
-                      {b.autoPay ? "ON" : "OFF"}
+                      {b.autoPay ? "On" : "Off"}
                     </StatusPill>
                   </TableCell>
-                  <TableCell className="text-right text-[var(--mint)] font-semibold">
+                  <TableCell label="Monthly eq" className="text-right text-[var(--mint)] font-semibold">
                     <Money cents={monthlyEquivalent(b)} />
                   </TableCell>
                 </TableRow>
@@ -459,8 +457,8 @@ export function BillsClient({
             </TableBody>
             <TableFooter>
               <TableRow>
-                <TableCell colSpan={2} className="text-[var(--text-0)] uppercase tracking-[0.15em]">
-                  TOTAL · {visible.length} ITEMS
+                <TableCell colSpan={2} className="text-[var(--text-0)]">
+                  Total · {visible.length} items
                 </TableCell>
                 <TableCell className="text-right">
                   <Money cents={totalAmount} />
@@ -478,29 +476,28 @@ export function BillsClient({
       <Card>
         <CardHeader>
           <div>
-            <CardSubTag>TABLE_VARIABLE</CardSubTag>
             <CardTitle className="mt-0.5">
-              {activeVariableBills.length} VARIABLE · <Money cents={variableMonthly} /> / MO
+              {activeVariableBills.length} variable · <Money cents={variableMonthly} /> / mo
             </CardTitle>
           </div>
           <Button size="sm" variant="outline" onClick={() => setCreateVariableOpen(true)}>
-            <Plus className="h-3 w-3" /> ADD VARIABLE
+            <Plus className="h-3 w-3" /> Add variable
           </Button>
         </CardHeader>
         {variableBills.length === 0 ? (
-          <div className="px-4 py-8 text-center text-[11px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-            NO VARIABLE CARD FORECASTS
+          <div className="px-4 py-8 text-center text-[11px] text-[var(--text-3)]">
+            No variable card forecasts
           </div>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>NAME</TableHead>
-                <TableHead>CATEGORY</TableHead>
-                <TableHead className="text-right">EXPECTED</TableHead>
-                <TableHead>EVERY</TableHead>
-                <TableHead>CARDS</TableHead>
-                <TableHead className="text-right">NEXT</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Category</TableHead>
+                <TableHead className="text-right">Expected</TableHead>
+                <TableHead>Every</TableHead>
+                <TableHead>Cards</TableHead>
+                <TableHead className="text-right">Next</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -521,7 +518,7 @@ export function BillsClient({
                         {b.name}
                         {!b.isActive ? (
                           <Badge variant="muted" className="ml-2">
-                            ARCHIVED
+                            Archived
                           </Badge>
                         ) : null}
                       </TableCell>
@@ -534,8 +531,8 @@ export function BillsClient({
                           {intervalLabel(b.intervalMonths)}
                         </StatusPill>
                       </TableCell>
-                      <TableCell className="max-w-[220px] truncate text-[10px] uppercase tracking-[0.1em] text-[var(--text-2)]">
-                        {names || "NO ACTIVE CARDS"}
+                      <TableCell className="max-w-[220px] truncate text-2xs text-[var(--text-2)]">
+                        {names || "No active cards"}
                       </TableCell>
                       <TableCell className="text-right tabular">
                         <DateLabel iso={nextBillOccurrence(b, today)} format="short" />
@@ -551,8 +548,7 @@ export function BillsClient({
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <CardSubTag>NEW_BILL</CardSubTag>
-            <DialogTitle>ADD BILL</DialogTitle>
+            <DialogTitle>Add bill</DialogTitle>
           </DialogHeader>
           <BillForm
             categories={categoriesState}
@@ -568,8 +564,7 @@ export function BillsClient({
       <Dialog open={createVariableOpen} onOpenChange={setCreateVariableOpen}>
         <DialogContent>
           <DialogHeader>
-            <CardSubTag>NEW_VARIABLE</CardSubTag>
-            <DialogTitle>ADD VARIABLE BILL</DialogTitle>
+            <DialogTitle>Add variable bill</DialogTitle>
           </DialogHeader>
           <VariableBillForm
             categories={categoriesState}
@@ -586,8 +581,7 @@ export function BillsClient({
           {editing ? (
             <>
               <SheetHeader>
-                <CardSubTag>EDIT_BILL</CardSubTag>
-                <SheetTitle>{editing.name.toUpperCase()}</SheetTitle>
+                <SheetTitle>{editing.name}</SheetTitle>
               </SheetHeader>
               <SheetBody>
                 <BillForm
@@ -614,14 +608,14 @@ export function BillsClient({
               <SheetFooter>
                 {editing.isActive ? (
                   <Button variant="destructive" onClick={() => archive(editing.id)}>
-                    SOFT DELETE
+                    Soft delete
                   </Button>
                 ) : (
                   <span />
                 )}
                 <div className="flex gap-2">
                   <Button variant="outline" onClick={() => setEditing(null)}>
-                    CANCEL
+                    Cancel
                   </Button>
                   <Button
                     variant="primary"
@@ -629,7 +623,7 @@ export function BillsClient({
                     type="submit"
                     disabled={submitting}
                   >
-                    {submitting ? "SAVING…" : "SAVE"}
+                    {submitting ? "Saving…" : "Save"}
                   </Button>
                 </div>
               </SheetFooter>
@@ -643,8 +637,7 @@ export function BillsClient({
           {editingVariable ? (
             <>
               <SheetHeader>
-                <CardSubTag>EDIT_VARIABLE</CardSubTag>
-                <SheetTitle>{editingVariable.name.toUpperCase()}</SheetTitle>
+                <SheetTitle>{editingVariable.name}</SheetTitle>
               </SheetHeader>
               <SheetBody>
                 <VariableBillForm
@@ -660,14 +653,14 @@ export function BillsClient({
               <SheetFooter>
                 {editingVariable.isActive ? (
                   <Button variant="destructive" onClick={() => archiveVariable(editingVariable.id)}>
-                    SOFT DELETE
+                    Soft delete
                   </Button>
                 ) : (
                   <span />
                 )}
                 <div className="flex gap-2">
                   <Button variant="outline" onClick={() => setEditingVariable(null)}>
-                    CANCEL
+                    Cancel
                   </Button>
                   <Button
                     variant="primary"
@@ -675,7 +668,7 @@ export function BillsClient({
                     type="submit"
                     disabled={submitting}
                   >
-                    {submitting ? "SAVING…" : "SAVE"}
+                    {submitting ? "Saving…" : "Save"}
                   </Button>
                 </div>
               </SheetFooter>
@@ -753,11 +746,11 @@ function OverrideSection({
     <div className="mt-6 border-t border-[var(--border-raw)] pt-4">
       <div className="flex items-center justify-between mb-3">
         <div>
-          <div className="text-[9px] uppercase tracking-[0.2em] text-[var(--text-3)]">
+          <div className="text-2xs text-[var(--text-3)]">
             {"// OVERRIDES"}
           </div>
-          <div className="text-[11px] uppercase tracking-[0.1em] font-semibold text-[var(--text-0)]">
-            PAYMENT ADJUSTMENTS
+          <div className="text-[11px] font-semibold text-[var(--text-0)]">
+            Payment adjustments
           </div>
         </div>
         <Button
@@ -766,7 +759,7 @@ function OverrideSection({
           variant="outline"
           onClick={() => setAddOpen(!addOpen)}
         >
-          <Plus className="h-3 w-3" /> ADD
+          <Plus className="h-3 w-3" /> Add
         </Button>
       </div>
 
@@ -774,7 +767,7 @@ function OverrideSection({
         <div className="mb-4 space-y-3 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] p-3">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="override-date">DUE DATE</Label>
+              <Label htmlFor="override-date">Due date</Label>
               <Input
                 id="override-date"
                 type="date"
@@ -783,12 +776,12 @@ function OverrideSection({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>AMOUNT</Label>
+              <Label>Amount</Label>
               <MoneyInput valueCents={newAmount} onChangeCents={setNewAmount} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="override-notes">NOTES</Label>
+            <Label htmlFor="override-notes">Notes</Label>
             <Input
               id="override-notes"
               value={newNotes}
@@ -803,7 +796,7 @@ function OverrideSection({
               variant="outline"
               onClick={() => setAddOpen(false)}
             >
-              CANCEL
+              Cancel
             </Button>
             <Button
               type="button"
@@ -812,15 +805,15 @@ function OverrideSection({
               onClick={addOverride}
               disabled={saving || !newDate}
             >
-              {saving ? "SAVING…" : "SAVE OVERRIDE"}
+              {saving ? "Saving…" : "Save override"}
             </Button>
           </div>
         </div>
       )}
 
       {sorted.length === 0 ? (
-        <div className="py-3 text-center text-[10px] uppercase tracking-[0.15em] text-[var(--text-3)]">
-          NO OVERRIDES — USING DEFAULT AMOUNTS
+        <div className="py-3 text-center text-2xs text-[var(--text-3)]">
+          No overrides — Using default amounts
         </div>
       ) : (
         <div className="divide-y divide-[var(--border-raw)] rounded-sm border border-[var(--border-raw)]">
@@ -837,7 +830,7 @@ function OverrideSection({
                   </span>
                 </div>
                 {o.notes ? (
-                  <div className="mt-0.5 truncate text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+                  <div className="mt-0.5 truncate text-2xs text-[var(--text-3)]">
                     {o.notes}
                   </div>
                 ) : null}
@@ -871,7 +864,7 @@ function Tab({
     <button
       onClick={onClick}
       className={cn(
-        "rounded-sm border px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.15em] transition-colors cursor-pointer font-mono",
+        "rounded-sm border px-3 py-1.5 text-2xs font-medium transition-colors cursor-pointer",
         active
           ? "bg-[var(--mint-glow)] text-[var(--mint)] border-[var(--mint-dim)]"
           : "bg-[var(--bg-2)] text-[var(--text-2)] border-[var(--border-raw)] hover:text-[var(--text-0)] hover:border-[var(--border-2)]",
@@ -973,7 +966,7 @@ function VariableBillForm({
     >
       <div className="grid grid-cols-2 gap-4">
         <div className="col-span-2 space-y-1.5">
-          <Label htmlFor="variable-name">NAME</Label>
+          <Label htmlFor="variable-name">Name</Label>
           <Input
             id="variable-name"
             required
@@ -983,11 +976,11 @@ function VariableBillForm({
           />
         </div>
         <div className="space-y-1.5">
-          <Label>EXPECTED AMOUNT</Label>
+          <Label>Expected amount</Label>
           <MoneyInput valueCents={amountCents} onChangeCents={setAmountCents} />
         </div>
         <div className="space-y-1.5">
-          <Label>CATEGORY</Label>
+          <Label>Category</Label>
           <Select value={category} onValueChange={setCategory}>
             <SelectTrigger>
               <SelectValue />
@@ -1002,7 +995,7 @@ function VariableBillForm({
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="variable-anchor">NEXT EXPECTED DATE</Label>
+          <Label htmlFor="variable-anchor">Next expected date</Label>
           <Input
             id="variable-anchor"
             type="date"
@@ -1012,7 +1005,7 @@ function VariableBillForm({
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="variable-interval">EVERY N MONTHS</Label>
+          <Label htmlFor="variable-interval">Every N months</Label>
           <Input
             id="variable-interval"
             type="number"
@@ -1024,13 +1017,13 @@ function VariableBillForm({
           />
         </div>
         <div className="col-span-2 space-y-2">
-          <Label>CREDIT CARDS</Label>
+          <Label>Credit cards</Label>
           <div className="grid gap-2 sm:grid-cols-2">
             {activeCards.map((card) => (
               <label
                 key={card.id}
                 className={cn(
-                  "flex cursor-pointer items-center justify-between rounded-sm border px-3 py-2 text-[10px] uppercase tracking-[0.12em]",
+                  "flex cursor-pointer items-center justify-between rounded-sm border px-3 py-2 text-2xs",
                   cardIds.includes(card.id)
                     ? "border-[var(--mint-dim)] bg-[var(--mint-glow)] text-[var(--mint)]"
                     : "border-[var(--border-raw)] bg-[var(--bg-2)] text-[var(--text-2)]",
@@ -1047,7 +1040,7 @@ function VariableBillForm({
             ))}
           </div>
           {activeCards.length === 0 ? (
-            <p className="text-[9px] uppercase tracking-[0.12em] text-[var(--amber)]">
+            <p className="text-2xs text-[var(--amber)]">
               Add an active credit card first.
             </p>
           ) : null}
@@ -1055,10 +1048,10 @@ function VariableBillForm({
         <div className="col-span-2 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
-                HISTORY AVG
+              <div className="text-2xs text-[var(--text-2)]">
+                History avg
               </div>
-              <div className="text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+              <div className="text-2xs text-[var(--text-3)]">
                 Last 6 months · approved linked transactions
               </div>
             </div>
@@ -1069,12 +1062,12 @@ function VariableBillForm({
               onClick={loadAverage}
               disabled={avgLoading || cardIds.length === 0}
             >
-              <Calculator className="h-3 w-3" /> {avgLoading ? "LOADING…" : "USE AVG"}
+              <Calculator className="h-3 w-3" /> {avgLoading ? "Loading…" : "Use avg"}
             </Button>
           </div>
           {average ? (
-            <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.12em] text-[var(--text-2)]">
-              <span>{average.sampleCount} MATCHING TRANSACTIONS</span>
+            <div className="mt-2 flex items-center justify-between text-2xs text-[var(--text-2)]">
+              <span>{average.sampleCount} matching transactions</span>
               <span className="text-[13px] font-bold text-[var(--mint)] tabular">
                 <Money cents={average.averageCents} />
               </span>
@@ -1082,12 +1075,12 @@ function VariableBillForm({
           ) : null}
         </div>
         <div className="col-span-2 space-y-1.5">
-          <Label htmlFor="variable-notes">NOTES</Label>
+          <Label htmlFor="variable-notes">Notes</Label>
           <Input id="variable-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </div>
         <div className="col-span-2 rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2.5">
-          <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.15em] text-[var(--text-2)]">
-            <span>MONTHLY EQUIVALENT</span>
+          <div className="flex items-center justify-between text-2xs text-[var(--text-2)]">
+            <span>Monthly equivalent</span>
             <span className="text-[13px] font-bold text-[var(--mint)] tabular">
               <Money cents={monthlyEq} />
             </span>
@@ -1097,14 +1090,14 @@ function VariableBillForm({
       {hideActions ? null : (
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
-            CANCEL
+            Cancel
           </Button>
           <Button
             type="submit"
             variant="primary"
             disabled={submitting || !name.trim() || cardIds.length === 0}
           >
-            {submitting ? "SAVING…" : "SAVE"}
+            {submitting ? "Saving…" : "Save"}
           </Button>
         </div>
       )}

@@ -1,17 +1,26 @@
 import * as React from "react";
 import { cn } from "@/lib/cn";
 
-export const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
-  ({ className, ...props }, ref) => (
-    <div className="relative w-full overflow-auto">
-      <table
-        ref={ref}
-        className={cn("w-full caption-bottom text-[13px] tabular", className)}
-        {...props}
-      />
-    </div>
-  ),
-);
+export const Table = React.forwardRef<
+  HTMLTableElement,
+  React.HTMLAttributes<HTMLTableElement> & {
+    /** Below `md`, reflow rows into stacked cards. Pair each TableCell with a
+     *  `label` so the hidden column header shows as the row-item label. */
+    stackOnMobile?: boolean;
+  }
+>(({ className, stackOnMobile, ...props }, ref) => (
+  <div className="relative w-full overflow-x-auto">
+    <table
+      ref={ref}
+      className={cn(
+        "w-full caption-bottom text-[13px] tabular",
+        stackOnMobile && "stack-table",
+        className,
+      )}
+      {...props}
+    />
+  </div>
+));
 Table.displayName = "Table";
 
 export const TableHeader = React.forwardRef<
@@ -81,10 +90,14 @@ TableHead.displayName = "TableHead";
 
 export const TableCell = React.forwardRef<
   HTMLTableCellElement,
-  React.TdHTMLAttributes<HTMLTableCellElement>
->(({ className, ...props }, ref) => (
+  React.TdHTMLAttributes<HTMLTableCellElement> & {
+    /** Column name echoed as the row-item label when the table stacks on mobile. */
+    label?: string;
+  }
+>(({ className, label, ...props }, ref) => (
   <td
     ref={ref}
+    data-label={label}
     className={cn(
       "px-4 py-3 align-middle text-[var(--text-1)] tracking-normal whitespace-nowrap [&:has([role=checkbox])]:pr-0",
       className,

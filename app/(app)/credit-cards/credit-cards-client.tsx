@@ -55,12 +55,11 @@ export function CreditCardsClient({ initialCards }: { initialCards: WalletCard[]
   return (
     <div className="space-y-6 fade-in">
       <PageHead
-        module="MODULE_07"
-        title="CREDIT CARDS"
+        title="Credit cards"
         subtitle="Tap a card for statements, promos, and payment planning"
         actions={
           <Button variant="primary" onClick={() => setAddOpen(true)}>
-            <Plus className="h-3 w-3" /> ADD CARD
+            <Plus className="h-3 w-3" /> Add card
           </Button>
         }
       />
@@ -69,13 +68,13 @@ export function CreditCardsClient({ initialCards }: { initialCards: WalletCard[]
         <TileGrid cols="auto">
           <Tile
             compact
-            label="TOTAL BALANCE"
+            label="Total balance"
             value={<Money cents={totalBalanceCents} />}
             delta={`across ${known.length} card${known.length === 1 ? "" : "s"}`}
           />
           <Tile
             compact
-            label="DUE NOW"
+            label="Due now"
             value={
               totalDueCents > 0 ? (
                 <Money cents={totalDueCents} />
@@ -94,7 +93,7 @@ export function CreditCardsClient({ initialCards }: { initialCards: WalletCard[]
           />
           <Tile
             compact
-            label="NEXT PAYMENT"
+            label="Next payment"
             value={
               nextDue ? (
                 <Money cents={nextDue.dueCents} />
@@ -118,12 +117,12 @@ export function CreditCardsClient({ initialCards }: { initialCards: WalletCard[]
       ) : null}
 
       {cards.length === 0 ? (
-        <div className="rounded-[14px] border border-dashed border-[var(--border-2)] bg-[var(--bg-card)] px-6 py-14 text-center">
+        <div className="rounded-lg border border-dashed border-[var(--border-2)] bg-[var(--bg-card)] px-6 py-14 text-center">
           <p className="mb-4 text-[13px] text-[var(--text-2)]">
             Add a credit card to start tracking statement balances and due dates.
           </p>
           <Button variant="primary" onClick={() => setAddOpen(true)}>
-            <Plus className="h-3 w-3" /> ADD YOUR FIRST CARD
+            <Plus className="h-3 w-3" /> Add your first card
           </Button>
         </div>
       ) : (
@@ -164,11 +163,11 @@ function WalletCardEntry({ data, today }: { data: WalletCard; today: string }) {
         {status ? (
           <span
             className={cn(
-              "absolute right-2.5 top-2.5 rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide text-white shadow-sm",
+              "absolute right-2.5 top-2.5 rounded-full px-2 py-0.5 text-2xs font-bold tracking-wide text-white shadow-sm",
               status === "overdue" ? "bg-[#d13f3f]" : "bg-[#c97a10]",
             )}
           >
-            {status === "overdue" ? "OVERDUE" : `DUE IN ${daysLeft}D`}
+            {status === "overdue" ? "Overdue" : `Due in ${daysLeft}D`}
           </span>
         ) : null}
       </CreditCardVisual>
@@ -177,7 +176,7 @@ function WalletCardEntry({ data, today }: { data: WalletCard; today: string }) {
           <div className="truncate text-[12px] font-semibold leading-snug text-[var(--text-0)] sm:text-[13px]">
             {name}
           </div>
-          <div className="mt-0.5 text-[11px] tracking-[0.12em] text-[var(--text-3)] tabular sm:text-[12px]">
+          <div className="mt-0.5 text-[11px] text-[var(--text-3)] tabular sm:text-[12px]">
             {digits ? `•••• ${digits}` : "manual card"}
           </div>
         </div>
@@ -191,7 +190,7 @@ function WalletCardEntry({ data, today }: { data: WalletCard; today: string }) {
               <span className="font-medium text-[var(--text-3)]">—</span>
             )}
           </div>
-          <div className="text-[10px] leading-tight text-[var(--text-3)] sm:text-[11px]">balance</div>
+          <div className="text-2xs leading-tight text-[var(--text-3)] sm:text-[11px]">balance</div>
         </div>
       </div>
     </Link>
