@@ -1505,7 +1505,10 @@ export function CalendarClient({
                         key={i}
                         className="flex flex-wrap items-center justify-between gap-3 border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2"
                       >
-                        <div className="min-w-0 flex-1">
+                        {/* basis keeps the label readable — without it flex-1
+                            (basis 0) lets the action buttons crush the label
+                            to letter-per-line on phone-width dialogs. */}
+                        <div className="min-w-0 flex-1 basis-40">
                           <div className="break-words text-[13px] text-[var(--text-0)]">{ev.label}</div>
                           <div
                             className={cn(
@@ -1577,7 +1580,7 @@ export function CalendarClient({
                             </div>
                           ) : null}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="ml-auto flex items-center gap-2">
                           <span className={cn("tabular text-[13px] font-semibold", TONE_TEXT[tone])}>
                             {isCardCharge ? "" : credit ? "+" : "−"}
                             <Money cents={displayCents(ev)} />

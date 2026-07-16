@@ -6,7 +6,9 @@ export const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDi
     <div
       ref={ref}
       className={cn(
-        "rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] text-[var(--text-0)] shadow-[var(--shadow-sm)]",
+        // ui-card is a styling hook: globals.css dissolves the chrome on
+        // mobile when the card wraps a <Table stackOnMobile>.
+        "ui-card rounded-lg border border-[var(--border-raw)] bg-[var(--bg-card)] text-[var(--text-0)] shadow-[var(--shadow-sm)]",
         className,
       )}
       {...props}
@@ -20,7 +22,7 @@ export const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<
     <div
       ref={ref}
       className={cn(
-        "flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-raw)] px-5 py-4",
+        "ui-card-header flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-raw)] px-5 py-4",
         className,
       )}
       {...props}

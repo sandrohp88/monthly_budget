@@ -397,25 +397,25 @@ export function BillsClient({
                   onClick={() => setEditing(b)}
                 >
                   <TableCell label="Bill" className="font-semibold text-[var(--text-0)]">
-                    {b.name}
-                    {!b.isActive ? (
-                      <Badge variant="muted" className="ml-2">
-                        Archived
-                      </Badge>
-                    ) : null}
-                    {b.paidViaCardId ? (
-                      <Badge
-                        variant={cardById.get(b.paidViaCardId)?.isActive ? "secondary" : "muted"}
-                        className="ml-2"
-                        title={
-                          cardById.get(b.paidViaCardId)?.isActive
-                            ? "Paid via this card — skipped from cash projection"
-                            : "Linked card is archived — falling back to cash"
-                        }
-                      >
-                        via {cardById.get(b.paidViaCardId)?.name ?? "Unknown"}
-                      </Badge>
-                    ) : null}
+                    <span className="inline-flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1">
+                      {b.name}
+                      {!b.isActive ? <Badge variant="muted">Archived</Badge> : null}
+                      {b.paidViaCardId ? (
+                        <Badge
+                          variant={cardById.get(b.paidViaCardId)?.isActive ? "secondary" : "muted"}
+                          className="max-w-[9.5rem] overflow-hidden"
+                          title={`${cardById.get(b.paidViaCardId)?.name ?? "Unknown"} — ${
+                            cardById.get(b.paidViaCardId)?.isActive
+                              ? "paid via this card, skipped from cash projection"
+                              : "linked card is archived, falling back to cash"
+                          }`}
+                        >
+                          <span className="truncate">
+                            via {cardById.get(b.paidViaCardId)?.name ?? "Unknown"}
+                          </span>
+                        </Badge>
+                      ) : null}
+                    </span>
                   </TableCell>
                   <TableCell label="Category" className="text-[var(--text-2)]">{b.category}</TableCell>
                   <TableCell label="Amount" className="text-right">
