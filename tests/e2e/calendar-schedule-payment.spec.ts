@@ -85,12 +85,15 @@ test("schedule a partial card paydown from a plain calendar day", async ({ page 
   await gotoCalendarMonthOf(page, paymentDate, today);
   await expect(page.getByText("Paydown Visa planned payment")).toBeVisible();
 
-  // …and the due date now carries only the remainder.
+  // …and the due date now carries only the remainder. Open the day dialog via
+  // the day number — the due chip itself may be capped behind "+N more" when
+  // other specs' events share the day (the suite shares one per-run DB).
   await gotoCalendarMonthOf(page, dueDate, today);
-  await page.getByText("Paydown Visa payment", { exact: false }).first().click();
+  await page.getByText(String(Number(dueDate.slice(8, 10))), { exact: true }).click();
   const dueDialog = page.getByRole("dialog");
   await expect(dueDialog.getByText(/\$300\.00/).first()).toBeVisible();
-  await dueDialog.getByRole("button", { name: "CLOSE", exact: true }).click();
+  // Two "Close" buttons share the dialog (footer + the corner X) — take the first.
+  await dueDialog.getByRole("button", { name: "Close", exact: true }).first().click();
 
   // The scheduled paydown is editable AND deletable from its day detail.
   await gotoCalendarMonthOf(page, paymentDate, today);
