@@ -7,7 +7,20 @@ import { clientIp, hostAllowed, originAllowed } from "./lib/security";
 const { auth } = NextAuth(authConfig);
 
 const PUBLIC = new Set<string>(["/login", "/setup"]);
-const PUBLIC_PREFIXES = ["/api/auth", "/api/health", "/api/setup", "/_next", "/favicon"];
+// PWA assets must stay reachable without a session: browsers fetch the
+// manifest with credentials omitted (no cookie even when logged in), and iOS
+// fetches touch icons anonymously. Auth-gating them 307s the fetch to /login
+// and silently breaks installability. None of them carry user data.
+const PUBLIC_PREFIXES = [
+  "/api/auth",
+  "/api/health",
+  "/api/setup",
+  "/_next",
+  "/favicon",
+  "/manifest.json",
+  "/sw.js",
+  "/icons",
+];
 
 const CREDENTIALS_CALLBACK = "/api/auth/callback/credentials";
 
