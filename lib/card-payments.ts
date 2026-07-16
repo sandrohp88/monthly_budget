@@ -525,7 +525,6 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     list.push({ date: s.date, remaining: s.amountCents });
     paymentsByCard.set(s.cardId, list);
   }
-  for (const list of paymentsByCard.values()) list.sort((a, b) => a.date.localeCompare(b.date));
 
   const estimatedDuesByCard = new Map<string, Set<string>>();
   const markersByCard = new Map<string, DueMarker[]>();
@@ -539,6 +538,35 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       estimatedDuesByCard.set(m.cardId, set);
     }
   }
+
+  // A paydown keeps its directed semantics only while `pays-down:<date>` still
+  // resolves to something on that card: a promo/variable cash chunk, a recorded
+  // statement's marker, or an estimated cycle due. Statement reconciliation and
+  // cycle-config edits shift every projected due date after the note is
+  // written, so a stored target can go stale — and directed cash aimed at a
+  // slot that no longer exists used to count as coverage NOWHERE, leaving the
+  // real due marker warning about interest days after a scheduled payment.
+  // Unmatched targets fall back to plain scheduled-payment coverage:
+  // statements earliest-first, then the estimate balance, then promo prepay.
+  const statementMarkerKeys = new Set<string>();
+  for (const m of markers) {
+    if (!m.estimated) statementMarkerKeys.add(overrideKey(m.cardId, m.dueDate));
+  }
+  for (const p of paydowns) {
+    if (p.date < today || p.amountCents <= 0) continue;
+    const targetKey = overrideKey(p.cardId, p.targetDate);
+    if (
+      cashChargeKeys.has(targetKey) ||
+      statementMarkerKeys.has(targetKey) ||
+      estimatedDuesByCard.get(p.cardId)?.has(p.targetDate)
+    ) {
+      continue;
+    }
+    const list = paymentsByCard.get(p.cardId) ?? [];
+    list.push({ date: p.date, remaining: p.amountCents });
+    paymentsByCard.set(p.cardId, list);
+  }
+  for (const list of paymentsByCard.values()) list.sort((a, b) => a.date.localeCompare(b.date));
 
   const coverByMarker = new Map<DueMarker, number>();
   for (const [cardId, cardMarkers] of markersByCard) {

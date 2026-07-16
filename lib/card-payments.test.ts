@@ -308,6 +308,62 @@ describe("scheduled paydowns (pays-down overrides)", () => {
     });
   });
 
+  it("a paydown with a STALE target still covers due markers like a plain payment", () => {
+    // Regression: statement reconciliation / cycle edits can shift every
+    // projected due date after a `pays-down:` note is written. The stored
+    // target then matches no marker, no estimated due, and no promo chunk —
+    // and the directed cash used to count as coverage NOWHERE, so a $3,455
+    // payment four days before the due date left the marker warning about an
+    // uncovered $832 (Prime Visa 9873, 2026-07-15).
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ statementBalanceCents: 200_00, dueDate: "2026-06-10" })],
+      cardPaymentOverrides: [
+        // 2026-06-25 is no slot at all: not a statement due, not an estimated
+        // cycle due, not a promo/variable chunk date.
+        override({ dueDate: "2026-05-20", amountCents: 80_00, notes: "pays-down:2026-06-25" }),
+      ],
+    });
+    const marker = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(marker).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 80_00 });
+    // The cash still debits its own date, exactly once.
+    expect(cashOf(r).find((e) => e.date === "2026-05-20")?.amountCents).toBe(80_00);
+    expect(cashTotal(r)).toBe(80_00);
+  });
+
+  it("a stale-target paydown's excess carries into the estimated cycles", () => {
+    // Live balance 1000, statement 200 → estimate 800 on later cycles. A
+    // 1200 paydown at a dead target covers the statement (200) and the full
+    // estimate balance (800) on every estimated cycle.
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card({ currentBalanceCents: 1000_00 })],
+      statements: [stmt({ statementBalanceCents: 200_00, dueDate: "2026-06-10" })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 1200_00, notes: "pays-down:2026-06-25" }),
+      ],
+    });
+    const june = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(june).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 200_00 });
+    const july = markersOf(r).find((e) => e.date === "2026-07-10" && e.estimated);
+    expect(july).toMatchObject({ paymentDueCents: 800_00, scheduledCoverCents: 800_00 });
+    expect(cashTotal(r)).toBe(1200_00);
+  });
+
+  it("a PAST-dated stale-target paydown still covers nothing", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ statementBalanceCents: 200_00, dueDate: "2026-06-10" })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-01", amountCents: 80_00, notes: "pays-down:2026-06-25" }),
+      ],
+    });
+    const marker = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(marker).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 0 });
+  });
+
   it("covers only its target marker, not the paydown's own-date marker", () => {
     const r = projectCardPayments({
       ...EMPTY,

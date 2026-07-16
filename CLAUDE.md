@@ -884,6 +884,17 @@ statement paid amounts, live balances) is expected to carry the effect, so a
 stale plan can't discount a due date forever. Partial amounts split the
 obligation: the remainder stays on the due date.
 
+A stored target can also go **stale**: statement reconciliation or cycle-config
+edits shift every projected due date after the note is written. A paydown whose
+target no longer matches any statement marker, estimated cycle due, or
+promo/variable chunk on its card falls back to plain scheduled-payment
+coverage (statements earliest-first, then the estimate balance, then promo
+prepay) instead of covering nothing. The PLAN dialog also keeps an edited
+plan's existing target while that slot still resolves — recomputing it
+unconditionally used to retarget the plan away from its due date, because the
+next-slot scan saw the plan's own coverage and skipped the marker it was aimed
+at (the Prime Visa 9873 bug, 2026-07-15).
+
 ### Card-charged bills on the calendar
 Bills/extras with `paidViaCardId` pointing at an ACTIVE card are still skipped
 as cash, but the projection now emits them as **zero-cash markers**
