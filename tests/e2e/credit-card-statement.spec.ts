@@ -62,7 +62,10 @@ test("create card -> enter statement -> mark paid -> verify paid state", async (
   await expect(page.getByText(/last paid/i).first()).toBeVisible();
   await expect(page.getByText(/on time/i).first()).toBeVisible();
 
-  // Paid statements should no longer appear as future ledger events.
+  // Paid statements should no longer appear as payable ledger events. Scope
+  // the check to THIS card: the suite shares one per-run DB, so earlier specs
+  // leave their own events behind, and this card's estimated future cycles
+  // render as "Test Visa (est.)" — only the exact unpaid-due label counts.
   await page.goto("/ledger");
-  await expect(page.getByText(/0 ledger events/i).first()).toBeVisible();
+  await expect(page.getByText("Test Visa", { exact: true })).toHaveCount(0);
 });

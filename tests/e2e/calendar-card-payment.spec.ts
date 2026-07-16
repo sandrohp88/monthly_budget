@@ -46,13 +46,17 @@ test("program the full statement payment from its calendar due event", async ({ 
     await page.getByRole("button", { name: "Next month" }).click();
   }
 
-  await page.getByText("Calendar Visa payment").click();
+  // Due markers are informational since PR #88 — the chip reads
+  // "Card due · <name>" and its dialog action is "Schedule payment".
+  await page.getByText("Card due · Calendar Visa").first().click();
   const dayDialog = page.getByRole("dialog");
-  await expect(dayDialog.getByText(/full statement to avoid interest/i)).toBeVisible();
+  await expect(dayDialog.getByText(/card statement due/i)).toBeVisible();
   await expect(dayDialog.getByText(/\$500\.00/i).first()).toBeVisible();
-  await dayDialog.getByRole("button", { name: /program payment/i }).click();
+  await dayDialog.getByRole("button", { name: /schedule payment/i }).click();
 
-  const paymentDialog = page.getByRole("dialog");
+  // The plan dialog can stack on top of the still-open day dialog — scope by
+  // its own content instead of role alone.
+  const paymentDialog = page.getByRole("dialog").filter({ hasText: "Programmed payment date" });
   await expect(paymentDialog.getByText(/full statement to avoid interest/i)).toBeVisible();
   await paymentDialog.locator("#calendar-card-payment-date").fill(plannedDate);
   await paymentDialog.getByRole("button", { name: /pay amount due/i }).click();

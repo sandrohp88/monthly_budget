@@ -58,7 +58,8 @@ test("compact view lists only event-days across three months and stays interacti
   const dayDialog = page.getByRole("dialog");
   await expect(dayDialog.getByText("Compact Rent")).toBeVisible();
   await expect(dayDialog.getByText(/\$1,200\.00/).first()).toBeVisible();
-  await dayDialog.getByRole("button", { name: "CLOSE", exact: true }).click();
+  // Two "Close" buttons share the dialog (footer + the corner X) — take the first.
+  await dayDialog.getByRole("button", { name: "Close", exact: true }).first().click();
 
   // Switching back to the month view hides the compact-only cycle legend.
   await page.getByRole("button", { name: "month", exact: true }).click();
