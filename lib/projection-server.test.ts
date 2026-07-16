@@ -672,3 +672,58 @@ describe("buildProjection linked starting balance", () => {
     expect(projection?.rows[0]?.date).toBe("2026-05-04");
   });
 });
+
+describe("scheduled paydown with a stale pays-down target (Prime Visa 9873, 2026-07-15)", () => {
+  // Statement reconciliation / cycle edits can shift every projected due date
+  // after a `pays-down:` note is written. The stored target then matches no
+  // slot at all — and the directed cash used to cover NOTHING, so the due
+  // marker four days after a $3,455 scheduled payment still warned about an
+  // uncovered $832.26.
+  it("covers the statement due marker and debits the running balance once", async () => {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Prime Visa",
+      statementDay: 10,
+      dueDay: 7,
+      gracePeriodDays: 25,
+      currentBalanceCents: 832_26,
+      autoPay: false,
+      isActive: true,
+    });
+    await createStatement(card.id, {
+      statementDate: "2026-05-10",
+      dueDate: "2026-06-07",
+      statementBalanceCents: 832_26,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    // Scheduled 4 days before the due date, aimed at a slot that no longer
+    // exists (nothing is projected on 2026-06-30 for this card).
+    await upsertCreditCardPaymentOverride(user.id, card.id, {
+      dueDate: "2026-06-03",
+      amountCents: 3455_00,
+      notes: "pays-down:2026-06-30",
+    });
+
+    const projection = await buildProjection(user.id);
+
+    const payRow = projection?.rows.find((r) => r.date === "2026-06-03");
+    const planned = payRow?.events.find((e) => e.label === "Prime Visa planned payment");
+    expect(planned).toMatchObject({
+      amountCents: 3455_00,
+      paydownTargetDate: "2026-06-30",
+    });
+    expect(payRow?.expenseCents).toBe(3455_00);
+
+    const dueRow = projection?.rows.find((r) => r.date === "2026-06-07");
+    const marker = dueRow?.events.find((e) => e.label === "Prime Visa" && e.dueMarker);
+    expect(marker).toMatchObject({
+      amountCents: 0,
+      paymentDueCents: 832_26,
+      scheduledCoverCents: 832_26,
+    });
+    // The due marker never debits cash — only the scheduled payment moved money.
+    expect(dueRow?.expenseCents).toBe(0);
+  });
+});

@@ -669,20 +669,49 @@ export function CalendarClient({
 
   // The card's next projected payment on/after `fromDate` — the slot a
   // scheduled paydown reduces. Skips paid markers and other paydowns.
+  //
+  // `editing` is the paydown being edited in the PLAN dialog: its own coverage
+  // is added back to its target slot before the covered-check, so a slot the
+  // plan fully covers still resolves as that plan's target. Without this,
+  // saving an amount edit silently retargeted the plan to a later slot and the
+  // original due date lost its coverage. `exactDate` restricts the scan to the
+  // single day `fromDate` (used to re-resolve an existing target).
   const findNextCardPayment = React.useCallback(
-    (cardId: string, fromDate: string): NextCardPayment | undefined => {
+    (
+      cardId: string,
+      fromDate: string,
+      editing?: { targetDate?: string; amountCents: number },
+      exactDate = false,
+    ): NextCardPayment | undefined => {
       const from = fromDate > today ? fromDate : today;
       for (const row of rows) {
         if (row.date < from) continue;
+        if (exactDate) {
+          if (row.date > fromDate) break;
+          if (row.date !== fromDate) continue;
+        }
         for (const ev of row.events) {
           if (ev.sourceType !== "creditCardPayment" || ev.sourceId !== cardId) continue;
           if (ev.isPaid || ev.paydownTargetDate) continue;
+          const planCoverCents =
+            editing && editing.targetDate === row.date ? editing.amountCents : 0;
           // For a due marker, the cash still owed is the balance minus what
-          // scheduled payments already cover — a fully-covered due isn't a target.
-          const dueCents =
-            (ev.paymentDueCents ?? 0) > 0
-              ? Math.max(0, ev.paymentDueCents! - (ev.dueMarker ? ev.scheduledCoverCents ?? 0 : 0))
-              : ev.amountCents;
+          // scheduled payments already cover — a fully-covered due isn't a
+          // target (unless the cover is the edited plan's own).
+          let dueCents: number;
+          if (ev.dueMarker) {
+            const coverCents = Math.max(0, (ev.scheduledCoverCents ?? 0) - planCoverCents);
+            dueCents = Math.max(0, (ev.paymentDueCents ?? 0) - coverCents);
+          } else if ((ev.paymentDueCents ?? 0) > 0) {
+            // Promo/variable cash the edited plan may already have consumed a
+            // piece of — add its share back, capped at the chunk's original.
+            dueCents = Math.min(
+              ev.originalAmountCents || Number.MAX_SAFE_INTEGER,
+              ev.paymentDueCents! + planCoverCents,
+            );
+          } else {
+            dueCents = ev.amountCents;
+          }
           if (dueCents <= 0) continue;
           return {
             date: row.date,
@@ -1882,7 +1911,12 @@ function ScheduleCardPaymentDialog({
   draft: SchedulePaymentDraft;
   cards: ReadonlyArray<{ id: string; name: string }>;
   today: string;
-  findTarget: (cardId: string, fromDate: string) => NextCardPayment | undefined;
+  findTarget: (
+    cardId: string,
+    fromDate: string,
+    editing?: { targetDate?: string; amountCents: number },
+    exactDate?: boolean,
+  ) => NextCardPayment | undefined;
   saving: boolean;
   onClose: () => void;
   onSave: (
@@ -1898,16 +1932,25 @@ function ScheduleCardPaymentDialog({
   const [date, setDate] = React.useState(draft.date);
   const [amountCents, setAmountCents] = React.useState(draft.amountCents ?? 0);
 
-  const target = cardId ? findTarget(cardId, date) : undefined;
-  // When editing, the projection already subtracted this plan from its target
-  // slot — add it back so "amount due" reflects the due without this plan.
+  // When editing, findTarget subtracts this plan's own coverage from its
+  // target slot, so "amount due" reflects the due without this plan and a
+  // slot the plan fully covers still resolves.
+  const editingPlan =
+    draft.existing && draft.existing.cardId === cardId
+      ? { targetDate: draft.existing.targetDate, amountCents: draft.amountCents ?? 0 }
+      : undefined;
+  // An edited plan keeps its target while that slot still exists on/after the
+  // payment date; only when it's gone (or the card changed) does the plan
+  // retarget to the next projected slot. Recomputing unconditionally is what
+  // used to redirect a plan away from the due date the user aimed it at.
+  const keptTarget =
+    editingPlan?.targetDate && editingPlan.targetDate >= date
+      ? findTarget(cardId, editingPlan.targetDate, editingPlan, true)
+      : undefined;
+  const target = keptTarget ?? (cardId ? findTarget(cardId, date, editingPlan) : undefined);
   const editBackCents =
-    draft.existing &&
-    draft.existing.cardId === cardId &&
-    draft.existing.targetDate === target?.date
-      ? (draft.amountCents ?? 0)
-      : 0;
-  const dueCents = target ? target.dueCents + editBackCents : 0;
+    editingPlan && editingPlan.targetDate === target?.date ? editingPlan.amountCents : 0;
+  const dueCents = target?.dueCents ?? 0;
   const remainderCents = target ? Math.max(0, dueCents - amountCents) : 0;
   const beforeToday = date < today;
   const exceedsBalance =
