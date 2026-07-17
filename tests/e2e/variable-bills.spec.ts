@@ -17,7 +17,6 @@ test("variable bill: create via UI, links to a card, appears in the variable-bil
     },
   });
   expect(cardRes.ok()).toBe(true);
-  const { card } = (await cardRes.json()) as { card: { id: string } };
 
   await page.goto("/bills");
   await page.getByRole("button", { name: /add variable/i }).first().click();
