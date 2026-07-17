@@ -16,6 +16,7 @@ import {
   plaidAccounts,
   plaidItems,
   plaidTransactionDrafts,
+  pushSubscriptions,
   settings,
   users,
   variableBillCards,
@@ -43,6 +44,7 @@ import {
   type NewPlaidItem,
   type NewPlaidTransactionDraft,
   type NewSettings,
+  type PushSubscriptionRow,
   type NewVariableBill,
   type NewVariableBillCard,
   type OneTimeExpenseRow,
@@ -2781,4 +2783,87 @@ function importInsideTransaction(
       isActive: a.isActive ?? true,
     }).run();
   }
+}
+
+// ── Web-push subscriptions ────────────────────────────────────────────────────
+
+export async function listPushSubscriptions(userId: string): Promise<PushSubscriptionRow[]> {
+  const db = getDb();
+  return db.select().from(pushSubscriptions).where(eq(pushSubscriptions.userId, userId)).all();
+}
+
+export async function listAllPushSubscriptions(): Promise<PushSubscriptionRow[]> {
+  const db = getDb();
+  return db.select().from(pushSubscriptions).all();
+}
+
+/**
+ * Idempotent per endpoint: re-subscribing from the same browser updates the
+ * keys in place (push services rotate keys on re-subscribe) and re-homes the
+ * row to the signed-in user.
+ */
+export async function upsertPushSubscription(
+  userId: string,
+  data: { endpoint: string; p256dh: string; auth: string; userAgent?: string | null },
+): Promise<PushSubscriptionRow> {
+  const db = getDb();
+  const existing = db
+    .select()
+    .from(pushSubscriptions)
+    .where(eq(pushSubscriptions.endpoint, data.endpoint))
+    .get();
+  if (existing) {
+    await db
+      .update(pushSubscriptions)
+      .set({
+        userId,
+        p256dh: data.p256dh,
+        auth: data.auth,
+        userAgent: data.userAgent ?? existing.userAgent,
+      })
+      .where(eq(pushSubscriptions.id, existing.id));
+    return (await db
+      .select()
+      .from(pushSubscriptions)
+      .where(eq(pushSubscriptions.id, existing.id))
+      .get())!;
+  }
+  const id = newId();
+  await db.insert(pushSubscriptions).values({
+    id,
+    userId,
+    endpoint: data.endpoint,
+    p256dh: data.p256dh,
+    auth: data.auth,
+    userAgent: data.userAgent ?? null,
+  });
+  return (await db.select().from(pushSubscriptions).where(eq(pushSubscriptions.id, id)).get())!;
+}
+
+export async function deletePushSubscriptionByEndpoint(
+  userId: string,
+  endpoint: string,
+): Promise<void> {
+  const db = getDb();
+  await db
+    .delete(pushSubscriptions)
+    .where(and(eq(pushSubscriptions.userId, userId), eq(pushSubscriptions.endpoint, endpoint)));
+}
+
+/** Prune path for dead subscriptions (push service returned 404/410). */
+export async function deletePushSubscriptionById(id: string): Promise<void> {
+  const db = getDb();
+  await db.delete(pushSubscriptions).where(eq(pushSubscriptions.id, id));
+}
+
+export async function markPushSubscriptionNotified(
+  id: string,
+  digest: string,
+  notifiedAt: number,
+): Promise<void> {
+  const db = getDb();
+  await db
+    .update(pushSubscriptions)
+    .set({ lastDigest: digest, lastNotifiedAt: notifiedAt })
+    .where(eq(pushSubscriptions.id, id));
 }

@@ -631,6 +631,34 @@ export const assets = sqliteTable(
   }),
 );
 
+// ── Web-push subscriptions ────────────────────────────────────────────────────
+// One row per browser/device push subscription. `lastDigest` +
+// `lastNotifiedAt` dedupe the interest-alert dispatcher: a subscription is
+// only re-notified when the uncovered-dues digest changes or a day has
+// passed (see lib/push.ts).
+
+export const pushSubscriptions = sqliteTable(
+  "push_subscriptions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull().unique(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    userAgent: text("user_agent"),
+    lastNotifiedAt: integer("last_notified_at"),
+    lastDigest: text("last_digest"),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    userIdx: index("push_subscriptions_user_idx").on(t.userId),
+  }),
+);
+
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;
+
 export type PlaidItemRow = typeof plaidItems.$inferSelect;
 export type PlaidAccountRow = typeof plaidAccounts.$inferSelect;
 export type PlaidTransactionDraftRow = typeof plaidTransactionDrafts.$inferSelect;
