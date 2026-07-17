@@ -4,15 +4,27 @@ import { ensureAuth } from "./auth";
 // Locators use case-insensitive regex so copy casing tweaks do not silently
 // break the suite.
 
+function addDaysIso(iso: string, days: number): string {
+  const date = new Date(`${iso}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 test("setup -> add a bill -> add an extra -> see them in projection", async ({ page }) => {
   await ensureAuth(page);
+
+  // Due date relative to today — a fixed past date would eventually just
+  // re-anchor onto next month's recurrence (harmless), but relativizing keeps
+  // the fixture testing the same "upcoming due date" path every run.
+  const today = new Date().toISOString().slice(0, 10);
+  const dueDate = addDaysIso(today, 14);
 
   await page.goto("/bills");
   await page.getByRole("button", { name: /^ADD BILL$/i }).click();
   const billDialog = page.getByRole("dialog", { name: /add bill/i });
   await billDialog.getByLabel(/^name$/i).fill("Rent");
   await billDialog.getByLabel(/amount/i).fill("700");
-  await billDialog.getByLabel(/next due date/i).fill("2026-05-15");
+  await billDialog.getByLabel(/next due date/i).fill(dueDate);
   await billDialog.getByRole("button", { name: /^save$/i }).click();
   await expect(page.getByText("Rent").first()).toBeVisible();
 

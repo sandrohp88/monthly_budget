@@ -3,12 +3,22 @@ import { test, expect } from "@playwright/test";
 import Database from "better-sqlite3";
 import { ensureAuth } from "./auth";
 
+function addDaysIso(iso: string, days: number): string {
+  const date = new Date(`${iso}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 /**
  * Seeds a Plaid item, account, and approved draft transaction directly into
  * the test DB. The Plaid sandbox isn't required — we're testing that the
  * transactions page correctly renders imported data.
  */
 function seedPlaidDraft(dbPath: string) {
+  const today = new Date().toISOString().slice(0, 10);
+  // A recently-posted transaction date, relative to today — the transactions
+  // page has no date filter, but a fixed past date reads as stale years on.
+  const draftDate = addDaysIso(today, -5);
   const db = new Database(dbPath);
   try {
     const user = db.prepare("SELECT id FROM users LIMIT 1").get() as
@@ -52,10 +62,10 @@ function seedPlaidDraft(dbPath: string) {
        (id, user_id, account_id, date, description, original_description,
         amount_cents, plaid_category, merchant_name, pending,
         status, kind, created_at)
-       VALUES (?, ?, ?, '2026-05-10', 'Whole Foods Market', 'WHOLE FOODS MARKET #10234',
+       VALUES (?, ?, ?, ?, 'Whole Foods Market', 'WHOLE FOODS MARKET #10234',
                8750, 'FOOD_AND_DRINK', 'Whole Foods', 0,
                'approved', 'expense', ?)`,
-    ).run(draftId, userId, accountId, Date.now());
+    ).run(draftId, userId, accountId, draftDate, Date.now());
 
     db.pragma("foreign_keys = ON");
   } finally {

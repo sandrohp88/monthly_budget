@@ -1,8 +1,21 @@
 import { test, expect } from "@playwright/test";
 import { ensureAuth } from "./auth";
 
+function addDaysIso(iso: string, days: number): string {
+  const date = new Date(`${iso}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 test("create card -> add deferred-interest promo -> verify promo chunk in projection", async ({ page }) => {
   await ensureAuth(page);
+
+  // Relative to today so the promo stays inside its normal monthly-schedule
+  // window rather than drifting past endDate into the (differently-tested)
+  // expired-promo catch-up path as real time passes.
+  const today = new Date().toISOString().slice(0, 10);
+  const startDate = addDaysIso(today, -14);
+  const endDate = addDaysIso(today, 365);
 
   // ── create a credit card ──────────────────────────────────────────────
   await page.goto("/credit-cards");
@@ -38,9 +51,9 @@ test("create card -> add deferred-interest promo -> verify promo chunk in projec
 
   // Start date
   const dateInputs = promoDialog.locator("input[type='date']");
-  await dateInputs.first().fill("2026-05-01");
+  await dateInputs.first().fill(startDate);
   // End date (12 months out)
-  await dateInputs.nth(1).fill("2027-05-01");
+  await dateInputs.nth(1).fill(endDate);
 
   await promoDialog.getByRole("button", { name: /add promo/i }).click();
 
