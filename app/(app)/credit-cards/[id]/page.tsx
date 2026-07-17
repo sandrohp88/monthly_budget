@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import {
   getCreditCard,
+  getSettings,
   listAllPromoPayments,
   listBills,
   listCreditCardPaymentOverridesForUser,
@@ -14,7 +15,7 @@ import {
 } from "@/lib/repos";
 import { estimateCurrentCycle } from "@/lib/credit-cards";
 import { paydownTargetDate } from "@/lib/card-payments";
-import { todayIso } from "@/lib/dates";
+import { DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
 import { projectVariableBillCardCharges } from "@/lib/variable-bills";
 import { CardDetailClient } from "./card-detail-client";
 
@@ -43,6 +44,7 @@ export default async function CreditCardDetailPage({
     accounts,
     items,
     paymentOverrides,
+    settings,
   ] = await Promise.all([
     listStatements(card.id),
     listPromosForCard(userId, card.id, true),
@@ -53,6 +55,7 @@ export default async function CreditCardDetailPage({
     listPlaidAccounts(userId),
     listPlaidItems(userId),
     listCreditCardPaymentOverridesForUser(userId),
+    getSettings(userId),
   ]);
 
   const paymentsByPromoId: Record<
@@ -67,7 +70,8 @@ export default async function CreditCardDetailPage({
     paymentsByPromoId[pp.promoId] = list;
   }
 
-  const today = todayIso();
+  const timezone = settings?.timezone ?? DEFAULT_TIMEZONE;
+  const today = todayIso(timezone);
 
   // Calendar-scheduled paydowns (`pays-down:`) on this card that still lie
   // ahead. Once applied to the card they credit the promo balance (see
@@ -126,6 +130,7 @@ export default async function CreditCardDetailPage({
       mask={account?.mask ?? null}
       institution={institution}
       accountBalanceCents={account?.balanceCents ?? null}
+      timezone={timezone}
     />
   );
 }

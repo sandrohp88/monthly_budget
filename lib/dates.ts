@@ -9,8 +9,11 @@ export function formatIso(iso: string, fmt: "long" | "short" | "iso" = "long"): 
   return format(d, fmt === "long" ? "EEE, MMM d, yyyy" : "MMM d");
 }
 
-/** Today's calendar date in the configured timezone, as ISO YYYY-MM-DD. */
-export function todayIso(timeZone = "America/New_York"): string {
+/** Fallback timezone when a caller has no settings row to read from. */
+export const DEFAULT_TIMEZONE = "America/New_York";
+
+/** Today's calendar date in the given timezone, as ISO YYYY-MM-DD. */
+export function todayIso(timeZone: string): string {
   const now = new Date();
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone,

@@ -69,10 +69,12 @@ type StatementCycleMode = "calendar_day" | "interval_days";
 
 export function CardDialog({
   card,
+  timezone,
   onClose,
   onSaved,
 }: {
   card?: CreditCardRow;
+  timezone: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -83,7 +85,7 @@ export function CardDialog({
     card?.statementCycleMode === "interval_days" ? "interval_days" : "calendar_day",
   );
   const [statementCycleAnchorDate, setStatementCycleAnchorDate] = React.useState(
-    card?.statementCycleAnchorDate ?? todayIso(),
+    card?.statementCycleAnchorDate ?? todayIso(timezone),
   );
   const [statementCycleIntervalDays, setStatementCycleIntervalDays] = React.useState(
     card?.statementCycleIntervalDays ?? 31,
@@ -297,16 +299,18 @@ export function CardDialog({
 export function StatementCreateDialog({
   card,
   existingStatements,
+  timezone,
   onClose,
   onSaved,
 }: {
   card: CreditCardRow;
   existingStatements: CreditCardStatementRow[];
+  timezone: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   // Default statement date = most recent statement close on/before today.
-  const today = todayIso();
+  const today = todayIso(timezone);
   const defaultStatementDate = previousStatementDateOnOrBefore(today, card);
   const [statementDate, setStatementDate] = React.useState(defaultStatementDate);
   const [dueDate, setDueDate] = React.useState(
@@ -419,19 +423,21 @@ export function StatementCreateDialog({
 export function StatementEditDialog({
   statement,
   promos = [],
+  timezone,
   onClose,
   onSaved,
 }: {
   statement: CreditCardStatementRow;
   /** The card's promos — the default paid amount becomes the ISB when active 0% promos exist. */
   promos?: CreditCardPromoRow[];
+  timezone: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [paidAmountCents, setPaidAmount] = React.useState<number>(
     statement.paidAmountCents ?? interestSavingCashDueCents(statement, promos),
   );
-  const [paidDate, setPaidDate] = React.useState<string>(statement.paidDate ?? todayIso());
+  const [paidDate, setPaidDate] = React.useState<string>(statement.paidDate ?? todayIso(timezone));
   const [statementBalanceCents, setBalance] = React.useState(statement.statementBalanceCents);
   const [statementDate, setStatementDate] = React.useState(statement.statementDate);
   const [dueDate, setDueDate] = React.useState(statement.dueDate);
@@ -585,16 +591,18 @@ export function StatementEditDialog({
 export function PromoDialog({
   card,
   promo,
+  timezone,
   onClose,
   onSaved,
 }: {
   card: CreditCardRow;
   promo?: CreditCardPromoRow;
+  timezone: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const editing = !!promo;
-  const today = todayIso();
+  const today = todayIso(timezone);
   const [description, setDescription] = React.useState(promo?.description ?? "");
   const [originalAmountCents, setOriginalAmount] = React.useState(
     promo?.originalAmountCents ?? 0,
@@ -797,15 +805,17 @@ export function PromoWhatIfSheet({
   card,
   promos,
   paymentsByPromoId,
+  timezone,
   onClose,
 }: {
   scope: "promo" | "card";
   card: CreditCardRow;
   promos: CreditCardPromoRow[];
   paymentsByPromoId: Record<string, PromoScheduledPayment[]>;
+  timezone: string;
   onClose: () => void;
 }) {
-  const today = todayIso();
+  const today = todayIso(timezone);
   const whatIf = React.useMemo(() => {
     if (scope === "promo" && promos.length === 1) {
       return promoWhatIf(
@@ -958,6 +968,7 @@ export function PromoScheduleSheet({
   promo,
   initialPayments,
   scheduledCardPaymentCents = 0,
+  timezone,
   onClose,
   onSaved,
 }: {
@@ -966,10 +977,11 @@ export function PromoScheduleSheet({
   initialPayments: PromoScheduledPayment[];
   /** Pending calendar paydowns on this card that already credit the promo balance. */
   scheduledCardPaymentCents?: number;
+  timezone: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const today = todayIso();
+  const today = todayIso(timezone);
   const [drafts, setDrafts] = React.useState<DraftPayment[]>(() =>
     initialPayments.map((p) => ({
       key: p.id,

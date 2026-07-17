@@ -51,6 +51,7 @@ export function BillForm({
   initial,
   categories,
   cards,
+  timezone,
   onSubmit,
   onCancel,
   submitting,
@@ -61,6 +62,7 @@ export function BillForm({
   initial?: BillRow;
   categories: ReadonlyArray<string>;
   cards: ReadonlyArray<{ id: string; name: string; isActive: boolean }>;
+  timezone: string;
   onSubmit: (values: BillFormValues) => void | Promise<void>;
   onCancel: () => void;
   submitting?: boolean;
@@ -77,7 +79,7 @@ export function BillForm({
   const [intervalPreset, setIntervalPreset] = React.useState<string>(
     initial ? presetForMonths(initial.intervalMonths) : "1",
   );
-  const today = todayIso();
+  const today = todayIso(timezone);
   const [anchorDate, setAnchorDate] = React.useState<string>(
     initial ? nextBillOccurrence(initial, today) : (defaultAnchorDate ?? today),
   );

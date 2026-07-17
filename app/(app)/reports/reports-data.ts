@@ -6,8 +6,9 @@ import {
   listCategories,
   listPaychecks,
   getNetWorthComponents,
+  getSettings,
 } from "@/lib/repos";
-import { todayIso } from "@/lib/dates";
+import { DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
 import type { ReportsClient } from "./reports-client";
 
 type ReportsClientProps = ComponentProps<typeof ReportsClient>;
@@ -18,7 +19,8 @@ type ReportsClientProps = ComponentProps<typeof ReportsClient>;
  * fetch it alongside the projection bundle.
  */
 export async function buildReportsData(userId: string): Promise<ReportsClientProps> {
-  const today = todayIso();
+  const settings = await getSettings(userId);
+  const today = todayIso(settings?.timezone ?? DEFAULT_TIMEZONE);
   const currentYear = today.slice(0, 4);
   const yearStart = `${currentYear}-01-01`;
 

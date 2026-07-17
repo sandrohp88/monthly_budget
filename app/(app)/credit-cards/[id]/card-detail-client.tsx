@@ -81,6 +81,7 @@ export function CardDetailClient({
   mask,
   institution,
   accountBalanceCents,
+  timezone,
 }: {
   card: CreditCardRow;
   statements: CreditCardStatementRow[];
@@ -93,9 +94,10 @@ export function CardDetailClient({
   mask: string | null;
   institution: string | null;
   accountBalanceCents: number | null;
+  timezone: string;
 }) {
   const router = useRouter();
-  const today = todayIso();
+  const today = todayIso(timezone);
 
   const [editOpen, setEditOpen] = React.useState(false);
   const [statementOpen, setStatementOpen] = React.useState(false);
@@ -663,6 +665,7 @@ export function CardDetailClient({
       {editOpen ? (
         <CardDialog
           card={card}
+          timezone={timezone}
           onClose={() => setEditOpen(false)}
           onSaved={() => {
             setEditOpen(false);
@@ -674,6 +677,7 @@ export function CardDetailClient({
         <StatementCreateDialog
           card={card}
           existingStatements={statements}
+          timezone={timezone}
           onClose={() => setStatementOpen(false)}
           onSaved={() => {
             setStatementOpen(false);
@@ -685,6 +689,7 @@ export function CardDetailClient({
         <StatementEditDialog
           statement={editStatement}
           promos={activePromos}
+          timezone={timezone}
           onClose={() => setEditStatement(null)}
           onSaved={() => {
             setEditStatement(null);
@@ -695,6 +700,7 @@ export function CardDetailClient({
       {createPromoOpen ? (
         <PromoDialog
           card={card}
+          timezone={timezone}
           onClose={() => setCreatePromoOpen(false)}
           onSaved={() => {
             setCreatePromoOpen(false);
@@ -706,6 +712,7 @@ export function CardDetailClient({
         <PromoDialog
           card={card}
           promo={editPromo}
+          timezone={timezone}
           onClose={() => setEditPromo(null)}
           onSaved={() => {
             setEditPromo(null);
@@ -719,6 +726,7 @@ export function CardDetailClient({
           card={card}
           promos={[whatIfPromo]}
           paymentsByPromoId={paymentsByPromoId}
+          timezone={timezone}
           onClose={() => setWhatIfPromo(null)}
         />
       ) : null}
@@ -728,6 +736,7 @@ export function CardDetailClient({
           card={card}
           promos={activePromos}
           paymentsByPromoId={paymentsByPromoId}
+          timezone={timezone}
           onClose={() => setWhatIfAll(false)}
         />
       ) : null}
@@ -737,6 +746,7 @@ export function CardDetailClient({
           promo={schedulePromo}
           initialPayments={paymentsByPromoId[schedulePromo.id] ?? []}
           scheduledCardPaymentCents={scheduledCardPaymentCents}
+          timezone={timezone}
           onClose={() => setSchedulePromo(null)}
           onSaved={() => {
             setSchedulePromo(null);

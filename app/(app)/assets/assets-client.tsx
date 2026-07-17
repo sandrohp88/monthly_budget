@@ -59,8 +59,10 @@ function categoryLabel(cat: string): string {
 
 export function AssetsClient({
   initialAssets,
+  timezone,
 }: {
   initialAssets: AssetRow[];
+  timezone: string;
 }) {
   const [items, setItems] = React.useState<AssetRow[]>(initialAssets);
   const [dialogOpen, setDialogOpen] = React.useState(false);
@@ -257,6 +259,7 @@ export function AssetsClient({
           </DialogHeader>
           <AssetForm
             initial={editing}
+            timezone={timezone}
             onCancel={() => {
               setDialogOpen(false);
               setEditing(null);
@@ -285,14 +288,16 @@ export function AssetsClient({
 
 function AssetForm({
   initial,
+  timezone,
   onCancel,
   onSaved,
 }: {
   initial: AssetRow | null;
+  timezone: string;
   onCancel: () => void;
   onSaved: (a: AssetRow) => void;
 }) {
-  const today = todayIso();
+  const today = todayIso(timezone);
   const [name, setName] = React.useState(initial?.name ?? "");
   const [valueCents, setValueCents] = React.useState(
     initial?.valueCents ?? 0,
