@@ -46,7 +46,7 @@ export async function PUT(_req: Request) {
     // Cover the projection window from today — the anchor only sets the
     // cadence. Otherwise the series ends at firstPayday + months and the
     // projection falls off a paycheck cliff as the anchor ages.
-    from: todayIso(),
+    from: todayIso(settings.timezone),
   });
   const existing = await listPaychecks(auth.userId);
   const existingDates = new Set(existing.map((p) => p.payDate));

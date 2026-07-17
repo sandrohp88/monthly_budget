@@ -34,7 +34,13 @@ import {
 import { todayIso } from "@/lib/dates";
 import type { PaycheckRow } from "@/lib/db/schema";
 
-export function PaychecksClient({ initialPaychecks }: { initialPaychecks: PaycheckRow[] }) {
+export function PaychecksClient({
+  initialPaychecks,
+  timezone,
+}: {
+  initialPaychecks: PaycheckRow[];
+  timezone: string;
+}) {
   const [items, setItems] = React.useState<PaycheckRow[]>(initialPaychecks);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [regenPreview, setRegenPreview] = React.useState<{ payDate: string; amountCents: number }[] | null>(
@@ -42,7 +48,7 @@ export function PaychecksClient({ initialPaychecks }: { initialPaychecks: Payche
   );
   const [submitting, setSubmitting] = React.useState(false);
 
-  const today = todayIso();
+  const today = todayIso(timezone);
   // Split on RECEIPT, not the scheduled date. Payroll often posts a day or two
   // ahead of payDate; such a paycheck is already reconciled (actualReceived)
   // while its payDate is still in the future. Keying on payDate alone stranded

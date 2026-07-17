@@ -31,7 +31,7 @@ import {
   settlePaycheckWithDraft,
 } from "./repos";
 import type { PlaidTransactionDraftRow } from "./db/schema";
-import { addDaysIso, todayIso } from "./dates";
+import { addDaysIso, DEFAULT_TIMEZONE, todayIso } from "./dates";
 import {
   matchPaycheckDeposits,
   PAYCHECK_MATCH_WINDOW_DAYS,
@@ -717,7 +717,7 @@ export async function syncPlaidTransactions(
 
   // Use the user's timezone for the reconciliation cutoff.
   const settings = await getSettings(userId);
-  const today = todayIso(settings?.timezone);
+  const today = todayIso(settings?.timezone ?? DEFAULT_TIMEZONE);
 
   // Income side: match freshly-synced deposits to scheduled paychecks.
   // Idempotent (consume-once + not-received→received edge), so it's safe to

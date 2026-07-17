@@ -50,12 +50,12 @@ import {
 } from "./repos";
 import { encryptToken } from "./plaid-crypto";
 import { syncCreditCardLiabilitiesForItem, syncPlaidTransactions } from "./plaid-sync";
-import { addDaysIso, todayIso } from "./dates";
+import { addDaysIso, DEFAULT_TIMEZONE, todayIso } from "./dates";
 import { addMonthsClampedIso } from "./paypal-special-financing";
 
 // Fixture dates are computed relative to today so six-month promo windows stay
 // meaningful regardless of when the suite runs.
-const TODAY = todayIso();
+const TODAY = todayIso(DEFAULT_TIMEZONE);
 
 let dbDir: string;
 
@@ -374,7 +374,7 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_card");
 
-    const today = todayIso();
+    const today = todayIso(DEFAULT_TIMEZONE);
     const statementDate = addDaysIso(today, -26);
     const promo = await createPromo(user.id, card.id, {
       description: "TV installment",
@@ -472,7 +472,7 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
       isActive: true,
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_card2");
-    const today = todayIso();
+    const today = todayIso(DEFAULT_TIMEZONE);
     await createStatement(card.id, {
       statementDate: addDaysIso(today, -26),
       dueDate: today,
@@ -550,7 +550,7 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
       isActive: true,
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_visa");
-    const today = todayIso();
+    const today = todayIso(DEFAULT_TIMEZONE);
     const statement = await createStatement(card.id, {
       statementDate: addDaysIso(today, -26),
       dueDate: today,
@@ -633,7 +633,7 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
       isActive: true,
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_prime");
-    const today = todayIso();
+    const today = todayIso(DEFAULT_TIMEZONE);
     const statement = await createStatement(card.id, {
       statementDate: addDaysIso(today, -28),
       dueDate: today,
@@ -728,7 +728,7 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
       isActive: true,
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_rev");
-    const today = todayIso();
+    const today = todayIso(DEFAULT_TIMEZONE);
     await createStatement(card.id, {
       statementDate: addDaysIso(today, -26),
       dueDate: today,
@@ -802,7 +802,7 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
       isActive: true,
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_near_full");
-    const today = todayIso();
+    const today = todayIso(DEFAULT_TIMEZONE);
     await createStatement(card.id, {
       statementDate: addDaysIso(today, -26),
       dueDate: today,
@@ -874,7 +874,7 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
       isActive: true,
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_reversal");
-    const today = todayIso();
+    const today = todayIso(DEFAULT_TIMEZONE);
     await createStatement(card.id, {
       statementDate: addDaysIso(today, -26),
       dueDate: today,
@@ -950,7 +950,7 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
       isActive: true,
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_double");
-    const today = todayIso();
+    const today = todayIso(DEFAULT_TIMEZONE);
     const statementOlder = await createStatement(card.id, {
       statementDate: addDaysIso(today, -56),
       dueDate: addDaysIso(today, -30),
@@ -1050,7 +1050,7 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
       isActive: true,
     });
     await setCreditCardPlaidLink(user.id, card.id, "acct_accounted");
-    const today = todayIso();
+    const today = todayIso(DEFAULT_TIMEZONE);
     // Last cycle: already marked paid WITHOUT a settledByDraftId (manual /
     // Liabilities / pre-0024 provenance), paid by the very payment below.
     const statementPaidElsewhere = await createStatement(card.id, {
@@ -1170,7 +1170,7 @@ function depositTxn(over: Record<string, unknown> = {}) {
     transaction_id: "dep_1",
     account_id: "acct_checking",
     pending: false,
-    date: todayIso(),
+    date: todayIso(DEFAULT_TIMEZONE),
     name: "ACME CORP DIRECT DEP",
     original_description: "ACME CORP DIRECT DEP PPD",
     amount: -1950.0, // Plaid: negative = money in

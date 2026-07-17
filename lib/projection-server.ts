@@ -170,18 +170,14 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   // Opt-in: if the user has marked a linked account as their starting balance source,
   // substitute its live balance for the manual startingBalanceCents.
   const linked = linkedBalance != null;
-  const requestedStartDate = resolveProjectionStartDate({
+  // The MAX_LOOKBACK_DAYS cap (including the linked-mode "schema default of
+  // 1970-01-01 means no lookback at all" special case) lives inside
+  // resolveProjectionStartDate now, shared by both linked and manual modes.
+  const startDate = resolveProjectionStartDate({
     startingBalanceAsOf: settings.startingBalanceAsOf,
     today,
     usesLinkedStartingBalance: linked,
   });
-  // Cap linked-mode lookback at MAX_LOOKBACK_DAYS so the schema default for
-  // startingBalanceAsOf (1970-01-01, used by users who never set the field)
-  // doesn't replay decades of Plaid drafts on every projection build.
-  const MAX_LOOKBACK_DAYS = 180;
-  const earliestLookback = addDaysIso(today, -MAX_LOOKBACK_DAYS);
-  const startDate =
-    linked && requestedStartDate < earliestLookback ? today : requestedStartDate;
   // Lookback: linked + the user has rolled startingBalanceAsOf to a past date
   // (within the cap) to see historical context — paid bills, recent expenses
   // — alongside the forward projection. Past balances are reconstructed from

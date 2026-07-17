@@ -11,7 +11,7 @@ import {
 import { planPromoReconcile } from "@/lib/paypal-promo-list";
 import { planChaseFlexReconcile, type ChaseFlexPlanRow } from "@/lib/chase-flex-plan-list";
 import { promoReconcileSchema } from "@/lib/validation";
-import { todayIso } from "@/lib/dates";
+import { DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -43,7 +43,7 @@ export async function POST(req: Request, ctx: Ctx) {
   if (data instanceof NextResponse) return data;
 
   const settings = await getSettings(auth.userId);
-  const today = todayIso(settings?.timezone);
+  const today = todayIso(settings?.timezone ?? DEFAULT_TIMEZONE);
 
   const promos = await listPromosForCard(auth.userId, id, false);
   const source = data.source;

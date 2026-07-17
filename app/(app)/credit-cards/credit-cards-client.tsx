@@ -35,10 +35,16 @@ export type WalletCard = {
   dueDate: string | null;
 };
 
-export function CreditCardsClient({ initialCards }: { initialCards: WalletCard[] }) {
+export function CreditCardsClient({
+  initialCards,
+  timezone,
+}: {
+  initialCards: WalletCard[];
+  timezone: string;
+}) {
   const cards = initialCards;
   const [addOpen, setAddOpen] = React.useState(false);
-  const today = todayIso();
+  const today = todayIso(timezone);
 
   const refresh = () => {
     // Balances and due states are computed server-side — reload to recompute.
@@ -134,7 +140,7 @@ export function CreditCardsClient({ initialCards }: { initialCards: WalletCard[]
       )}
 
       {addOpen ? (
-        <CardDialog onClose={() => setAddOpen(false)} onSaved={refresh} />
+        <CardDialog timezone={timezone} onClose={() => setAddOpen(false)} onSaved={refresh} />
       ) : null}
     </div>
   );

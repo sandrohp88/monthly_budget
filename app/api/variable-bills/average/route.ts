@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError, readJson } from "@/lib/api";
-import { todayIso } from "@/lib/dates";
+import { DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
 import { estimateVariableBillAverage, getSettings } from "@/lib/repos";
 import { variableBillAverageSchema } from "@/lib/validation";
 
@@ -16,7 +16,7 @@ export async function POST(req: Request) {
       category: data.category,
       cardIds: data.cardIds,
       lookbackMonths: data.lookbackMonths ?? 6,
-      asOfIso: todayIso(settings?.timezone),
+      asOfIso: todayIso(settings?.timezone ?? DEFAULT_TIMEZONE),
     });
     return NextResponse.json({ average });
   } catch (e) {

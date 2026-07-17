@@ -66,6 +66,65 @@ describe("projection engine", () => {
         }),
       ).toBe("2026-05-05");
     });
+
+    it("clamps a manual as-of date older than 180 days to the cap boundary", () => {
+      // Migration 0020 backfilled startingBalanceAsOf from first_payday_date
+      // for existing users, so some anchors are years old. Clamping (rather
+      // than collapsing to today, as linked mode does) keeps the replay
+      // semantics: the walk still runs, just bounded to the last 180 days.
+      expect(
+        resolveProjectionStartDate({
+          startingBalanceAsOf: "2020-01-01",
+          today: "2026-05-05",
+          usesLinkedStartingBalance: false,
+        }),
+      ).toBe("2025-11-06"); // 2026-05-05 minus 180 days
+    });
+
+    it("leaves a future manual as-of date untouched", () => {
+      expect(
+        resolveProjectionStartDate({
+          startingBalanceAsOf: "2026-06-01",
+          today: "2026-05-05",
+          usesLinkedStartingBalance: false,
+        }),
+      ).toBe("2026-06-01");
+    });
+
+    it("collapses linked mode all the way to today when the as-of date is older than 180 days", () => {
+      // Same schema-default case projection-server used to special-case
+      // locally (1970-01-01 for users who never set the field): linked mode
+      // has nothing to gain from replaying that much history since the live
+      // balance is already current.
+      expect(
+        resolveProjectionStartDate({
+          startingBalanceAsOf: "1970-01-01",
+          today: "2026-05-05",
+          usesLinkedStartingBalance: true,
+        }),
+      ).toBe("2026-05-05");
+    });
+
+    it("keeps linked mode's as-of date when it is within 180 days and before today", () => {
+      expect(
+        resolveProjectionStartDate({
+          startingBalanceAsOf: "2026-04-01",
+          today: "2026-05-05",
+          usesLinkedStartingBalance: true,
+        }),
+      ).toBe("2026-04-01");
+    });
+
+    it("honors an explicit maxLookbackDays override", () => {
+      expect(
+        resolveProjectionStartDate({
+          startingBalanceAsOf: "2026-04-01",
+          today: "2026-05-05",
+          usesLinkedStartingBalance: false,
+          maxLookbackDays: 10,
+        }),
+      ).toBe("2026-04-25"); // 2026-05-05 minus 10 days
+    });
   });
 
   it("empty inputs carry the starting balance forward unchanged", () => {

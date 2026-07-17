@@ -597,6 +597,7 @@ export function CalendarClient({
   categories,
   cards,
   overrides,
+  timezone,
 }: {
   rows: ProjectionRow[];
   today: string;
@@ -607,6 +608,7 @@ export function CalendarClient({
   /** Every credit-card payment override row (keyed by card + due date). Lets the
    *  calendar tell which events are user-scheduled — deletable and draggable. */
   overrides: ReadonlyArray<{ cardId: string; dueDate: string }>;
+  timezone: string;
 }) {
   const router = useRouter();
   const [view, setView] = React.useState<"month" | "paycheck" | "compact">("month");
@@ -1718,6 +1720,7 @@ export function CalendarClient({
               <BillForm
                 categories={categoriesState}
                 cards={cards}
+                timezone={timezone}
                 defaultAnchorDate={addBillFor}
                 onCategoryAdded={(c) => setCategoriesState((prev) => [...prev, c])}
                 onSubmit={createBill}

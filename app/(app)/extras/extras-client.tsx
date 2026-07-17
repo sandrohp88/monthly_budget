@@ -49,16 +49,18 @@ export function ExtrasClient({
   initialExtras,
   categories,
   creditCards,
+  timezone,
 }: {
   initialExtras: OneTimeExpenseRow[];
   categories: ReadonlyArray<string>;
   creditCards: CreditCardRow[];
+  timezone: string;
 }) {
   const [items, setItems] = React.useState<OneTimeExpenseRow[]>(initialExtras);
   const [categoriesState, setCategoriesState] = React.useState<string[]>(() => [...categories]);
   const [filter, setFilter] = React.useState<FilterKey>("90");
   const [createOpen, setCreateOpen] = React.useState(false);
-  const today = todayIso();
+  const today = todayIso(timezone);
 
   const visible = React.useMemo(() => {
     if (filter === "all") return items;

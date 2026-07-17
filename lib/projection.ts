@@ -13,6 +13,15 @@
  * paychecks to be applied first.
  */
 
+import { addDaysIso } from "./dates";
+
+/**
+ * Default cap on how far back a projection start date may reach. Bounds the
+ * number of daily rows generated per render regardless of how old an anchor
+ * date is (see resolveProjectionStartDate).
+ */
+export const MAX_LOOKBACK_DAYS = 180;
+
 export type Paycheck = {
   payDate: string;
   amountCents: number;
@@ -203,21 +212,43 @@ function formatIsoDate(ts: number): string {
  * `firstPaydayDate` is no longer the anchor — only the recurrence anchor for
  * the paycheck schedule. Conflating the two was the source of the
  * "balance is off by a paycheck" bug.
+ *
+ * Both modes are bounded by `maxLookbackDays` (default MAX_LOOKBACK_DAYS) so
+ * an old anchor can't generate years of daily projection rows on every
+ * render — but the two modes hit the cap differently:
+ *
+ *   - Linked mode snaps all the way to `today` once the as-of date falls
+ *     outside the cap. This preserves the existing behavior where the
+ *     schema default for startingBalanceAsOf (1970-01-01, for users who
+ *     never rolled it back) means "no lookback at all" rather than "180
+ *     days of lookback" — the live balance is current either way, so there
+ *     is nothing to gain from replaying that much history.
+ *   - Manual mode clamps to the cap boundary instead of collapsing to
+ *     today: the starting balance is only true as of the user's as-of date,
+ *     so the walk must still replay from *some* real anchor. Clamping to
+ *     `today - maxLookbackDays` keeps that replay semantics intact while
+ *     bounding the row count.
+ *
+ * Future as-of dates are never touched in either mode.
  */
 export function resolveProjectionStartDate(opts: {
   startingBalanceAsOf: string;
   today: string;
   usesLinkedStartingBalance: boolean;
+  maxLookbackDays?: number;
 }): string {
+  const maxLookbackDays = opts.maxLookbackDays ?? MAX_LOOKBACK_DAYS;
+  const earliest = addDaysIso(opts.today, -maxLookbackDays);
   // Manual mode: anchor at the user's as-of date (the date they typed the
   // balance). Linked mode: anchor at today (the live balance is always
   // current), but allow startingBalanceAsOf to extend the row window
   // backward for historical context. Reconstruction of past balances from
   // posted Plaid drafts happens in projection-server.
   if (opts.usesLinkedStartingBalance) {
-    return opts.startingBalanceAsOf < opts.today ? opts.startingBalanceAsOf : opts.today;
+    const start = opts.startingBalanceAsOf < opts.today ? opts.startingBalanceAsOf : opts.today;
+    return start < earliest ? opts.today : start;
   }
-  return opts.startingBalanceAsOf;
+  return opts.startingBalanceAsOf < earliest ? earliest : opts.startingBalanceAsOf;
 }
 
 /** Days in the given 1-indexed month of `year` (handles leap years). */

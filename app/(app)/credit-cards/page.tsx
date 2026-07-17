@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import {
+  getSettings,
   listCreditCards,
   listPlaidAccounts,
   listPlaidItems,
@@ -8,6 +9,7 @@ import {
   listStatements,
 } from "@/lib/repos";
 import { interestSavingCashDueCents, isStatementOpen } from "@/lib/credit-cards";
+import { DEFAULT_TIMEZONE } from "@/lib/dates";
 import { CreditCardsClient, type WalletCard } from "./credit-cards-client";
 
 export const dynamic = "force-dynamic";
@@ -17,11 +19,13 @@ export default async function CreditCardsPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [cards, accounts, items] = await Promise.all([
+  const [cards, accounts, items, settings] = await Promise.all([
     listCreditCards(userId), // active only — the wallet shows cards in use
     listPlaidAccounts(userId),
     listPlaidItems(userId),
+    getSettings(userId),
   ]);
+  const timezone = settings?.timezone ?? DEFAULT_TIMEZONE;
   const accountById = new Map(accounts.map((a) => [a.id, a]));
   const institutionByItemId = new Map(items.map((i) => [i.id, i.institutionName]));
 
@@ -71,5 +75,5 @@ export default async function CreditCardsPage() {
     }),
   );
 
-  return <CreditCardsClient initialCards={data} />;
+  return <CreditCardsClient initialCards={data} timezone={timezone} />;
 }

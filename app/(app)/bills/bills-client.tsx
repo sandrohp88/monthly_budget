@@ -107,6 +107,7 @@ export function BillsClient({
   cards,
   initialOverrides = [],
   lastPaidByBill = {},
+  timezone,
 }: {
   initialBills: BillRow[];
   initialVariableBills: VariableBill[];
@@ -114,6 +115,7 @@ export function BillsClient({
   cards: ReadonlyArray<BillCardOption>;
   initialOverrides?: OverrideItem[];
   lastPaidByBill?: Record<string, LastPaid>;
+  timezone: string;
 }) {
   const [bills, setBills] = React.useState<BillRow[]>(initialBills);
   const [variableBills, setVariableBills] = React.useState<VariableBill[]>(initialVariableBills);
@@ -123,7 +125,7 @@ export function BillsClient({
   const [filter, setFilter] = React.useState("");
   const [categoryFilter, setCategoryFilter] = React.useState<string>("ALL");
   const [sortKey, setSortKey] = React.useState<"name" | "amount" | "next" | "monthly">("name");
-  const today = todayIso();
+  const today = todayIso(timezone);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [createVariableOpen, setCreateVariableOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<BillRow | null>(null);
@@ -553,6 +555,7 @@ export function BillsClient({
           <BillForm
             categories={categoriesState}
             cards={cards}
+            timezone={timezone}
             onCategoryAdded={(c) => setCategoriesState((prev) => [...prev, c])}
             onSubmit={create}
             onCancel={() => setCreateOpen(false)}
@@ -569,6 +572,7 @@ export function BillsClient({
           <VariableBillForm
             categories={categoriesState}
             cards={cards}
+            timezone={timezone}
             onSubmit={createVariable}
             onCancel={() => setCreateVariableOpen(false)}
             submitting={submitting}
@@ -588,6 +592,7 @@ export function BillsClient({
                   initial={editing}
                   categories={categoriesState}
                   cards={cards}
+                  timezone={timezone}
                   onCategoryAdded={(c) => setCategoriesState((prev) => [...prev, c])}
                   onSubmit={update}
                   onCancel={() => setEditing(null)}
@@ -597,6 +602,7 @@ export function BillsClient({
                 <OverrideSection
                   billId={editing.id}
                   overrides={overrides.filter((o) => o.billId === editing.id)}
+                  timezone={timezone}
                   onOverridesChange={(updated) =>
                     setOverrides((prev) => [
                       ...prev.filter((o) => o.billId !== editing.id),
@@ -644,6 +650,7 @@ export function BillsClient({
                   initial={editingVariable}
                   categories={categoriesState}
                   cards={cards}
+                  timezone={timezone}
                   onSubmit={updateVariable}
                   onCancel={() => setEditingVariable(null)}
                   submitting={submitting}
@@ -683,14 +690,16 @@ export function BillsClient({
 function OverrideSection({
   billId,
   overrides,
+  timezone,
   onOverridesChange,
 }: {
   billId: string;
   overrides: OverrideItem[];
+  timezone: string;
   onOverridesChange: (updated: OverrideItem[]) => void;
 }) {
   const [addOpen, setAddOpen] = React.useState(false);
-  const [newDate, setNewDate] = React.useState(todayIso());
+  const [newDate, setNewDate] = React.useState(todayIso(timezone));
   const [newAmount, setNewAmount] = React.useState(0);
   const [newNotes, setNewNotes] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -715,7 +724,7 @@ function OverrideSection({
         created,
       ]);
       setAddOpen(false);
-      setNewDate(todayIso());
+      setNewDate(todayIso(timezone));
       setNewAmount(0);
       setNewNotes("");
       toast.success("Override saved");
@@ -879,6 +888,7 @@ function VariableBillForm({
   initial,
   categories,
   cards,
+  timezone,
   onSubmit,
   onCancel,
   submitting,
@@ -887,13 +897,14 @@ function VariableBillForm({
   initial?: VariableBill;
   categories: ReadonlyArray<string>;
   cards: ReadonlyArray<BillCardOption>;
+  timezone: string;
   onSubmit: (values: VariableBillFormValues) => void | Promise<void>;
   onCancel: () => void;
   submitting?: boolean;
   hideActions?: boolean;
 }) {
   const activeCards = cards.filter((card) => card.isActive);
-  const today = todayIso();
+  const today = todayIso(timezone);
   const [name, setName] = React.useState(initial?.name ?? "");
   const [category, setCategory] = React.useState(initial?.category ?? categories[0] ?? "Other");
   const [amountCents, setAmountCents] = React.useState(initial?.amountCents ?? 0);

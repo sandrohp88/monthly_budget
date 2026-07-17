@@ -2,7 +2,7 @@ import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { buildProjection } from "@/lib/projection-server";
-import { listPaychecks, listPromos, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance } from "@/lib/repos";
+import { listPaychecks, listPromos, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance, getSettings } from "@/lib/repos";
 import { interestSavingCashDueCents, isStatementOpen } from "@/lib/credit-cards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHead } from "@/components/ui/page-head";
@@ -21,7 +21,7 @@ import { AlertBar } from "@/components/ui/alert-bar";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { ProjectionChart } from "@/components/projection-chart";
-import { addDaysIso, todayIso } from "@/lib/dates";
+import { addDaysIso, DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
 import { findWorstDay } from "@/lib/projection";
 import { findUncoveredCardDues } from "@/lib/projection-insights";
 import { cn } from "@/lib/cn";
@@ -60,13 +60,17 @@ export default async function DashboardPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const projection = await buildProjection(userId);
+  const [projection, settings] = await Promise.all([
+    buildProjection(userId),
+    getSettings(userId),
+  ]);
   if (!projection) redirect("/setup");
   const { rows, projectionMonths, promoDriftByCard, unpaidRecentOccurrences } = projection;
   const totalPromoDriftCents = Object.values(promoDriftByCard).reduce((s, n) => s + n, 0);
   const driftedCardCount = Object.keys(promoDriftByCard).length;
 
-  const currentMonth = todayIso().slice(0, 7);
+  const today = todayIso(settings?.timezone ?? DEFAULT_TIMEZONE);
+  const currentMonth = today.slice(0, 7);
   const [paychecks, ccStatements, ccPromos, budgetUtilization, liveBalance] = await Promise.all([
     listPaychecks(userId),
     listStatementsForUser(userId),
@@ -92,9 +96,8 @@ export default async function DashboardPage() {
     openStatements.length > 0
       ? [...openStatements].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0]
       : null;
-  const ccOverdueCount = openStatements.filter((s) => s.dueDate < todayIso()).length;
+  const ccOverdueCount = openStatements.filter((s) => s.dueDate < today).length;
 
-  const today = todayIso();
   const upcomingPaychecks = paychecks.filter((p) => p.payDate >= today);
   const nextPayday = upcomingPaychecks[0];
 

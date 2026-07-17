@@ -2,10 +2,12 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { buildProjection } from "@/lib/projection-server";
 import {
+  getSettings,
   listCategories,
   listCreditCards,
   listCreditCardPaymentOverridesForUser,
 } from "@/lib/repos";
+import { DEFAULT_TIMEZONE } from "@/lib/dates";
 import { CalendarClient } from "./calendar-client";
 
 export const dynamic = "force-dynamic";
@@ -15,11 +17,12 @@ export default async function CalendarPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [projection, categories, cards, overrides] = await Promise.all([
+  const [projection, categories, cards, overrides, settings] = await Promise.all([
     buildProjection(userId),
     listCategories(userId),
     listCreditCards(userId, true),
     listCreditCardPaymentOverridesForUser(userId),
+    getSettings(userId),
   ]);
   if (!projection) redirect("/setup");
 
@@ -47,6 +50,7 @@ export default async function CalendarPage() {
         categories={categories.filter((c) => c.kind === "expense").map((c) => c.name)}
         cards={cards.map((c) => ({ id: c.id, name: c.name, isActive: c.isActive }))}
         overrides={overrides.map((o) => ({ cardId: o.cardId, dueDate: o.dueDate }))}
+        timezone={settings?.timezone ?? DEFAULT_TIMEZONE}
       />
     </div>
   );

@@ -2,12 +2,14 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { buildProjection } from "@/lib/projection-server";
 import {
+  getSettings,
   listBills,
   listBillPaymentOverridesForUser,
   listCategories,
   listCreditCards,
   listVariableBills,
 } from "@/lib/repos";
+import { DEFAULT_TIMEZONE } from "@/lib/dates";
 import { BillsClient, type LastPaid } from "./bills-client";
 
 export const dynamic = "force-dynamic";
@@ -17,16 +19,18 @@ export default async function BillsPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [bills, variableBills, categories, cards, overrides, projection] = await Promise.all([
-    listBills(userId, true),
-    listVariableBills(userId, true),
-    listCategories(userId),
-    listCreditCards(userId, true),
-    listBillPaymentOverridesForUser(userId),
-    // Cached per request (the layout already builds it) — reused for the
-    // reconciled "last paid" markers.
-    buildProjection(userId),
-  ]);
+  const [bills, variableBills, categories, cards, overrides, projection, settings] =
+    await Promise.all([
+      listBills(userId, true),
+      listVariableBills(userId, true),
+      listCategories(userId),
+      listCreditCards(userId, true),
+      listBillPaymentOverridesForUser(userId),
+      // Cached per request (the layout already builds it) — reused for the
+      // reconciled "last paid" markers.
+      buildProjection(userId),
+      getSettings(userId),
+    ]);
 
   // Latest settled occurrence per bill (lists arrive ascending by date).
   const lastPaidByBill: Record<string, LastPaid> = {};
@@ -49,6 +53,7 @@ export default async function BillsPage() {
         amountCents: o.amountCents,
         notes: o.notes,
       }))}
+      timezone={settings?.timezone ?? DEFAULT_TIMEZONE}
     />
   );
 }
