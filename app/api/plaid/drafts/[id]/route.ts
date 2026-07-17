@@ -8,6 +8,7 @@ import {
   deletePlaidDraft,
   updatePlaidDraftStatus,
   setPlaidDraftBillLink,
+  setPlaidDraftBillMatchExcluded,
   createExtra,
   createPromo,
   getCreditCardByPlaidAccountId,
@@ -57,6 +58,14 @@ export async function PATCH(
       if (!bill) return jsonError("Bill not found", 404);
     }
     const updated = await setPlaidDraftBillLink(auth.userId, id, billId);
+    return NextResponse.json({ draft: updated });
+  }
+
+  if (body.action === "exclude_bill_match") {
+    if (draft.status === "dismissed") {
+      return jsonError("Deleted transactions cannot be excluded from matching", 409);
+    }
+    const updated = await setPlaidDraftBillMatchExcluded(auth.userId, id, body.excluded === true);
     return NextResponse.json({ draft: updated });
   }
 

@@ -27,6 +27,7 @@ import {
 } from "./projection";
 import { projectCardPayments } from "./card-payments";
 import {
+  billAliasList,
   findUnpaidRecentOccurrences,
   matchPaidBillOccurrences,
   type UnpaidRecentOccurrence,
@@ -213,13 +214,21 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     ]);
     // Every descriptor the user ever manually linked to a bill becomes an
     // alias: banks repeat the same wording each month, so one link teaches
-    // all future cycles.
+    // all future cycles. The bill's own match_alias column (user-entered
+    // wording, comma-separated) feeds the same gate.
     const aliasesByBill = new Map<string, string[]>();
     for (const d of linkDescriptors) {
       const list = aliasesByBill.get(d.billId) ?? [];
       list.push(d.description);
       if (d.merchantName) list.push(d.merchantName);
       aliasesByBill.set(d.billId, list);
+    }
+    for (const b of cashBills) {
+      const fromColumn = billAliasList(b.matchAlias);
+      if (fromColumn.length === 0) continue;
+      const list = aliasesByBill.get(b.id) ?? [];
+      list.push(...fromColumn);
+      aliasesByBill.set(b.id, list);
     }
     const reconcilableBills = cashBills.map((b) => ({
       id: b.id,

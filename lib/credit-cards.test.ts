@@ -62,6 +62,7 @@ function bill(over: Partial<BillRow> & { dueDay?: number } = {}): BillRow {
     anchorDate: dueDay != null ? `2024-01-${String(dueDay).padStart(2, "0")}` : "2024-01-05",
     autoPay: false,
     paidViaCardId: null,
+    matchAlias: null,
     notes: null,
     isActive: true,
     createdAt: 0,

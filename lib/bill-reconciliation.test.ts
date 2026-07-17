@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  billAliasList,
   draftNamesBill,
   enumerateBillOccurrences,
   findUnpaidRecentOccurrences,
@@ -44,6 +45,21 @@ describe("enumerateBillOccurrences", () => {
         "2026-12-31",
       ),
     ).toEqual(["2026-01-10", "2026-04-10", "2026-07-10", "2026-10-10"]);
+  });
+});
+
+describe("billAliasList", () => {
+  it("splits on commas, trims, and drops too-short entries", () => {
+    expect(billAliasList("ACME PROPERTY MGMT,  SPPC 8841 , tv, ")).toEqual([
+      "ACME PROPERTY MGMT",
+      "SPPC 8841",
+    ]);
+  });
+
+  it("returns empty for null/undefined/blank", () => {
+    expect(billAliasList(null)).toEqual([]);
+    expect(billAliasList(undefined)).toEqual([]);
+    expect(billAliasList("  ")).toEqual([]);
   });
 });
 
@@ -258,6 +274,42 @@ describe("matchPaidBillOccurrences", () => {
     expect(matches).toEqual([
       expect.objectContaining({ billId: "nv-a", draftIds: ["big"] }),
       expect.objectContaining({ billId: "nv-b", draftIds: ["small"] }),
+    ]);
+  });
+
+  it("the bill's match-alias column matches wording unrelated to the name", () => {
+    // Bill "Rent" paid as "ACME PROPERTY MGMT" — no containment either way.
+    // The user types the alias on the bill form; projection-server feeds it
+    // through billAliasList into aliasesByBill.
+    const rent = { id: "rent", name: "Rent", amountCents: 1450_00, intervalMonths: 1, anchorDate: "2026-07-01" };
+    const drafts = [
+      draft({ id: "ach", date: "2026-07-01", amountCents: 1450_00, description: "ACME PROPERTY MGMT LLC", merchantName: null }),
+    ];
+    expect(matchPaidBillOccurrences([rent], drafts)).toEqual([]);
+    const matches = matchPaidBillOccurrences([rent], drafts, {
+      aliasesByBill: new Map([["rent", billAliasList("ACME PROPERTY MGMT")]]),
+    });
+    expect(matches).toEqual([
+      expect.objectContaining({ billId: "rent", occurrenceDate: "2026-07-01", draftIds: ["ach"] }),
+    ]);
+  });
+
+  it("an excluded draft never matches heuristically, by name or alias", () => {
+    const matches = matchPaidBillOccurrences(
+      [nvEnergy],
+      [draft({ billMatchExcluded: true })],
+      { aliasesByBill: new Map([["bill-nv", ["NVENERGY PAYMENTS C/S"]]]) },
+    );
+    expect(matches).toEqual([]);
+  });
+
+  it("a manual link on an excluded draft still wins (exclusion only silences the heuristic)", () => {
+    const matches = matchPaidBillOccurrences(
+      [nvEnergy],
+      [draft({ billMatchExcluded: true, linkedBillId: "bill-nv" })],
+    );
+    expect(matches).toEqual([
+      expect.objectContaining({ billId: "bill-nv", draftIds: ["txn-1"] }),
     ]);
   });
 

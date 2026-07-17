@@ -28,6 +28,7 @@ export type BillFormValues = {
   anchorDate: string;
   autoPay: boolean;
   paidViaCardId: string | null;
+  matchAlias: string | null;
   notes: string | null;
 };
 
@@ -87,6 +88,7 @@ export function BillForm({
   const [paidViaCardId, setPaidViaCardId] = React.useState<string>(
     initial?.paidViaCardId ?? CASH_OPTION,
   );
+  const [matchAlias, setMatchAlias] = React.useState<string>(initial?.matchAlias ?? "");
   const [notes, setNotes] = React.useState<string>(initial?.notes ?? "");
 
   // The list to render in the dropdown: keep an archived linked card visible
@@ -124,6 +126,7 @@ export function BillForm({
           anchorDate,
           autoPay,
           paidViaCardId: paidViaCardId === CASH_OPTION ? null : paidViaCardId,
+          matchAlias: matchAlias.trim() ? matchAlias.trim() : null,
           notes: notes.trim() ? notes.trim() : null,
         });
       }}
@@ -232,6 +235,19 @@ export function BillForm({
             <Label>Autopay</Label>
             <Switch checked={autoPay} onCheckedChange={setAutoPay} />
           </label>
+        </div>
+        <div className="col-span-1 space-y-1.5 sm:col-span-2">
+          <Label htmlFor="matchAlias">Bank match alias</Label>
+          <Input
+            id="matchAlias"
+            value={matchAlias}
+            placeholder="e.g. ACME PROPERTY MGMT"
+            onChange={(e) => setMatchAlias(e.target.value)}
+          />
+          <p className="text-2xs text-[var(--text-3)]">
+            Bank wording that should count as a payment of this bill, when it
+            differs from the name. Separate several with commas.
+          </p>
         </div>
         <div className="col-span-1 space-y-1.5 sm:col-span-2">
           <Label htmlFor="notes">Notes</Label>
