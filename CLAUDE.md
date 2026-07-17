@@ -492,6 +492,31 @@ vhosts on the shared LXC-125 Caddy.)
 
 ---
 
+## 11a. Web push (interest alerts)
+
+Installed PWAs get a push when a card due date inside 14 days has no (or
+partial) scheduled-payment coverage — the same detector as the dashboard
+INTEREST AlertBar (`findUncoveredCardDues`). Moving parts:
+
+- **Env (all three or push stays off):** `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
+  `VAPID_SUBJECT` — generate with `npx web-push generate-vapid-keys`. Keys are
+  read at runtime (never baked into the client bundle); rotating them
+  invalidates every stored subscription, so devices must re-enable.
+- **Storage:** `push_subscriptions` (migration `0031`) — one row per device,
+  with `lastDigest`/`lastNotifiedAt` for dedupe.
+- **Dispatch:** `lib/push.ts` (I/O) + `lib/push-payload.ts` (pure payload,
+  digest, quiet-hours + 24h re-nag decision — unit-tested). Dead
+  subscriptions (push service 404/410) are pruned on send.
+- **Trigger:** `instrumentation.ts` → `lib/push-scheduler.ts`, an in-process
+  hourly timer. The `NEXT_RUNTIME === "nodejs"` check in instrumentation.ts
+  must keep its exact form — Next inlines it so the edge build DCEs the
+  import chain (web-push/better-sqlite3 don't compile for edge).
+- **Client:** `public/sw.js` `push`/`notificationclick` handlers +
+  `components/push-notifications-card.tsx` on /settings (enable / disable /
+  send test per device).
+
+---
+
 ## 12. Security
 
 - Never log passwords, tokens, or full auth headers

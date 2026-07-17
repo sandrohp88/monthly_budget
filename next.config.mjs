@@ -44,7 +44,7 @@ const nextConfig = {
   // builds breaks `next start`, which we want for Playwright e2e.
   ...(process.env.NEXT_OUTPUT_STANDALONE === "1" ? { output: "standalone" } : {}),
   reactStrictMode: true,
-  serverExternalPackages: ["better-sqlite3", "argon2"],
+  serverExternalPackages: ["better-sqlite3", "argon2", "web-push"],
   async headers() {
     return [
       {

@@ -35,6 +35,13 @@ export default defineConfig({
       AUTH_SECRET: "test-secret-test-secret-test-secret-test",
       AUTH_URL: BASE_URL,
       NODE_ENV: "production",
+      // Test-only VAPID fixture keypair (never used against a real push
+      // service — e2e subscriptions carry fake endpoints). Lets the /api/push
+      // routes and the settings card run in their configured state.
+      VAPID_PUBLIC_KEY:
+        "BARIVisiXdoFAdJNsdqR6T9G5l5zDhYFgzc_KvfncIcr5yQbAccGlI0L4vcJIcPiOH7Qp4Hx8LhHf6co-K7MeE8",
+      VAPID_PRIVATE_KEY: "EkI5kBL1QgjMCeUKvWyDQfRswkvn7Ornbc1FVeuoijw",
+      VAPID_SUBJECT: "mailto:e2e@example.com",
     },
   },
 });

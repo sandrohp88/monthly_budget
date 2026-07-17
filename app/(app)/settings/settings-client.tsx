@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { CategoryDialog } from "@/components/category-dialog";
+import { PushNotificationsCard } from "@/components/push-notifications-card";
 import type { CategoryRow, SettingsRow, UserSafe } from "@/lib/db/schema";
 
 interface CurrentUser {
@@ -412,6 +413,8 @@ export function SettingsClient({
           </div>
         </Card>
       ) : null}
+
+      <PushNotificationsCard />
 
       <Card>
         <CardHeader>

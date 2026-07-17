@@ -52,6 +52,12 @@ import {
   listStatements,
   updateStatement,
   getPromo,
+  // push subscriptions
+  upsertPushSubscription,
+  listPushSubscriptions,
+  deletePushSubscriptionByEndpoint,
+  deletePushSubscriptionById,
+  markPushSubscriptionNotified,
 } from "./repos";
 
 // ── per-test SQLite fixture ────────────────────────────────────────────────
@@ -1082,4 +1088,53 @@ describe("repos / statement paid transitions", () => {
     expect(resave).toEqual({ changed: true });
   });
 
+  // ── push subscriptions ─────────────────────────────────────────────────────
+
+  it("push subscriptions: upsert is endpoint-idempotent, delete is user-scoped", async () => {
+    const { id: userId } = await makeUser("push@example.com");
+    const { id: otherId } = await makeUser("push-other@example.com");
+
+    const created = await upsertPushSubscription(userId, {
+      endpoint: "https://push.example/sub/1",
+      p256dh: "key-a",
+      auth: "auth-a",
+      userAgent: "TestBrowser/1.0",
+    });
+    expect(created.userId).toBe(userId);
+
+    // Re-subscribe from the same browser: same row, refreshed keys.
+    const updated = await upsertPushSubscription(userId, {
+      endpoint: "https://push.example/sub/1",
+      p256dh: "key-b",
+      auth: "auth-b",
+    });
+    expect(updated.id).toBe(created.id);
+    expect(updated.p256dh).toBe("key-b");
+    expect(updated.userAgent).toBe("TestBrowser/1.0"); // preserved when omitted
+
+    expect(await listPushSubscriptions(userId)).toHaveLength(1);
+    expect(await listPushSubscriptions(otherId)).toHaveLength(0);
+
+    // Another user's delete for this endpoint is a no-op.
+    await deletePushSubscriptionByEndpoint(otherId, "https://push.example/sub/1");
+    expect(await listPushSubscriptions(userId)).toHaveLength(1);
+
+    await markPushSubscriptionNotified(created.id, "digest-1", 1_800_000_000_000);
+    const [marked] = await listPushSubscriptions(userId);
+    expect(marked).toMatchObject({ lastDigest: "digest-1", lastNotifiedAt: 1_800_000_000_000 });
+
+    await deletePushSubscriptionByEndpoint(userId, "https://push.example/sub/1");
+    expect(await listPushSubscriptions(userId)).toHaveLength(0);
+  });
+
+  it("push subscriptions: prune by id removes a dead subscription", async () => {
+    const { id: userId } = await makeUser("push-prune@example.com");
+    const sub = await upsertPushSubscription(userId, {
+      endpoint: "https://push.example/sub/dead",
+      p256dh: "k",
+      auth: "a",
+    });
+    await deletePushSubscriptionById(sub.id);
+    expect(await listPushSubscriptions(userId)).toHaveLength(0);
+  });
 });
