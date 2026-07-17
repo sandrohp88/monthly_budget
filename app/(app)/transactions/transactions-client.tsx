@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Link2, Pencil, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
+import { Check, Link2, Pencil, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -81,8 +81,46 @@ export function TransactionsClient({
   const [editing, setEditing] = React.useState<DraftWithAccount | null>(null);
   const [promoTxn, setPromoTxn] = React.useState<DraftWithAccount | null>(null);
   const [linkingTxn, setLinkingTxn] = React.useState<DraftWithAccount | null>(null);
+  // Heuristic matches the user rejected this session — the server recomputes
+  // billMatches on the next render, so this only bridges until then.
+  const [rejectedMatchIds, setRejectedMatchIds] = React.useState<ReadonlySet<string>>(new Set());
 
   const billNameById = React.useMemo(() => new Map(bills.map((b) => [b.id, b.name])), [bills]);
+
+  /** Confirm a heuristic match: persist it as a manual link (teaches the alias). */
+  const confirmMatch = async (txn: DraftWithAccount, match: BillMatch) => {
+    try {
+      const res = await fetch(`/api/plaid/drafts/${txn.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "link_bill", billId: match.billId }),
+      });
+      const json = (await res.json()) as { draft?: DraftWithAccount; error?: string };
+      if (!res.ok || !json.draft) throw new Error(json.error ?? "Confirm failed");
+      setTransactions((rows) => rows.map((r) => (r.id === txn.id ? json.draft! : r)));
+      toast.success(`Linked to ${match.billName}`);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
+
+  /** Reject a heuristic match: this draft never auto-matches a bill again. */
+  const rejectMatch = async (txn: DraftWithAccount) => {
+    try {
+      const res = await fetch(`/api/plaid/drafts/${txn.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "exclude_bill_match", excluded: true }),
+      });
+      const json = (await res.json()) as { draft?: DraftWithAccount; error?: string };
+      if (!res.ok || !json.draft) throw new Error(json.error ?? "Unlink failed");
+      setTransactions((rows) => rows.map((r) => (r.id === txn.id ? json.draft! : r)));
+      setRejectedMatchIds((ids) => new Set([...ids, txn.id]));
+      toast.success("Match removed — this transaction won't auto-match bills");
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
 
   const refresh = React.useCallback(async () => {
     const res = await fetch("/api/plaid/drafts?status=approved");
@@ -237,7 +275,12 @@ export function TransactionsClient({
           <div className="divide-y divide-[var(--border-raw)]">
             {visible.map((txn) => {
               const isCredit = txn.amountCents < 0;
-              const billMatch = billMatches[txn.id];
+              // A confirmed match shows as the "Linked" pill instead; a
+              // just-rejected one disappears until the server recomputes.
+              const billMatch =
+                txn.linkedBillId || rejectedMatchIds.has(txn.id)
+                  ? undefined
+                  : billMatches[txn.id];
               return (
                 <div
                   key={txn.id}
@@ -258,6 +301,24 @@ export function TransactionsClient({
                         <StatusPill>
                           Paid bill · {billMatch.billName}{" "}
                           <DateLabel iso={billMatch.occurrenceDate} format="short" />
+                          <button
+                            type="button"
+                            aria-label={`Confirm ${billMatch.billName} match`}
+                            title="Confirm — always treat this wording as this bill"
+                            className="ml-1 cursor-pointer text-[var(--mint)] hover:text-[var(--mint-bright)]"
+                            onClick={() => confirmMatch(txn, billMatch)}
+                          >
+                            <Check className="inline h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Reject ${billMatch.billName} match`}
+                            title="Not this bill — never auto-match this transaction"
+                            className="cursor-pointer text-[var(--text-3)] hover:text-[var(--red)]"
+                            onClick={() => rejectMatch(txn)}
+                          >
+                            <X className="inline h-3 w-3" />
+                          </button>
                         </StatusPill>
                       ) : null}
                       {txn.linkedBillId ? (

@@ -53,6 +53,12 @@ export type ReconcilableDraft = {
   amountCents: number; // positive = money out (Plaid convention)
   /** Manual user assignment: this draft pays that bill (see module docs). */
   linkedBillId?: string | null;
+  /**
+   * User rejected this draft's heuristic match ("not this bill"): it never
+   * name/alias-matches any bill. An explicit linkedBillId still wins — the
+   * exclusion only silences the heuristic.
+   */
+  billMatchExcluded?: boolean;
 };
 
 export type ReconcilableBill = Pick<
@@ -121,6 +127,19 @@ export function draftNamesBill(
   if (bill.length < 3) return false; // too short to trust substring matching
   const haystacks = [draft.description, draft.merchantName ?? ""].map(normalize);
   return haystacks.some((h) => h.length >= 3 && (h.includes(bill) || bill.includes(h)));
+}
+
+/**
+ * Split a bill's user-entered `matchAlias` column into individual aliases.
+ * Comma-separated; blank and too-short-to-trust entries (under 3 chars after
+ * trimming) are dropped, mirroring the containment matcher's own guard.
+ */
+export function billAliasList(matchAlias: string | null | undefined): string[] {
+  if (!matchAlias) return [];
+  return matchAlias
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 3);
 }
 
 /**
@@ -209,7 +228,10 @@ export function matchPaidBillOccurrences(
       const linked = draft.linkedBillId != null;
       if (linked) {
         if (draft.linkedBillId !== occ.billId) continue;
-      } else if (!draftNamesBill(occ.billName, draft) && !draftMatchesAlias(aliases, draft)) {
+      } else if (
+        draft.billMatchExcluded ||
+        (!draftNamesBill(occ.billName, draft) && !draftMatchesAlias(aliases, draft))
+      ) {
         continue;
       }
       pairs.push({

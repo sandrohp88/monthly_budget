@@ -26,6 +26,7 @@ export async function POST(req: Request) {
       anchorDate: data.anchorDate,
       autoPay: data.autoPay,
       paidViaCardId: data.paidViaCardId ? data.paidViaCardId : null,
+      matchAlias: data.matchAlias ?? null,
       notes: data.notes ?? null,
       isActive: true,
     });

@@ -122,6 +122,13 @@ export const bills = sqliteTable(
      */
     paidViaCardId: text("paid_via_card_id"),
     notes: text("notes"),
+    /**
+     * User-entered bank wording that should count as this bill in the
+     * transaction reconciliation (comma-separated for several), e.g. a bill
+     * named "Rent" paid as "ACME PROPERTY MGMT". Same containment matching as
+     * the bill name; complements the aliases learned from manual draft links.
+     */
+    matchAlias: text("match_alias"),
     isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
     updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
@@ -605,6 +612,14 @@ export const plaidTransactionDrafts = sqliteTable(
      * ignores links to bills it isn't given anyway.
      */
     linkedBillId: text("linked_bill_id"),
+    /**
+     * User rejected this draft's heuristic bill match ("not this bill").
+     * Excluded drafts never name/alias-match any bill again; an explicit
+     * linkedBillId still wins (and setting one clears this flag).
+     */
+    billMatchExcluded: integer("bill_match_excluded", { mode: "boolean" })
+      .notNull()
+      .default(false),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({

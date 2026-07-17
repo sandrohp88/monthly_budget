@@ -2209,6 +2209,7 @@ export async function listStartingBalanceDraftsInRange(
     merchantName: string | null;
     amountCents: number;
     linkedBillId: string | null;
+    billMatchExcluded: boolean;
   }>
 > {
   const db = getDb();
@@ -2233,6 +2234,7 @@ export async function listStartingBalanceDraftsInRange(
       merchantName: plaidTransactionDrafts.merchantName,
       amountCents: plaidTransactionDrafts.amountCents,
       linkedBillId: plaidTransactionDrafts.linkedBillId,
+      billMatchExcluded: plaidTransactionDrafts.billMatchExcluded,
     })
     .from(plaidTransactionDrafts)
     .where(
@@ -2261,7 +2263,33 @@ export async function setPlaidDraftBillLink(
   const db = getDb();
   await db
     .update(plaidTransactionDrafts)
-    .set({ linkedBillId: billId })
+    // An explicit link supersedes any earlier "not this bill" rejection, so
+    // the exclusion clears rather than silently fighting the manual link.
+    .set(billId != null ? { linkedBillId: billId, billMatchExcluded: false } : { linkedBillId: billId })
+    .where(
+      and(
+        eq(plaidTransactionDrafts.userId, userId),
+        eq(plaidTransactionDrafts.id, id),
+      ),
+    )
+    .run();
+  return getPlaidDraft(userId, id);
+}
+
+/**
+ * Mark a draft as rejected from heuristic bill matching ("not this bill"),
+ * or re-allow it with `excluded=false`. A manual link (linkedBillId) is
+ * unaffected and always wins in the matcher.
+ */
+export async function setPlaidDraftBillMatchExcluded(
+  userId: string,
+  id: string,
+  excluded: boolean,
+): Promise<PlaidTransactionDraftRow | undefined> {
+  const db = getDb();
+  await db
+    .update(plaidTransactionDrafts)
+    .set({ billMatchExcluded: excluded })
     .where(
       and(
         eq(plaidTransactionDrafts.userId, userId),

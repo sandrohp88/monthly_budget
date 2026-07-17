@@ -16,6 +16,8 @@ export const billCreateSchema = z.object({
   anchorDate: isoDate,
   autoPay: z.boolean().default(false),
   paidViaCardId: z.string().nullable().optional(),
+  /** Bank wording that should count as this bill (comma-separated for several). */
+  matchAlias: z.string().max(200).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
 });
 
@@ -343,7 +345,14 @@ export const plaidExchangeSchema = z.object({
 /** User action on a single transaction draft. */
 export const plaidDraftActionSchema = z
   .object({
-    action: z.enum(["approve", "dismiss", "create_promo", "update_transaction", "link_bill"]),
+    action: z.enum([
+      "approve",
+      "dismiss",
+      "create_promo",
+      "update_transaction",
+      "link_bill",
+      "exclude_bill_match",
+    ]),
     // approve path — user may override these before confirming
     date: isoDate.optional(),
     description: z.string().min(1).max(120).optional(),
@@ -359,11 +368,19 @@ export const plaidDraftActionSchema = z
     monthlyPaymentCents: cents.refine((n) => n > 0, "Monthly payment must be positive").nullable().optional(),
     // link_bill path — null clears the link
     billId: z.string().min(1).max(64).nullable().optional(),
+    // exclude_bill_match path — true rejects the heuristic match, false re-allows it
+    excluded: z.boolean().optional(),
   })
   .superRefine((v, ctx) => {
     if (v.action === "link_bill") {
       if (v.billId === undefined) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["billId"], message: "billId is required (null to unlink)" });
+      }
+      return;
+    }
+    if (v.action === "exclude_bill_match") {
+      if (v.excluded === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["excluded"], message: "excluded is required" });
       }
       return;
     }
