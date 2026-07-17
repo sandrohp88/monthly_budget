@@ -225,6 +225,13 @@
       "when": 1784001600001,
       "tag": "0031_push_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1784001600002,
+      "tag": "0032_plaid_item_webhook_id",
+      "breakpoints": true
     }
   ]
 }

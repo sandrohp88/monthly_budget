@@ -32,7 +32,8 @@ export async function POST(req: Request) {
     // Encrypt before storing.
     const { enc, iv, tag } = encryptToken(accessToken);
 
-    // Persist the item (no plaintext token in DB).
+    // Persist the item (no plaintext token in DB). plaidItemId is how
+    // webhooks address this item later.
     const item = await createPlaidItem(auth.userId, {
       institutionId: body.institutionId,
       institutionName: body.institutionName,
@@ -42,6 +43,7 @@ export async function POST(req: Request) {
       cursor: null,
       lastSyncedAt: null,
       isActive: true,
+      plaidItemId: exchangeRes.data.item_id,
     });
 
     // Immediately fetch accounts so the user sees them right away.

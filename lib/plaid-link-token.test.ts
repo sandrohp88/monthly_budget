@@ -42,4 +42,24 @@ describe("createLinkToken", () => {
       }),
     );
   });
+
+  it("registers the webhook receiver when APP_URL is configured", async () => {
+    process.env.APP_URL = "https://budget.example.test/";
+
+    await createLinkToken("user-1");
+
+    expect(linkTokenCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        webhook: "https://budget.example.test/api/plaid/webhook",
+      }),
+    );
+  });
+
+  it("omits the webhook param without APP_URL (dev)", async () => {
+    await createLinkToken("user-1");
+
+    expect(linkTokenCreate).toHaveBeenCalledWith(
+      expect.not.objectContaining({ webhook: expect.anything() }),
+    );
+  });
 });

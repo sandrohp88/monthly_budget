@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, lt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
 import { interestSavingCashDueCents, statementCashDueCents } from "./credit-cards";
 import {
@@ -1662,6 +1662,40 @@ export async function createPlaidItem(
   const id = newId();
   await db.insert(plaidItems).values({ id, userId, ...data }).run();
   return (await db.select().from(plaidItems).where(eq(plaidItems.id, id)).get())!;
+}
+
+/**
+ * Webhook-path lookup: Plaid identifies items by its own `item_id` and no
+ * user session exists on that request, so this is deliberately cross-user.
+ */
+export async function getPlaidItemByPlaidItemId(
+  plaidItemId: string,
+): Promise<PlaidItemRow | undefined> {
+  const db = getDb();
+  return db
+    .select()
+    .from(plaidItems)
+    .where(and(eq(plaidItems.plaidItemId, plaidItemId), eq(plaidItems.isActive, true)))
+    .get();
+}
+
+/**
+ * Items linked before migration 0032 have no stored `plaid_item_id`; the
+ * webhook handler backfills them lazily via Plaid `/item/get`. Cross-user for
+ * the same reason as above.
+ */
+export async function listActivePlaidItemsMissingPlaidItemId(): Promise<PlaidItemRow[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(plaidItems)
+    .where(and(isNull(plaidItems.plaidItemId), eq(plaidItems.isActive, true)))
+    .all();
+}
+
+export async function setPlaidItemPlaidItemId(id: string, plaidItemId: string): Promise<void> {
+  const db = getDb();
+  await db.update(plaidItems).set({ plaidItemId }).where(eq(plaidItems.id, id)).run();
 }
 
 export async function updatePlaidItemCursor(

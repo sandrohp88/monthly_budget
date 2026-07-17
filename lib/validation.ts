@@ -422,6 +422,19 @@ export const plaidSyncSchema = z.object({
 });
 
 /**
+ * Body of POST /api/plaid/webhook (already signature-verified by the route).
+ * Deliberately loose: Plaid adds fields per webhook type and we only route on
+ * type/code/item_id — unknown fields pass through untouched.
+ */
+export const plaidWebhookSchema = z
+  .object({
+    webhook_type: z.string().min(1),
+    webhook_code: z.string().min(1),
+    item_id: z.string().optional(),
+  })
+  .passthrough();
+
+/**
  * Body for POST /api/plaid/accounts/[id]/link-card.
  * - `creditCardId: string` — link to existing card
  * - `creditCardId: null` — unlink the Plaid account from any card
@@ -446,6 +459,7 @@ export type PlaidExchangeInput = z.infer<typeof plaidExchangeSchema>;
 export type PlaidDraftActionInput = z.infer<typeof plaidDraftActionSchema>;
 export type PlaidAccountUpdateInput = z.infer<typeof plaidAccountUpdateSchema>;
 export type PlaidSyncInput = z.infer<typeof plaidSyncSchema>;
+export type PlaidWebhookInput = z.infer<typeof plaidWebhookSchema>;
 export type PlaidLinkCardInput = z.infer<typeof plaidLinkCardSchema>;
 
 // ── Backup import ──────────────────────────────────────────────────────────
