@@ -23,6 +23,7 @@ import { DateLabel } from "@/components/date-label";
 import { ProjectionChart } from "@/components/projection-chart";
 import { addDaysIso, todayIso } from "@/lib/dates";
 import { findWorstDay } from "@/lib/projection";
+import { findUncoveredCardDues } from "@/lib/projection-insights";
 import { cn } from "@/lib/cn";
 import { Plus } from "lucide-react";
 import { BudgetUtilization } from "@/components/budget-utilization";
@@ -49,6 +50,10 @@ function balanceVariant(cents: number): "mint" | "amber" | "red" {
 
 const AGENDA_DAYS = 14;
 const AGENDA_MAX_CARDS = 12;
+/** Card due dates this close get the uncovered-balance interest alert. */
+const CARD_DUE_ALERT_DAYS = 14;
+/** An uncovered due this close escalates the alert from amber to red. */
+const CARD_DUE_URGENT_DAYS = 7;
 
 export default async function DashboardPage() {
   const session = await auth();
@@ -92,6 +97,16 @@ export default async function DashboardPage() {
   const today = todayIso();
   const upcomingPaychecks = paychecks.filter((p) => p.payDate >= today);
   const nextPayday = upcomingPaychecks[0];
+
+  // Card due dates coming up whose balance no scheduled payment (fully) covers
+  // — the shortfall starts accruing interest the day after the due date.
+  const uncoveredCardDues = findUncoveredCardDues(rows, {
+    today,
+    horizonDays: CARD_DUE_ALERT_DAYS,
+  });
+  const uncoveredDueUrgent =
+    uncoveredCardDues.length > 0 &&
+    uncoveredCardDues[0]!.dueDate <= addDaysIso(today, CARD_DUE_URGENT_DAYS);
 
   type MonthAgg = { key: string; income: number; expense: number; ending: number };
   const months: MonthAgg[] = [];
@@ -242,6 +257,28 @@ export default async function DashboardPage() {
           . If a payment posted under different wording, link it to the bill.{" "}
           <Link href="/transactions" className="text-[var(--mint)] hover:underline">
             Review transactions →
+          </Link>
+        </AlertBar>
+      ) : null}
+
+      {uncoveredCardDues.length > 0 ? (
+        <AlertBar tag="Interest" variant={uncoveredDueUrgent ? "red" : "amber"}>
+          No planned payment covers{" "}
+          {uncoveredCardDues.slice(0, 3).map((d, i) => (
+            <span key={`${d.cardId}-${d.dueDate}`}>
+              {i > 0 ? ", " : ""}
+              <strong className={uncoveredDueUrgent ? "text-[var(--red)]" : "text-[var(--amber)]"}>
+                {d.label}
+              </strong>{" "}
+              (<Money cents={d.shortfallCents} />
+              {d.coverCents > 0 ? <> of <Money cents={d.owedCents} /> uncovered</> : null} due{" "}
+              <DateLabel iso={d.dueDate} format="short" />)
+            </span>
+          ))}
+          {uncoveredCardDues.length > 3 ? ` and ${uncoveredCardDues.length - 3} more` : ""}
+          . Balances left uncovered past the due date accrue interest.{" "}
+          <Link href="/calendar" className="text-[var(--mint)] hover:underline">
+            Schedule a payment →
           </Link>
         </AlertBar>
       ) : null}

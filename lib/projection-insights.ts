@@ -1,4 +1,5 @@
 import type { ProjectionEvent, ProjectionRow } from "./projection";
+import { addDaysIso } from "./dates";
 
 export type ProjectionShortfall = {
   date: string;
@@ -50,6 +51,18 @@ export type BalanceTrajectory = {
   endBalanceCents: number;
   deltaCents: number;
   avgBalanceCents: number;
+};
+
+export type UncoveredCardDue = {
+  cardId: string;
+  /** Display label of the due marker (estimated cycles carry an "(est.)" suffix). */
+  label: string;
+  dueDate: string;
+  owedCents: number;
+  /** Scheduled-payment cash counted toward this due, clamped to owedCents. */
+  coverCents: number;
+  shortfallCents: number;
+  estimated: boolean;
 };
 
 export type ProjectionInsights = {
@@ -295,4 +308,46 @@ function buildBalanceTrajectory(rows: readonly ProjectionRow[]): BalanceTrajecto
     pctChange < 0.05 ? "stable" : deltaCents > 0 ? "improving" : "declining";
 
   return { direction, startBalanceCents: startBal, endBalanceCents: endBal, deltaCents, avgBalanceCents };
+}
+
+/**
+ * Card due-date markers inside the horizon whose scheduled-payment coverage
+ * falls short of the owed balance — the shortfall accrues interest if nothing
+ * else is scheduled before the due date. Coverage semantics live in
+ * lib/card-payments.ts (`scheduledCoverCents` on due markers); this only reads
+ * the result off projection rows, so partially-covered dues report the
+ * remaining shortfall, not the full owed amount.
+ */
+export function findUncoveredCardDues(
+  rows: readonly ProjectionRow[],
+  opts: { today: string; horizonDays?: number },
+): UncoveredCardDue[] {
+  const horizonEnd = addDaysIso(opts.today, opts.horizonDays ?? 14);
+  const dues: UncoveredCardDue[] = [];
+  for (const row of rows) {
+    if (row.date < opts.today || row.date > horizonEnd) continue;
+    for (const ev of row.events) {
+      if (!ev.dueMarker) continue;
+      const owed = ev.paymentDueCents ?? 0;
+      if (owed <= 0) continue;
+      const cover = Math.min(ev.scheduledCoverCents ?? 0, owed);
+      const shortfall = owed - cover;
+      if (shortfall <= 0) continue;
+      dues.push({
+        cardId: ev.sourceId ?? "",
+        label: ev.label,
+        dueDate: row.date,
+        owedCents: owed,
+        coverCents: cover,
+        shortfallCents: shortfall,
+        estimated: ev.estimated === true,
+      });
+    }
+  }
+  return dues.sort(
+    (a, b) =>
+      a.dueDate.localeCompare(b.dueDate) ||
+      b.shortfallCents - a.shortfallCents ||
+      a.label.localeCompare(b.label),
+  );
 }
