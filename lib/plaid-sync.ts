@@ -753,6 +753,10 @@ export async function createLinkToken(userId: string): Promise<string> {
   // In dev it can be left unset — non-OAuth sandbox banks work without it.
   const appUrl = process.env.APP_URL?.replace(/\/$/, "");
   const redirectUri = appUrl ? `${appUrl}/plaid/oauth-return` : undefined;
+  // Registers the receiver for SYNC_UPDATES_AVAILABLE etc. on items created
+  // through this Link session. Existing items keep whatever webhook they were
+  // created with until updated via /item/webhook/update (ops step, see PR).
+  const webhookUrl = appUrl ? `${appUrl}/api/plaid/webhook` : undefined;
 
   const response = await plaid.linkTokenCreate({
     user: { client_user_id: userId },
@@ -763,6 +767,7 @@ export async function createLinkToken(userId: string): Promise<string> {
     country_codes: [CountryCode.Us],
     language: "en",
     ...(redirectUri ? { redirect_uri: redirectUri } : {}),
+    ...(webhookUrl ? { webhook: webhookUrl } : {}),
   });
   return response.data.link_token;
 }

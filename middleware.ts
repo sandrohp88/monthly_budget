@@ -6,7 +6,10 @@ import { clientIp, hostAllowed, originAllowed } from "./lib/security";
 
 const { auth } = NextAuth(authConfig);
 
-const PUBLIC = new Set<string>(["/login", "/setup"]);
+// /api/plaid/webhook is session-less by nature (Plaid POSTs it) — its own
+// JWT signature verification is the authentication, and a dedicated per-IP
+// rate limit below throttles it before any body parsing happens.
+const PUBLIC = new Set<string>(["/login", "/setup", "/api/plaid/webhook"]);
 // PWA assets must stay reachable without a session: browsers fetch the
 // manifest with credentials omitted (no cookie even when logged in), and iOS
 // fetches touch icons anonymously. Auth-gating them 307s the fetch to /login
@@ -81,6 +84,21 @@ export default auth((req) => {
       return new NextResponse(JSON.stringify({ error: "rate-limited" }), {
         status: 429,
         headers: { "content-type": "application/json", "retry-after": "120" },
+      });
+    }
+  }
+
+  // Per-IP throttle on the Plaid webhook receiver. Signature verification in
+  // the route is the real gate; this just caps how fast an unauthenticated
+  // caller can make us do JWT/JWK work. Capacity 30 with 1/sec refill rides
+  // out legitimate Plaid bursts (a few per sync event) with a wide margin.
+  if (req.method === "POST" && pathname === "/api/plaid/webhook") {
+    const ip = clientIp(req);
+    const ok = takeToken(`plaid-webhook:${ip}`, { capacity: 30, refillPerSecond: 1 });
+    if (!ok) {
+      return new NextResponse(JSON.stringify({ error: "rate-limited" }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "30" },
       });
     }
   }

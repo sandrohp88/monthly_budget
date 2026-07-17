@@ -514,9 +514,14 @@ export const plaidItems = sqliteTable(
     lastSyncedAt: integer("last_synced_at"),
     isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+    // Plaid's own item_id — how webhooks identify the item. Nullable because
+    // items linked before migration 0032 are backfilled lazily (via /item/get)
+    // the first time a webhook arrives for them.
+    plaidItemId: text("plaid_item_id"),
   },
   (t) => ({
     userActive: index("plaid_items_user_active_idx").on(t.userId, t.isActive),
+    plaidItemIdx: index("plaid_items_plaid_item_idx").on(t.plaidItemId),
   }),
 );
 
