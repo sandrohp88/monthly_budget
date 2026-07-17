@@ -151,11 +151,11 @@ const ITEM = {
   accessTokenEnc: "enc",
   accessTokenIv: "iv",
   accessTokenTag: "tag",
-} as never;
+};
 
 function makeDeps(overrides: Partial<WebhookDeps> = {}): WebhookDeps {
   return {
-    getItem: vi.fn().mockResolvedValue(ITEM),
+    getItem: vi.fn().mockResolvedValue(ITEM as never),
     listItemsMissingPlaidItemId: vi.fn().mockResolvedValue([]),
     setItemPlaidItemId: vi.fn().mockResolvedValue(undefined),
     resolvePlaidItemId: vi.fn().mockResolvedValue("plaid-item-1"),

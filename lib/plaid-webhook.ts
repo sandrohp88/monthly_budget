@@ -4,6 +4,7 @@ import {
   createPublicKey,
   timingSafeEqual,
   verify as cryptoVerify,
+  type JsonWebKey as NodeJsonWebKey,
 } from "node:crypto";
 import { getPlaidClient } from "./plaid-client";
 import { decryptToken } from "./plaid-crypto";
@@ -64,8 +65,10 @@ export async function verifyPlaidWebhook(opts: {
   nowMs?: number;
 }): Promise<VerifyResult> {
   const parts = opts.token.split(".");
-  if (parts.length !== 3) return { ok: false, reason: "malformed JWT" };
   const [headerB64, payloadB64, signatureB64] = parts;
+  if (parts.length !== 3 || !headerB64 || !payloadB64 || !signatureB64) {
+    return { ok: false, reason: "malformed JWT" };
+  }
 
   const header = b64urlJson(headerB64) as { alg?: string; kid?: string } | null;
   if (!header) return { ok: false, reason: "unparseable JWT header" };
@@ -81,7 +84,7 @@ export async function verifyPlaidWebhook(opts: {
 
   let publicKey;
   try {
-    publicKey = createPublicKey({ key: jwk as JsonWebKey, format: "jwk" });
+    publicKey = createPublicKey({ key: jwk as NodeJsonWebKey, format: "jwk" });
   } catch {
     return { ok: false, reason: "invalid verification key" };
   }
