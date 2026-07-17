@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildProjectionInsights } from "./projection-insights";
+import { buildProjectionInsights, findUncoveredCardDues } from "./projection-insights";
 import type { ProjectionRow } from "./projection";
 
 const row = (
@@ -250,5 +250,109 @@ describe("buildProjectionInsights", () => {
 
     // startBal = 10000 - 2000 + 0 = 8000, endBal = 8020, delta = 20, pct = 0.25%
     expect(stable.balanceTrajectory!.direction).toBe("stable");
+  });
+});
+
+describe("findUncoveredCardDues", () => {
+  const marker = (
+    label: string,
+    owedCents: number,
+    coverCents: number,
+    extra: Partial<ProjectionRow["events"][number]> = {},
+  ): ProjectionRow["events"][number] => ({
+    kind: "extra",
+    label,
+    amountCents: 0,
+    sourceId: "card-1",
+    sourceType: "creditCardPayment",
+    dueMarker: true,
+    paymentDueCents: owedCents,
+    scheduledCoverCents: coverCents,
+    ...extra,
+  });
+
+  it("reports a due with no scheduled payment at the full owed amount", () => {
+    const dues = findUncoveredCardDues(
+      [row("2026-06-10", 0, 0, 500_00, [marker("Chase", 423_10, 0)])],
+      { today: "2026-06-01" },
+    );
+
+    expect(dues).toEqual([
+      {
+        cardId: "card-1",
+        label: "Chase",
+        dueDate: "2026-06-10",
+        owedCents: 423_10,
+        coverCents: 0,
+        shortfallCents: 423_10,
+        estimated: false,
+      },
+    ]);
+  });
+
+  it("reports only the remaining shortfall for a partially covered due", () => {
+    const dues = findUncoveredCardDues(
+      [row("2026-06-10", 0, 0, 500_00, [marker("Chase", 400_00, 150_00)])],
+      { today: "2026-06-01" },
+    );
+
+    expect(dues).toHaveLength(1);
+    expect(dues[0]).toMatchObject({ shortfallCents: 250_00, coverCents: 150_00 });
+  });
+
+  it("skips fully covered dues, including cover beyond the owed amount", () => {
+    const dues = findUncoveredCardDues(
+      [
+        row("2026-06-10", 0, 0, 500_00, [marker("Chase", 400_00, 400_00)]),
+        row("2026-06-12", 0, 0, 500_00, [marker("Citi", 100_00, 250_00)]),
+      ],
+      { today: "2026-06-01" },
+    );
+
+    expect(dues).toEqual([]);
+  });
+
+  it("ignores markers outside the horizon and rows before today", () => {
+    const dues = findUncoveredCardDues(
+      [
+        row("2026-05-30", 0, 0, 500_00, [marker("Stale", 100_00, 0)]),
+        row("2026-06-10", 0, 0, 500_00, [marker("InWindow", 100_00, 0)]),
+        row("2026-06-20", 0, 0, 500_00, [marker("Beyond", 100_00, 0)]),
+      ],
+      { today: "2026-06-01", horizonDays: 14 },
+    );
+
+    expect(dues.map((d) => d.label)).toEqual(["InWindow"]);
+  });
+
+  it("ignores non-marker events and zero-owed markers", () => {
+    const dues = findUncoveredCardDues(
+      [
+        row("2026-06-10", 0, 0, 500_00, [
+          { kind: "bill", label: "Rent", amountCents: 850_00 },
+          { kind: "extra", label: "Chase planned payment", amountCents: 200_00 },
+          marker("ZeroOwed", 0, 0),
+        ]),
+      ],
+      { today: "2026-06-01" },
+    );
+
+    expect(dues).toEqual([]);
+  });
+
+  it("sorts by due date, then largest shortfall, and keeps the estimated flag", () => {
+    const dues = findUncoveredCardDues(
+      [
+        row("2026-06-08", 0, 0, 500_00, [
+          marker("Small", 50_00, 0),
+          marker("Big (est.)", 900_00, 100_00, { sourceId: "card-2", estimated: true }),
+        ]),
+        row("2026-06-05", 0, 0, 500_00, [marker("First", 75_00, 0)]),
+      ],
+      { today: "2026-06-01" },
+    );
+
+    expect(dues.map((d) => d.label)).toEqual(["First", "Big (est.)", "Small"]);
+    expect(dues[1]).toMatchObject({ cardId: "card-2", estimated: true, shortfallCents: 800_00 });
   });
 });
