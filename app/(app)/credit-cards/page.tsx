@@ -10,6 +10,9 @@ import {
 } from "@/lib/repos";
 import { interestSavingCashDueCents, isStatementOpen } from "@/lib/credit-cards";
 import { DEFAULT_TIMEZONE } from "@/lib/dates";
+import { buildProjection } from "@/lib/projection-server";
+import { buildCardForecast, type CardForecast } from "@/lib/card-forecast";
+import { cardDisplayName } from "@/lib/card-art";
 import { CreditCardsClient, type WalletCard } from "./credit-cards-client";
 
 export const dynamic = "force-dynamic";
@@ -19,11 +22,14 @@ export default async function CreditCardsPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [cards, accounts, items, settings] = await Promise.all([
+  const [cards, accounts, items, settings, projection] = await Promise.all([
     listCreditCards(userId), // active only — the wallet shows cards in use
     listPlaidAccounts(userId),
     listPlaidItems(userId),
     getSettings(userId),
+    // Cached per request — the forecast reshapes the same projection the
+    // ledger and calendar render, so the numbers can't drift apart.
+    buildProjection(userId),
   ]);
   const timezone = settings?.timezone ?? DEFAULT_TIMEZONE;
   const accountById = new Map(accounts.map((a) => [a.id, a]));
@@ -75,5 +81,21 @@ export default async function CreditCardsPage() {
     }),
   );
 
-  return <CreditCardsClient initialCards={data} timezone={timezone} />;
+  // Wallet display names (issuer-qualified) carry through to the forecast so a
+  // card reads the same in both tabs.
+  const cardNames = new Map(
+    data.map((wc) => [wc.card.id, cardDisplayName(wc.card.name, wc.institution)] as const),
+  );
+  const forecast: CardForecast | null = projection
+    ? buildCardForecast({
+        rows: projection.rows,
+        today: projection.today,
+        cardNames,
+        // The projection window overshoots its month count by a few days; only
+        // emit buckets it fully covers so the last month isn't truncated.
+        months: projection.projectionMonths,
+      })
+    : null;
+
+  return <CreditCardsClient initialCards={data} timezone={timezone} forecast={forecast} />;
 }
