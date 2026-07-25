@@ -91,7 +91,10 @@ app/
     assets/                ← manual net-worth line items
     bills/                 ← recurring + variable bills, payment overrides
     calendar/              ← month-grid of projection events; day click adds a bill
-    credit-cards/          ← wallet view: official card art grid (balance + last digits only);
+    credit-cards/          ← two tabs. WALLET: official card art grid (balance + last digits
+                             only). FORECAST (forecast-client.tsx, lazy-loaded so Recharts
+                             stays out of the wallet's first load): month-by-month obligations
+                             per card, from lib/card-forecast.ts.
                              card-dialogs.tsx holds the shared card/statement/promo dialogs
       [id]/                ← per-card detail page: current statement, history, cycle
                              estimate, promos, what-if sheets, edit/archive
@@ -136,6 +139,10 @@ lib/
   auth.ts                  ← NextAuth instance + requireUserId/requireAdmin helpers
   api.ts                   ← ensureUser, readJson, jsonError helpers for routes
   credit-cards.ts          ← cycle date math (clamp Feb 31 → 28, etc.)
+  card-forecast.ts         ← PURE: buckets the projection's credit-card events into
+                             calendar months × card for the /credit-cards forecast tab.
+                             Derivative by design — it only reshapes what card-payments.ts
+                             already decided, so it can't disagree with the ledger.
   card-art.ts              ← card-name → official art (public/cards/) + brand fallback
                              + display-name/mask helpers for the wallet UI
   plaid-client.ts          ← lazy `PlaidApi` singleton (reads PLAID_* env)
@@ -607,6 +614,11 @@ These bit us before. Don't repeat:
     `statement_balance_user_override` column (mirroring 0027's due-date override) would remove
     the monthly manual step — candidate migration 0030.
 25. **E2E specs share one test DB per suite run** (wiped once in `global-setup.ts`) — most specs are order-independent, but `credit-card-statement.spec.ts` still assumes a lone card; run it standalone until specs are fully scoped. Keep spec dates relative to today (hardcoded dates rot once the calendar passes them).
+26. **An estimated cycle marker is a RUN RATE, not compounding debt.** `projectCardPayments`
+    repeats the same carried-forward `recurringEstimate` on every future cycle of a card, so
+    summing estimates across months (as the forecast tab does) reads as "what cards cost per
+    month if spending continues" — never as a growing balance. Any new rollup over card events
+    must keep `estimated` markers visually separate from recorded statements for that reason.
 
 ---
 

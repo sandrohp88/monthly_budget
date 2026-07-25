@@ -6,6 +6,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHead } from "@/components/ui/page-head";
@@ -14,12 +15,23 @@ import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { CreditCardVisual } from "@/components/credit-card-visual";
 import { InlineBalanceEditor } from "@/components/inline-balance-editor";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cardDisplayName, cardMaskDigits } from "@/lib/card-art";
 import { daysBetween } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 import type { CreditCardRow } from "@/lib/db/schema";
+import type { CardForecast } from "@/lib/card-forecast";
 import { CardDialog } from "./card-dialogs";
+
+// The forecast pulls in Recharts — keep it out of the wallet's first load.
+const CardForecastView = dynamic(
+  () => import("./forecast-client").then((m) => m.CardForecastView),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-[320px] w-full" />,
+  },
+);
 
 export type WalletCard = {
   card: CreditCardRow;
@@ -35,15 +47,21 @@ export type WalletCard = {
   dueDate: string | null;
 };
 
+type Tab = "wallet" | "forecast";
+
 export function CreditCardsClient({
   initialCards,
   timezone,
+  forecast,
 }: {
   initialCards: WalletCard[];
   timezone: string;
+  /** Null when the user has no settings row yet (pre-setup). */
+  forecast: CardForecast | null;
 }) {
   const cards = initialCards;
   const [addOpen, setAddOpen] = React.useState(false);
+  const [tab, setTab] = React.useState<Tab>("wallet");
   const today = todayIso(timezone);
 
   const refresh = () => {
@@ -58,6 +76,23 @@ export function CreditCardsClient({
   const nextDue = [...due].sort((a, b) => a.dueDate!.localeCompare(b.dueDate!))[0];
   const overdueCount = due.filter((c) => c.dueDate! < today).length;
 
+  const showTabs = cards.length > 0 && forecast != null;
+  const tabButton = (id: Tab, label: string) => (
+    <button
+      key={id}
+      type="button"
+      onClick={() => setTab(id)}
+      className={cn(
+        "cursor-pointer rounded-full border px-4 py-1.5 text-[12px] font-semibold transition-colors",
+        tab === id
+          ? "border-[var(--mint)] bg-[var(--mint-glow)] text-[var(--mint)]"
+          : "border-[var(--border-raw)] text-[var(--text-2)] hover:border-[var(--border-2)] hover:text-[var(--text-0)]",
+      )}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <div className="space-y-6 fade-in">
       <PageHead
@@ -70,7 +105,16 @@ export function CreditCardsClient({
         }
       />
 
-      {cards.length > 0 ? (
+      {showTabs ? (
+        <div className="flex items-center gap-2">
+          {tabButton("wallet", "Wallet")}
+          {tabButton("forecast", "Forecast")}
+        </div>
+      ) : null}
+
+      {showTabs && tab === "forecast" ? <CardForecastView forecast={forecast!} /> : null}
+
+      {tab === "wallet" && cards.length > 0 ? (
         <TileGrid cols="auto">
           <Tile
             compact
@@ -122,7 +166,7 @@ export function CreditCardsClient({
         </TileGrid>
       ) : null}
 
-      {cards.length === 0 ? (
+      {tab !== "wallet" ? null : cards.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[var(--border-2)] bg-[var(--bg-card)] px-6 py-14 text-center">
           <p className="mb-4 text-[13px] text-[var(--text-2)]">
             Add a credit card to start tracking statement balances and due dates.
