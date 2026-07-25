@@ -25,7 +25,13 @@ import {
 import { Money } from "@/components/money";
 import { MoneyInput } from "@/components/money-input";
 import { DateLabel } from "@/components/date-label";
-import { UtilizationBar } from "@/components/utilization-bar";
+import {
+  InlineUtilization,
+  UtilizationBar,
+  utilizationTitle,
+} from "@/components/utilization-bar";
+import { useCurrency } from "@/components/currency-provider";
+import { formatCents } from "@/lib/money";
 import { cn } from "@/lib/cn";
 import { balanceToneClass, balanceSurfaceClass } from "@/lib/balance-tone";
 import { BillForm, type BillFormValues } from "../bills/bill-form";
@@ -283,6 +289,8 @@ function DayCell({
   maxChips,
   minHeightClass,
   onSelect,
+  cards,
+  currency,
   canDrag,
   onPaymentDragStart,
   onPaymentDragEnd,
@@ -298,6 +306,9 @@ function DayCell({
   maxChips: number | null;
   minHeightClass: string;
   onSelect: (iso: string) => void;
+  /** Credit line + balance per card id, for the inline utilization strip. */
+  cards?: CardCreditLookup;
+  currency: string;
   /** Whether a given event on this day can be dragged to reschedule it. */
   canDrag?: (ev: ProjectionEvent, iso: string) => boolean;
   onPaymentDragStart?: (ev: ProjectionEvent, iso: string) => void;
@@ -425,20 +436,27 @@ function DayCell({
                 draggable ? "cursor-grab active:cursor-grabbing" : "",
               )}
               title={
-                draggable
-                  ? "Drag to reschedule"
-                  : onCard
-                    ? `Charged to ${ev.chargedToCardName}`
-                    : undefined
+                [
+                  draggable ? "Drag to reschedule" : null,
+                  onCard ? `Charged to ${ev.chargedToCardName}` : null,
+                  utilizationTitleOf(cardCreditOf(ev, cards), currency),
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || undefined
               }
             >
-              <span className="min-w-0 truncate">
-                {cardDue ? `Card due · ${ev.label}` : ev.label}
-              </span>
-              <span className="tabular shrink-0">
-                {onCard ? "" : credit ? "+" : "−"}
-                <Money cents={displayCents(ev)} />
-              </span>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="min-w-0 truncate">
+                    {cardDue ? `Card due · ${ev.label}` : ev.label}
+                  </span>
+                  <span className="tabular shrink-0">
+                    {onCard ? "" : credit ? "+" : "−"}
+                    <Money cents={displayCents(ev)} />
+                  </span>
+                </div>
+                <InlineCardUtilization card={cardCreditOf(ev, cards)} />
+              </div>
             </div>
           );
         })}
@@ -483,12 +501,17 @@ function CompactDayRow({
   today,
   band,
   onSelect,
+  cards,
+  currency,
 }: {
   iso: string;
   row: ProjectionRow;
   today: string;
   band: boolean;
   onSelect: (iso: string) => void;
+  /** Credit line + balance per card id, for the inline utilization strip. */
+  cards?: CardCreditLookup;
+  currency: string;
 }) {
   const isToday = iso === today;
   const isPast = iso < today;
@@ -534,15 +557,27 @@ function CompactDayRow({
                 "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-2xs leading-tight",
                 TONE_CLASSES[tone],
               )}
-              title={onCard ? `Charged to ${ev.chargedToCardName}` : undefined}
+              title={
+                [
+                  onCard ? `Charged to ${ev.chargedToCardName}` : null,
+                  utilizationTitleOf(cardCreditOf(ev, cards), currency),
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || undefined
+              }
             >
-              <span className="min-w-0 truncate">
-                {cardDue ? `Card due · ${ev.label}` : ev.label}
-              </span>
-              <span className="tabular shrink-0">
-                {onCard ? "" : credit ? "+" : "−"}
-                <Money cents={displayCents(ev)} />
-              </span>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="min-w-0 truncate">
+                    {cardDue ? `Card due · ${ev.label}` : ev.label}
+                  </span>
+                  <span className="tabular shrink-0">
+                    {onCard ? "" : credit ? "+" : "−"}
+                    <Money cents={displayCents(ev)} />
+                  </span>
+                </div>
+                <InlineCardUtilization card={cardCreditOf(ev, cards)} />
+              </div>
             </div>
           );
         })}
@@ -561,7 +596,19 @@ function CompactDayRow({
   );
 }
 
-/** A labeled figure in the paycheck-cycle summary strip. */
+/** Credit line + best-known balance for one card, for the utilization read. */
+type CardCredit = { balanceCents: number | null; creditLimitCents: number | null };
+type CardCreditLookup = ReadonlyMap<string, CardCredit>;
+
+/** The card an event is scheduled against — undefined when not a card event. */
+function cardCreditOf(
+  ev: ProjectionEvent,
+  cards: CardCreditLookup | undefined,
+): CardCredit | undefined {
+  if (ev.sourceType !== "creditCardPayment" || !ev.sourceId) return undefined;
+  return cards?.get(ev.sourceId);
+}
+
 /**
  * Utilization for a card event. Draws nothing at all when the card has no
  * known credit line — a calendar day is the wrong place to nag about missing
@@ -571,7 +618,7 @@ function CardUtilization({
   card,
   className,
 }: {
-  card?: { balanceCents: number | null; creditLimitCents: number | null };
+  card?: CardCredit;
   className?: string;
 }) {
   if (!card) return null;
@@ -584,6 +631,22 @@ function CardUtilization({
     />
   );
 }
+
+/** The hairline bar shown inside a calendar chip. Null card → nothing. */
+function InlineCardUtilization({ card }: { card?: CardCredit }) {
+  if (!card) return null;
+  return <InlineUtilization balanceCents={card.balanceCents} limitCents={card.creditLimitCents} />;
+}
+
+/** Chip tooltip fragment: `92% used · $920.00 of $1,000.00`, or null. */
+function utilizationTitleOf(card: CardCredit | undefined, currency: string): string | null {
+  if (!card) return null;
+  return utilizationTitle(card.balanceCents, card.creditLimitCents, (cents) =>
+    formatCents(cents, currency),
+  );
+}
+
+/** A labeled figure in the paycheck-cycle summary strip. */
 
 function CycleSummaryTile({
   label,
@@ -666,6 +729,7 @@ export function CalendarClient({
 
   const activeCards = React.useMemo(() => cards.filter((c) => c.isActive), [cards]);
   const cardById = React.useMemo(() => new Map(cards.map((c) => [c.id, c])), [cards]);
+  const currency = useCurrency();
 
   // Set of `${cardId}:${dueDate}` that have a payment-override row. An event at
   // such a key was scheduled by the user, so it's deletable and (as a plain
@@ -1290,6 +1354,8 @@ export function CalendarClient({
                       maxChips={MAX_CHIPS_PER_DAY}
                       minHeightClass="min-h-[104px]"
                       onSelect={setSelectedDate}
+                      cards={cardById}
+                      currency={currency}
                       {...dragProps}
                     />
                   ) : (
@@ -1345,6 +1411,8 @@ export function CalendarClient({
                           today={today}
                           band={cycle >= 0 && cycle % 2 === 0}
                           onSelect={setSelectedDate}
+                          cards={cardById}
+                          currency={currency}
                         />
                       );
                     })}
@@ -1411,6 +1479,8 @@ export function CalendarClient({
                       maxChips={null}
                       minHeightClass="min-h-[150px]"
                       onSelect={setSelectedDate}
+                      cards={cardById}
+                      currency={currency}
                       {...dragProps}
                     />
                   ) : (
