@@ -634,6 +634,14 @@ These bit us before. Don't repeat:
     (the sync classifier's own predicate, reused so the two can't drift) as a second gate. Note
     what stays IN: statement credits, rewards redemptions, and merchant refunds are legitimate
     reductions to the next statement.
+28. **`transactions/sync`'s `data.accounts` is not a reliable account snapshot.** It can be
+    absent entirely, and when present its balances carry no `limit` for most issuers. Migration
+    0034's credit lines shipped seeded from inside that pagination loop and consequently never
+    populated a single card in production. Account balances AND limits now refresh from
+    `/accounts/get` via `refreshAccountsFromPlaid`, called once per item OUTSIDE the loop.
+    Anything that needs an authoritative account field belongs there, not in the sync loop.
+    Related: `upsertPlaidAccount` coalesces `limit_cents` so a payload without a limit can never
+    erase a known one.
 
 ---
 

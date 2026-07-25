@@ -22,6 +22,7 @@ vi.mock("server-only", () => ({}));
 const __plaidMock = {
   transactionsSync: vi.fn(),
   liabilitiesGet: vi.fn(),
+  accountsGet: vi.fn(),
 };
 vi.mock("./plaid-client", () => ({
   getPlaidClient: () => __plaidMock,
@@ -47,6 +48,8 @@ import {
   listStatements,
   updatePaycheck,
   updatePromo,
+  updateCreditCard,
+  listPlaidAccounts,
 } from "./repos";
 import { encryptToken } from "./plaid-crypto";
 import { syncCreditCardLiabilitiesForItem, syncPlaidTransactions } from "./plaid-sync";
@@ -68,6 +71,10 @@ beforeEach(() => {
   runMigrations();
   __plaidMock.liabilitiesGet.mockReset();
   __plaidMock.transactionsSync.mockReset();
+  __plaidMock.accountsGet.mockReset();
+  // Default: the account refresh finds nothing to update. Tests that care
+  // about balances or credit lines override this.
+  __plaidMock.accountsGet.mockResolvedValue({ data: { accounts: [] } });
 });
 
 afterEach(() => {
@@ -1767,5 +1774,130 @@ describe("syncCreditCardLiabilitiesForItem (mocked Plaid + real SQLite)", () => 
     const after = await getCreditCard(user.id, card.id);
     expect(after?.statementDay).toBe(1);
     expect(after?.dueDay).toBe(21);
+  });
+});
+
+describe("credit-line refresh (the migration-0034 regression)", () => {
+  /**
+   * Shipped bug: the seeding code lived inside the transactions/sync pagination
+   * loop, reading `data.accounts`. That payload is frequently absent, and even
+   * when present its balances carry no `limit` — so no card ever got a credit
+   * line. Limits now come from /accounts/get, outside that loop.
+   */
+  /**
+   * `seedLinkedCard` stores a dummy access token, which is fine for the callers
+   * that invoke the liabilities helper directly — but `syncPlaidTransactions`
+   * decrypts first, and would abort the item before ever reaching the refresh.
+   */
+  async function seedLinkedCardForSync(userId: string, plaidAccountId = "acct_cc") {
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins",
+      institutionName: "Test Bank",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: plaidAccountId,
+      itemId: item.id,
+      userId,
+      name: "Test Credit",
+      mask: "1234",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 50_00,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(userId, {
+      name: "My Card",
+      statementDay: 1,
+      dueDay: 21,
+      autoPay: false,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(userId, card.id, plaidAccountId);
+    return { item, card, plaidAccountId };
+  }
+
+  function syncReturningNoAccounts() {
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: { added: [], modified: [], removed: [], next_cursor: "c1", has_more: false },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+  }
+
+  function accountsGetReturning(limit: number | null, accountId = "acct_cc") {
+    __plaidMock.accountsGet.mockResolvedValue({
+      data: {
+        accounts: [
+          {
+            account_id: accountId,
+            name: "Test Credit",
+            mask: "1234",
+            type: "credit",
+            subtype: "credit card",
+            balances: { current: 400.0, limit },
+          },
+        ],
+      },
+    });
+  }
+
+  it("seeds a linked card's credit line even when transactions/sync returns no accounts", async () => {
+    const user = await makeUser();
+    const { card } = await seedLinkedCardForSync(user.id);
+    syncReturningNoAccounts();
+    accountsGetReturning(1_000.0);
+
+    await syncPlaidTransactions(user.id);
+
+    const after = await getCreditCard(user.id, card.id);
+    expect(after?.creditLimitCents).toBe(100_000);
+  });
+
+  it("never overwrites a credit line the user set by hand", async () => {
+    const user = await makeUser();
+    const { card } = await seedLinkedCardForSync(user.id);
+    await updateCreditCard(user.id, card.id, { creditLimitCents: 250_000 });
+    syncReturningNoAccounts();
+    accountsGetReturning(1_000.0);
+
+    await syncPlaidTransactions(user.id);
+
+    const after = await getCreditCard(user.id, card.id);
+    expect(after?.creditLimitCents).toBe(250_000);
+  });
+
+  it("keeps a known account limit when a later payload reports none", async () => {
+    const user = await makeUser();
+    const { card } = await seedLinkedCardForSync(user.id);
+    syncReturningNoAccounts();
+    accountsGetReturning(1_000.0);
+    await syncPlaidTransactions(user.id);
+
+    // Second sync: this issuer stops reporting a limit. The stored value must
+    // survive — a null must never erase what we already know.
+    accountsGetReturning(null);
+    await syncPlaidTransactions(user.id);
+
+    const accounts = await listPlaidAccounts(user.id);
+    expect(accounts.find((a) => a.id === "acct_cc")?.limitCents).toBe(100_000);
+    const after = await getCreditCard(user.id, card.id);
+    expect(after?.creditLimitCents).toBe(100_000);
+  });
+
+  it("treats an accounts/get failure as non-fatal", async () => {
+    const user = await makeUser();
+    const { card } = await seedLinkedCardForSync(user.id);
+    syncReturningNoAccounts();
+    __plaidMock.accountsGet.mockRejectedValue(new Error("PRODUCT_NOT_READY"));
+
+    await expect(syncPlaidTransactions(user.id)).resolves.toBeTruthy();
+    const after = await getCreditCard(user.id, card.id);
+    expect(after?.creditLimitCents).toBeNull();
   });
 });
