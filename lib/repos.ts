@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
 import { interestSavingCashDueCents, statementCashDueCents } from "./credit-cards";
 import {
@@ -1778,10 +1778,31 @@ export async function upsertPlaidAccount(data: NewPlaidAccount): Promise<void> {
         type: data.type,
         subtype: data.subtype,
         balanceCents: data.balanceCents,
+        limitCents: data.limitCents,
         updatedAt: Date.now(),
       },
     })
     .run();
+}
+
+/**
+ * Seed a linked card's credit line from the Plaid-reported limit, but ONLY
+ * while the card has none. Once the user enters a limit by hand it is theirs —
+ * sync never overwrites it (same manual-wins rule as paid records and due-date
+ * overrides). Returns true when a value was actually written.
+ */
+export async function seedCreditLimitFromPlaid(
+  cardId: string,
+  limitCents: number,
+): Promise<boolean> {
+  if (!Number.isFinite(limitCents) || limitCents <= 0) return false;
+  const db = getDb();
+  const result = await db
+    .update(creditCards)
+    .set({ creditLimitCents: limitCents, updatedAt: Date.now() })
+    .where(and(eq(creditCards.id, cardId), isNull(creditCards.creditLimitCents)))
+    .run();
+  return result.changes > 0;
 }
 
 /**
@@ -2247,6 +2268,61 @@ export async function listStartingBalanceDraftsInRange(
       ),
     )
     .orderBy(asc(plaidTransactionDrafts.date))
+    .all();
+}
+
+export type CardTransaction = {
+  id: string;
+  accountId: string;
+  date: string;
+  description: string;
+  merchantName: string | null;
+  plaidCategory: string | null;
+  amountCents: number;
+};
+
+/**
+ * Posted charges on the given Plaid accounts within a date range — the raw
+ * material for "what has hit this card since its last statement closed".
+ *
+ * Scope decisions:
+ *  - `kind = 'expense'` only. A `card_payment` moves the balance down but is
+ *    not spend; counting it would net the cycle out to nothing.
+ *  - Refunds/credits ride along as negative `amountCents` (Plaid's sign
+ *    convention), so a returned purchase correctly reduces cycle spend.
+ *  - Dismissed drafts are excluded, matching every other consumer of this
+ *    table — dismissing is the user saying "don't count this".
+ */
+export async function listCardTransactionsInRange(
+  userId: string,
+  accountIds: string[],
+  startIso: string,
+  endIso: string,
+): Promise<CardTransaction[]> {
+  if (accountIds.length === 0) return [];
+  const db = getDb();
+  return db
+    .select({
+      id: plaidTransactionDrafts.id,
+      accountId: plaidTransactionDrafts.accountId,
+      date: plaidTransactionDrafts.date,
+      description: plaidTransactionDrafts.description,
+      merchantName: plaidTransactionDrafts.merchantName,
+      plaidCategory: plaidTransactionDrafts.plaidCategory,
+      amountCents: plaidTransactionDrafts.amountCents,
+    })
+    .from(plaidTransactionDrafts)
+    .where(
+      and(
+        eq(plaidTransactionDrafts.userId, userId),
+        eq(plaidTransactionDrafts.kind, "expense" as const),
+        ne(plaidTransactionDrafts.status, "dismissed" as const),
+        inArray(plaidTransactionDrafts.accountId, accountIds),
+        gte(plaidTransactionDrafts.date, startIso),
+        lte(plaidTransactionDrafts.date, endIso),
+      ),
+    )
+    .orderBy(desc(plaidTransactionDrafts.date))
     .all();
 }
 

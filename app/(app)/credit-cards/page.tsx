@@ -2,14 +2,20 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import {
   getSettings,
+  listCardTransactionsInRange,
   listCreditCards,
   listPlaidAccounts,
   listPlaidItems,
   listPromosForCard,
   listStatements,
 } from "@/lib/repos";
-import { interestSavingCashDueCents, isStatementOpen } from "@/lib/credit-cards";
-import { DEFAULT_TIMEZONE } from "@/lib/dates";
+import {
+  currentCycleWindow,
+  interestSavingCashDueCents,
+  isStatementOpen,
+} from "@/lib/credit-cards";
+import { buildCardSpending, type CardSpendingSummary } from "@/lib/card-spending";
+import { DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
 import { buildProjection } from "@/lib/projection-server";
 import { buildCardForecast, type CardForecast } from "@/lib/card-forecast";
 import { cardDisplayName } from "@/lib/card-art";
@@ -97,5 +103,44 @@ export default async function CreditCardsPage() {
       })
     : null;
 
-  return <CreditCardsClient initialCards={data} timezone={timezone} forecast={forecast} />;
+  // ── Current-cycle spending, from real posted transactions ─────────────────
+  // Each card's open cycle starts the day after its last statement closed, so
+  // one query spanning the earliest window start covers every card.
+  const today = projection?.today ?? todayIso(timezone);
+  const spendingCards = data.map((wc) => ({
+    cardId: wc.card.id,
+    cardName: cardNames.get(wc.card.id) ?? wc.card.name,
+    accountId: wc.card.plaidAccountId ?? null,
+    balanceCents: wc.balanceCents,
+    creditLimitCents:
+      wc.card.creditLimitCents ??
+      (wc.card.plaidAccountId
+        ? (accountById.get(wc.card.plaidAccountId)?.limitCents ?? null)
+        : null),
+    window: currentCycleWindow(wc.card, today),
+  }));
+  const linkedAccountIds = spendingCards
+    .map((c) => c.accountId)
+    .filter((id): id is string => id != null);
+  const earliestWindowStart = spendingCards
+    .map((c) => c.window.start)
+    .sort((a, b) => a.localeCompare(b))[0];
+  const transactions =
+    linkedAccountIds.length > 0 && earliestWindowStart
+      ? await listCardTransactionsInRange(userId, linkedAccountIds, earliestWindowStart, today)
+      : [];
+  const spending: CardSpendingSummary = buildCardSpending({
+    cards: spendingCards,
+    transactions,
+    today,
+  });
+
+  return (
+    <CreditCardsClient
+      initialCards={data}
+      timezone={timezone}
+      forecast={forecast}
+      spending={spending}
+    />
+  );
 }

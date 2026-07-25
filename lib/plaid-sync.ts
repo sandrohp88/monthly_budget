@@ -9,6 +9,7 @@ import {
   listPlaidAccountsByItem,
   listPlaidDrafts,
   upsertPlaidAccount,
+  seedCreditLimitFromPlaid,
   upsertPlaidDraft,
   getPlaidDraft,
   updatePlaidItemCursor,
@@ -503,6 +504,10 @@ export async function syncPlaidTransactions(
         for (const acct of data.accounts ?? []) {
           if (!accountIds.has(acct.account_id)) continue;
           const balance = acct.balances.current ?? null;
+          // Credit line, when the issuer exposes it. Most depository accounts
+          // (and some issuers) report null — that stays "unknown", never 0.
+          const limit = acct.balances.limit ?? null;
+          const limitCents = limit !== null ? toCents(limit) : null;
           await upsertPlaidAccount({
             id: acct.account_id,
             itemId: item.id,
@@ -512,8 +517,15 @@ export async function syncPlaidTransactions(
             type: acct.type,
             subtype: acct.subtype ?? null,
             balanceCents: balance !== null ? toCents(balance) : null,
+            limitCents,
             updatedAt: Date.now(),
           });
+          // Seed the linked card's credit line while it has none. Manual wins
+          // forever after — seedCreditLimitFromPlaid only writes over NULL.
+          if (limitCents != null && linkedCardAccountIds.has(acct.account_id)) {
+            const linked = linkedCards.find((c) => c.plaidAccountId === acct.account_id);
+            if (linked) await seedCreditLimitFromPlaid(linked.id, limitCents);
+          }
         }
 
         // Added transactions -> approved ledger rows.

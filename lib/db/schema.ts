@@ -246,6 +246,14 @@ export const creditCards = sqliteTable(
      */
     gracePeriodDays: integer("grace_period_days").notNull().default(14),
     currentBalanceCents: integer("current_balance_cents"),
+    /**
+     * Credit line, for utilization ("is this card too full?"). Seeded from the
+     * linked Plaid account's reported limit while still null, then MANUAL WINS —
+     * once the user sets it, sync never overwrites it (same principle as paid
+     * records and due-date overrides). Null means "unknown", which the UI
+     * renders as no utilization rather than as 0%.
+     */
+    creditLimitCents: integer("credit_limit_cents"),
     autoPay: integer("auto_pay", { mode: "boolean" }).notNull().default(false),
     notes: text("notes"),
     isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
@@ -552,6 +560,10 @@ export const plaidAccounts = sqliteTable(
     type: text("type").notNull(),
     subtype: text("subtype"),
     balanceCents: integer("balance_cents"),
+    /** Credit line as reported by Plaid (`balances.limit`). Null for most
+     *  depository accounts and for issuers that don't expose it. Seeds
+     *  `credit_cards.credit_limit_cents` on link/sync while that is still null. */
+    limitCents: integer("limit_cents"),
     /** If true, this account’s live balance overrides startingBalanceCents in the projection. */
     useAsStartingBalance: integer("use_as_starting_balance", { mode: "boolean" })
       .notNull()

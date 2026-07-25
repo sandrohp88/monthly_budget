@@ -22,7 +22,9 @@ import { todayIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 import type { CreditCardRow } from "@/lib/db/schema";
 import type { CardForecast } from "@/lib/card-forecast";
+import type { CardSpendingSummary } from "@/lib/card-spending";
 import { CardDialog } from "./card-dialogs";
+import { CardSpendingView } from "./spending-client";
 
 // The forecast pulls in Recharts — keep it out of the wallet's first load.
 const CardForecastView = dynamic(
@@ -47,17 +49,20 @@ export type WalletCard = {
   dueDate: string | null;
 };
 
-type Tab = "wallet" | "forecast";
+type Tab = "wallet" | "spending" | "forecast";
 
 export function CreditCardsClient({
   initialCards,
   timezone,
   forecast,
+  spending,
 }: {
   initialCards: WalletCard[];
   timezone: string;
   /** Null when the user has no settings row yet (pre-setup). */
   forecast: CardForecast | null;
+  /** Current-cycle charges + utilization, from posted transactions. */
+  spending: CardSpendingSummary;
 }) {
   const cards = initialCards;
   const [addOpen, setAddOpen] = React.useState(false);
@@ -76,7 +81,9 @@ export function CreditCardsClient({
   const nextDue = [...due].sort((a, b) => a.dueDate!.localeCompare(b.dueDate!))[0];
   const overdueCount = due.filter((c) => c.dueDate! < today).length;
 
-  const showTabs = cards.length > 0 && forecast != null;
+  // Spending needs no projection, so the tab bar shows as soon as there's a
+  // card; only the forecast tab depends on a settings row existing.
+  const showTabs = cards.length > 0;
   const tabButton = (id: Tab, label: string) => (
     <button
       key={id}
@@ -108,11 +115,15 @@ export function CreditCardsClient({
       {showTabs ? (
         <div className="flex items-center gap-2">
           {tabButton("wallet", "Wallet")}
-          {tabButton("forecast", "Forecast")}
+          {tabButton("spending", "Spending")}
+          {forecast != null ? tabButton("forecast", "Forecast") : null}
         </div>
       ) : null}
 
-      {showTabs && tab === "forecast" ? <CardForecastView forecast={forecast!} /> : null}
+      {showTabs && tab === "spending" ? <CardSpendingView spending={spending} /> : null}
+      {showTabs && tab === "forecast" && forecast != null ? (
+        <CardForecastView forecast={forecast} />
+      ) : null}
 
       {tab === "wallet" && cards.length > 0 ? (
         <TileGrid cols="auto">

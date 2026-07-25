@@ -43,6 +43,7 @@ export async function POST(req: Request) {
     statementCycleIntervalDays: data.statementCycleIntervalDays,
     dueDay: data.dueDay,
     currentBalanceCents: data.currentBalanceCents ?? null,
+    creditLimitCents: data.creditLimitCents ?? null,
     autoPay: data.autoPay,
     notes: data.notes ?? null,
   });
