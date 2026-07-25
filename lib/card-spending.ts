@@ -1,11 +1,10 @@
 /**
  * Current-cycle card spending, from real posted transactions.
  *
- * The forecast (lib/card-forecast.ts) answers "what will the cards cost over
- * the coming months" from statements and estimates. This answers the more
- * immediate question: **what has actually hit each card since its last
- * statement closed** — i.e. what the next statement is shaping up to be — and
- * **how full the card is** against its credit line.
+ * Answers two questions the statement-driven views can't: **what has actually
+ * hit each card since its last statement closed** — i.e. what the next
+ * statement is shaping up to be — and **how full the card is** against its
+ * credit line.
  *
  * Pure: takes cards, their open-cycle windows, and the posted transactions on
  * their linked Plaid accounts. No I/O.

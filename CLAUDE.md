@@ -91,12 +91,10 @@ app/
     assets/                ← manual net-worth line items
     bills/                 ← recurring + variable bills, payment overrides
     calendar/              ← month-grid of projection events; day click adds a bill
-    credit-cards/          ← three tabs. WALLET: official card art grid (balance + last digits
+    credit-cards/          ← two tabs. WALLET: official card art grid (balance + last digits
                              only). SPENDING (spending-client.tsx): current-cycle charges from
                              POSTED TRANSACTIONS + utilization vs credit line, from
-                             lib/card-spending.ts. FORECAST (forecast-client.tsx, lazy-loaded
-                             so Recharts stays out of the wallet's first load): month-by-month
-                             obligations per card, from lib/card-forecast.ts.
+                             lib/card-spending.ts.
                              card-dialogs.tsx holds the shared card/statement/promo dialogs
       [id]/                ← per-card detail page: current statement, history, cycle
                              estimate, promos, what-if sheets, edit/archive
@@ -147,12 +145,7 @@ lib/
   credit-cards.ts          ← cycle date math (clamp Feb 31 → 28, etc.)
   card-spending.ts         ← PURE: current-cycle charges per card from posted Plaid drafts,
                              plus utilization vs the credit line. Answers "what's coming on
-                             the next statement" and "is this card too full" — the
-                             transaction-side counterpart to card-forecast.ts.
-  card-forecast.ts         ← PURE: buckets the projection's credit-card events into
-                             calendar months × card for the /credit-cards forecast tab.
-                             Derivative by design — it only reshapes what card-payments.ts
-                             already decided, so it can't disagree with the ledger.
+                             the next statement" and "is this card too full".
   card-art.ts              ← card-name → official art (public/cards/) + brand fallback
                              + display-name/mask helpers for the wallet UI
   plaid-client.ts          ← lazy `PlaidApi` singleton (reads PLAID_* env)
@@ -627,9 +620,11 @@ These bit us before. Don't repeat:
 25. **E2E specs share one test DB per suite run** (wiped once in `global-setup.ts`) — most specs are order-independent, but `credit-card-statement.spec.ts` still assumes a lone card; run it standalone until specs are fully scoped. Keep spec dates relative to today (hardcoded dates rot once the calendar passes them).
 26. **An estimated cycle marker is a RUN RATE, not compounding debt.** `projectCardPayments`
     repeats the same carried-forward `recurringEstimate` on every future cycle of a card, so
-    summing estimates across months (as the forecast tab does) reads as "what cards cost per
-    month if spending continues" — never as a growing balance. Any new rollup over card events
-    must keep `estimated` markers visually separate from recorded statements for that reason.
+    summing estimates across months reads as "what cards cost per month if spending continues" —
+    never as a growing balance. Any rollup over card events must keep `estimated` markers
+    visually separate from recorded statements for that reason. (A /credit-cards forecast tab
+    built on this shipped 2026-07-24 and was removed the same day as redundant with SPENDING —
+    see `card-forecast.ts` in git history if that shape is ever wanted again.)
 27. **`kind = 'card_payment'` is NOT enough to keep payments out of card spend.** Rows synced
     before migration 0015 added the column, or synced while the account wasn't yet linked to a
     card, are stored `kind = 'expense'` even though they are payments ("ONLINE PAYMENT, THANK
