@@ -998,6 +998,43 @@ export function CalendarClient({
   const sumExpense =
     view === "month" ? monthExpense : view === "compact" ? compactExpense : cycleExpense;
 
+  const compactPrefixes = React.useMemo(
+    () => new Set(compactMonths.map((m) => m.prefix)),
+    [compactMonths],
+  );
+
+  // Paychecks still to land inside the window the header already summarizes,
+  // so "cash + planned pay" answers it over the period being looked at.
+  //
+  // Strictly AFTER today on purpose: `cashBalanceCents` is today's END-of-day
+  // balance, so a paycheck landing today is already inside it and counting it
+  // again would double it. Settled paychecks carry amountCents 0 (the original
+  // moves to originalAmountCents), so they drop out on their own.
+  const plannedPay = React.useMemo(() => {
+    const inView = (iso: string) => {
+      if (view === "paycheck")
+        return Boolean(activeCycle) && iso >= activeCycle!.start && iso <= activeCycle!.endInclusive;
+      if (view === "compact") return compactPrefixes.has(iso.slice(0, 7));
+      return iso.startsWith(monthPrefix);
+    };
+    let cents = 0;
+    let count = 0;
+    let lastDate: string | undefined;
+    for (const r of rows) {
+      if (r.date <= today || !inView(r.date)) continue;
+      for (const ev of r.events) {
+        if (ev.kind !== "paycheck" || ev.amountCents <= 0) continue;
+        cents += ev.amountCents;
+        count += 1;
+        lastDate = r.date;
+      }
+    }
+    return { cents, count, lastDate };
+  }, [rows, today, view, activeCycle, compactPrefixes, monthPrefix]);
+
+  const cashPlusPlannedPayCents = cashBalanceCents + plannedPay.cents;
+  const netAfterPayCents = cashPlusPlannedPayCents - totalCardDebtCents;
+
   const createBill = async (values: BillFormValues) => {
     setSubmitting(true);
     try {
@@ -1362,12 +1399,28 @@ export function CalendarClient({
       </div>
 
       {showCardDebt && activeCards.length > 0 ? (
-        <div className="grid grid-cols-1 gap-px overflow-hidden border border-[var(--border-raw)] bg-[var(--border-raw)] sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-px overflow-hidden border border-[var(--border-raw)] bg-[var(--border-raw)] sm:grid-cols-2 lg:grid-cols-4">
           <CycleSummaryTile
             label="Cash on hand"
             value={<Money cents={cashBalanceCents} />}
             valueClass={balanceToneClass(cashBalanceCents)}
             sub="today's balance"
+          />
+          <CycleSummaryTile
+            label="Cash + planned pay"
+            value={<Money cents={cashPlusPlannedPayCents} />}
+            valueClass={balanceToneClass(cashPlusPlannedPayCents)}
+            sub={
+              plannedPay.count > 0 ? (
+                <>
+                  +<Money cents={plannedPay.cents} /> · {plannedPay.count} paycheck
+                  {plannedPay.count === 1 ? "" : "s"} through{" "}
+                  <DateLabel iso={plannedPay.lastDate!} format="short" />
+                </>
+              ) : (
+                "no more pay in this window"
+              )
+            }
           />
           <CycleSummaryTile
             label="Card debt"
@@ -1383,7 +1436,15 @@ export function CalendarClient({
             label="Net position"
             value={<Money cents={netPositionCents} signed />}
             valueClass={netPositionCents >= 0 ? "text-[var(--mint)]" : "text-[var(--red)]"}
-            sub="cash − card debt"
+            sub={
+              plannedPay.cents > 0 ? (
+                <>
+                  cash − card debt · <Money cents={netAfterPayCents} signed /> with pay
+                </>
+              ) : (
+                "cash − card debt"
+              )
+            }
           />
         </div>
       ) : null}
