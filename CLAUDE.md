@@ -642,6 +642,13 @@ These bit us before. Don't repeat:
     Anything that needs an authoritative account field belongs there, not in the sync loop.
     Related: `upsertPlaidAccount` coalesces `limit_cents` so a payload without a limit can never
     erase a known one.
+29. **Don't "clean up" plaid_accounts rows on deactivated items.** They look like clutter in a
+    raw SQL audit, but every UI path already filters them out — `listPlaidItems` returns only
+    `isActive` items, and `listPlaidDrafts` joins through to active items — so they are invisible
+    in /accounts, /transactions, and the spending tab. Deleting one is NOT cheap:
+    `plaid_transaction_drafts.account_id` is `ON DELETE CASCADE`, so it takes that account's whole
+    transaction history with it (227 rows on the live DB as of 2026-07-24). Deactivating an item
+    is the intended soft-delete; leave the rows alone.
 
 ---
 
