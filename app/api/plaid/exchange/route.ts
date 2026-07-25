@@ -59,6 +59,9 @@ export async function POST(req: Request) {
         type: acct.type,
         subtype: acct.subtype ?? null,
         balanceCents: balance !== null ? Math.round(balance * 100) : null,
+        // Credit line, so a freshly linked card has utilization immediately
+        // rather than waiting for the first sync.
+        limitCents: acct.balances.limit != null ? Math.round(acct.balances.limit * 100) : null,
         updatedAt: Date.now(),
       });
     }

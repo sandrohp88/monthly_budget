@@ -7,6 +7,7 @@ import {
   createCreditCard,
   setCreditCardPlaidLink,
   getCreditCardByPlaidAccountId,
+  seedCreditLimitFromPlaid,
 } from "@/lib/repos";
 import { decryptToken } from "@/lib/plaid-crypto";
 import { syncCreditCardLiabilitiesForItem } from "@/lib/plaid-sync";
@@ -73,6 +74,12 @@ export async function POST(
 
   const linkResult = await setCreditCardPlaidLink(auth.userId, cardId, plaidAccountId);
   if (!linkResult.ok) return jsonError(linkResult.error, 400);
+
+  // Carry the account's known credit line onto the card so utilization works
+  // immediately. No-op when the card already has one (manual wins).
+  if (plaidAccount.limitCents != null) {
+    await seedCreditLimitFromPlaid(cardId, plaidAccount.limitCents);
+  }
 
   // Best-effort immediate liabilities pull so the card lights up with real
   // data right after linking. Non-fatal — next /api/plaid/sync will catch up.

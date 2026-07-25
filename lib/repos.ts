@@ -1778,7 +1778,11 @@ export async function upsertPlaidAccount(data: NewPlaidAccount): Promise<void> {
         type: data.type,
         subtype: data.subtype,
         balanceCents: data.balanceCents,
-        limitCents: data.limitCents,
+        // Never let a payload without a limit erase one we already know.
+        // `/transactions/sync` account objects frequently carry no `limit`
+        // even when `/accounts/get` does, and callers that don't deal in
+        // limits at all would otherwise null it out on every write.
+        limitCents: sql`coalesce(excluded.limit_cents, ${plaidAccounts.limitCents})`,
         updatedAt: Date.now(),
       },
     })

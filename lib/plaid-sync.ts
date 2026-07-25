@@ -500,14 +500,14 @@ export async function syncPlaidTransactions(
             .filter((id): id is string => id !== null && id !== undefined),
         );
 
-        // Upsert balance updates for each account.
+        // Upsert balance updates for each account. NOTE: `data.accounts` is
+        // whatever transactions/sync chose to return — it can be absent, and
+        // its balances carry no `limit` for most issuers. Credit lines are
+        // therefore refreshed separately via /accounts/get after this loop
+        // (refreshAccountsFromPlaid), not from here.
         for (const acct of data.accounts ?? []) {
           if (!accountIds.has(acct.account_id)) continue;
           const balance = acct.balances.current ?? null;
-          // Credit line, when the issuer exposes it. Most depository accounts
-          // (and some issuers) report null — that stays "unknown", never 0.
-          const limit = acct.balances.limit ?? null;
-          const limitCents = limit !== null ? toCents(limit) : null;
           await upsertPlaidAccount({
             id: acct.account_id,
             itemId: item.id,
@@ -517,15 +517,9 @@ export async function syncPlaidTransactions(
             type: acct.type,
             subtype: acct.subtype ?? null,
             balanceCents: balance !== null ? toCents(balance) : null,
-            limitCents,
+            limitCents: acct.balances.limit != null ? toCents(acct.balances.limit) : null,
             updatedAt: Date.now(),
           });
-          // Seed the linked card's credit line while it has none. Manual wins
-          // forever after — seedCreditLimitFromPlaid only writes over NULL.
-          if (limitCents != null && linkedCardAccountIds.has(acct.account_id)) {
-            const linked = linkedCards.find((c) => c.plaidAccountId === acct.account_id);
-            if (linked) await seedCreditLimitFromPlaid(linked.id, limitCents);
-          }
         }
 
         // Added transactions -> approved ledger rows.
@@ -718,6 +712,11 @@ export async function syncPlaidTransactions(
       totalModified += modified;
       totalRemoved += removed;
 
+      // Authoritative account snapshot: balances AND credit lines. Runs
+      // outside the pagination loop and independently of whether
+      // transactions/sync returned any accounts at all.
+      await refreshAccountsFromPlaid(userId, item.id, accessToken);
+
       // Refresh credit-card cycle data + most recent statement from Liabilities.
       const liab = await syncCreditCardLiabilitiesForItem(userId, item.id, accessToken);
       totalCardsUpdated += liab.cardsUpdated;
@@ -782,6 +781,77 @@ export async function createLinkToken(userId: string): Promise<string> {
     ...(webhookUrl ? { webhook: webhookUrl } : {}),
   });
   return response.data.link_token;
+}
+
+/**
+ * Refresh one item's accounts from `/accounts/get` — balances AND credit
+ * lines — and seed the credit line of any card linked to those accounts.
+ *
+ * Why this exists separately from the transactions/sync loop: that loop reads
+ * `data.accounts`, which is whatever transactions/sync happened to return.
+ * That payload can be absent entirely, and even when present its balances
+ * carry no `limit` for most issuers — so credit lines shipped in migration
+ * 0034 never populated from it. `/accounts/get` is the documented,
+ * authoritative source for `balances.limit`.
+ *
+ * Non-fatal: an issuer that errors here must not fail the whole sync — the
+ * transactions for that item have already been persisted by this point.
+ */
+export async function refreshAccountsFromPlaid(
+  userId: string,
+  itemId: string,
+  accessToken: string,
+): Promise<{ accountsUpdated: number; limitsSeeded: number }> {
+  const plaid = getPlaidClient();
+  let accountsUpdated = 0;
+  let limitsSeeded = 0;
+
+  try {
+    const known = await listPlaidAccountsByItem(itemId);
+    const knownIds = new Set(known.map((a) => a.id));
+    const cards = await listCreditCards(userId, false);
+    const cardByAccountId = new Map(
+      cards
+        .filter((c) => c.plaidAccountId != null)
+        .map((c) => [c.plaidAccountId as string, c] as const),
+    );
+
+    const res = await plaid.accountsGet({ access_token: accessToken });
+    for (const acct of res.data.accounts) {
+      // Only accounts we already track — linking new ones stays an explicit
+      // user action on /accounts (see "Why we DON'T auto-create a card").
+      if (!knownIds.has(acct.account_id)) continue;
+      const balance = acct.balances.current ?? null;
+      const limitCents = acct.balances.limit != null ? toCents(acct.balances.limit) : null;
+      await upsertPlaidAccount({
+        id: acct.account_id,
+        itemId,
+        userId,
+        name: acct.name,
+        mask: acct.mask ?? null,
+        type: acct.type,
+        subtype: acct.subtype ?? null,
+        balanceCents: balance !== null ? toCents(balance) : null,
+        limitCents,
+        updatedAt: Date.now(),
+      });
+      accountsUpdated += 1;
+
+      // Seed the linked card's credit line while it has none. Manual wins
+      // forever after — seedCreditLimitFromPlaid only writes over NULL.
+      const card = cardByAccountId.get(acct.account_id);
+      if (limitCents != null && card && (await seedCreditLimitFromPlaid(card.id, limitCents))) {
+        limitsSeeded += 1;
+      }
+    }
+    if (limitsSeeded > 0) {
+      log.info(`plaid-accounts: seeded ${limitsSeeded} credit limit(s) for item ${itemId}`);
+    }
+  } catch (err) {
+    log.warn(`plaid-accounts: refresh skipped for item ${itemId}: ${(err as Error).message}`);
+  }
+
+  return { accountsUpdated, limitsSeeded };
 }
 
 /**
