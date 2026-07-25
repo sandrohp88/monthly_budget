@@ -15,7 +15,7 @@ export const BAND_LABEL: Record<UtilizationBand, string> = {
   maxed: "Nearly maxed",
 };
 
-const BAND_BAR: Record<UtilizationBand, string> = {
+export const BAND_BAR: Record<UtilizationBand, string> = {
   low: "bg-[var(--phosphor)]",
   moderate: "bg-[var(--cyan)]",
   high: "bg-[var(--amber)]",
@@ -31,6 +31,54 @@ export const BAND_TEXT: Record<UtilizationBand, string> = {
 
 export function formatUtilization(ratio: number): string {
   return `${(ratio * 100).toFixed(ratio >= 0.1 ? 0 : 1)}%`;
+}
+
+/**
+ * Ultra-compact utilization for a calendar chip: a hairline bar plus the
+ * percentage, sized to sit inside a month-grid cell without pushing the day's
+ * other events out of view. The full figures go in the chip's `title`.
+ *
+ * Returns null on an unknown credit line, same rule as UtilizationBar — a chip
+ * is the last place that should imply a card is at 0%.
+ */
+export function InlineUtilization({
+  balanceCents,
+  limitCents,
+  className,
+}: {
+  balanceCents: number | null;
+  limitCents: number | null;
+  className?: string;
+}) {
+  if (limitCents == null || limitCents <= 0 || balanceCents == null) return null;
+
+  const ratio = balanceCents / limitCents;
+  const band = utilizationBand(ratio);
+
+  return (
+    <div className={cn("mt-0.5 flex items-center gap-1", className)}>
+      <div className="h-[3px] min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--bg-3)]">
+        <div
+          className={cn("h-full rounded-full", BAND_BAR[band])}
+          style={{ width: `${Math.min(100, Math.max(4, ratio * 100))}%` }}
+        />
+      </div>
+      <span className={cn("shrink-0 tabular text-[9px] leading-none", BAND_TEXT[band])}>
+        {formatUtilization(ratio)}
+      </span>
+    </div>
+  );
+}
+
+/** `92% used · $920.00 of $1,000.00`, for a chip tooltip. Null when unknown. */
+export function utilizationTitle(
+  balanceCents: number | null,
+  limitCents: number | null,
+  formatCents: (cents: number) => string,
+): string | null {
+  if (limitCents == null || limitCents <= 0 || balanceCents == null) return null;
+  const ratio = balanceCents / limitCents;
+  return `${formatUtilization(ratio)} used · ${formatCents(balanceCents)} of ${formatCents(limitCents)}`;
 }
 
 export function UtilizationBar({

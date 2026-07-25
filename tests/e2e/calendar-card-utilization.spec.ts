@@ -81,7 +81,18 @@ test("calendar card events show the utilization bar and limit", async ({ page })
   }
 
   const day = String(Number(dueDate.slice(8, 10)));
-  await page.getByRole("button", { name: new RegExp(`^${day}\\b`) }).first().click();
+  const dayCell = page.getByRole("button", { name: new RegExp(`^${day}\\b`) }).first();
+
+  // Inline, on the month grid itself — the chip carries the percentage and a
+  // tooltip with the full figures, without needing the day dialog opened.
+  await expect(dayCell.getByText("80%", { exact: true })).toBeVisible();
+  await expect(
+    dayCell.locator(`[title*="80% used · $800.00 of $1,000.00"]`),
+  ).toHaveCount(1);
+  // The limit-less card's chip stays bare — exactly one percentage on this day.
+  await expect(dayCell.getByText(/^\d+(\.\d)?%$/)).toHaveCount(1);
+
+  await dayCell.click();
 
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText(WITH_LIMIT).first()).toBeVisible();
