@@ -720,6 +720,10 @@ export function CalendarClient({
   const [savingCardPayment, setSavingCardPayment] = React.useState(false);
   const [dragging, setDragging] = React.useState<DragPayment | null>(null);
   const [dragOver, setDragOver] = React.useState<{ date: string; valid: boolean } | null>(null);
+  // Whether the card-debt-vs-cash strip is shown above the grid. Defaults on
+  // so the comparison the user asked for ("am I spending more than I make?")
+  // is visible immediately; the toggle just lets it be dismissed.
+  const [showCardDebt, setShowCardDebt] = React.useState(true);
 
   const rowByDate = React.useMemo(() => {
     const map = new Map<string, ProjectionRow>();
@@ -730,6 +734,21 @@ export function CalendarClient({
   const activeCards = React.useMemo(() => cards.filter((c) => c.isActive), [cards]);
   const cardById = React.useMemo(() => new Map(cards.map((c) => [c.id, c])), [cards]);
   const currency = useCurrency();
+
+  // Total accumulated card debt vs cash on hand — a net-worth-style read so
+  // "am I spending more than I'm making" is visible at a glance. Cards with
+  // no known balance are excluded from the sum (not treated as zero, which
+  // would understate debt) but counted so the strip can flag them.
+  const totalCardDebtCents = React.useMemo(
+    () => activeCards.reduce((sum, c) => (c.balanceCents != null ? sum + c.balanceCents : sum), 0),
+    [activeCards],
+  );
+  const cardsWithUnknownBalance = React.useMemo(
+    () => activeCards.filter((c) => c.balanceCents == null).length,
+    [activeCards],
+  );
+  const cashBalanceCents = rowByDate.get(today)?.balanceCents ?? 0;
+  const netPositionCents = cashBalanceCents - totalCardDebtCents;
 
   // Set of `${cardId}:${dueDate}` that have a payment-override row. An event at
   // such a key was scheduled by the user, so it's deletable and (as a plain
@@ -1310,6 +1329,18 @@ export function CalendarClient({
           ) : null}
         </div>
         <div className="flex items-center gap-4 text-[12px]">
+          {activeCards.length > 0 ? (
+            <Button
+              variant={showCardDebt ? "outline" : "ghost"}
+              size="icon"
+              onClick={() => setShowCardDebt((v) => !v)}
+              aria-pressed={showCardDebt}
+              aria-label={showCardDebt ? "Hide card debt vs cash" : "Show card debt vs cash"}
+              title={showCardDebt ? "Hide card debt vs cash" : "Show card debt vs cash"}
+            >
+              <CreditCard className="h-4 w-4" />
+            </Button>
+          ) : null}
           <span className="text-[var(--text-3)]">
             IN <span className="tabular font-semibold text-[var(--mint)]"><Money cents={sumIncome} /></span>
           </span>
@@ -1329,6 +1360,33 @@ export function CalendarClient({
           </span>
         </div>
       </div>
+
+      {showCardDebt && activeCards.length > 0 ? (
+        <div className="grid grid-cols-1 gap-px overflow-hidden border border-[var(--border-raw)] bg-[var(--border-raw)] sm:grid-cols-3">
+          <CycleSummaryTile
+            label="Cash on hand"
+            value={<Money cents={cashBalanceCents} />}
+            valueClass={balanceToneClass(cashBalanceCents)}
+            sub="today's balance"
+          />
+          <CycleSummaryTile
+            label="Card debt"
+            value={<Money cents={totalCardDebtCents} />}
+            valueClass="text-[var(--amber)]"
+            sub={
+              cardsWithUnknownBalance > 0
+                ? `${activeCards.length - cardsWithUnknownBalance} of ${activeCards.length} cards · ${cardsWithUnknownBalance} unknown`
+                : `${activeCards.length} active card${activeCards.length === 1 ? "" : "s"}`
+            }
+          />
+          <CycleSummaryTile
+            label="Net position"
+            value={<Money cents={netPositionCents} signed />}
+            valueClass={netPositionCents >= 0 ? "text-[var(--mint)]" : "text-[var(--red)]"}
+            sub="cash − card debt"
+          />
+        </div>
+      ) : null}
 
       {view === "month" ? (
         <>

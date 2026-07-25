@@ -16,6 +16,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
+    "seed:fixture": "tsx scripts/seed-dev-fixture.ts",
     "backup": "node scripts/backup.js",
     "format": "prettier --write ."
   },
