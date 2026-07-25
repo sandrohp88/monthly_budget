@@ -13,29 +13,9 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { cn } from "@/lib/cn";
+import { UtilizationBar, formatUtilization, BAND_LABEL } from "@/components/utilization-bar";
 import { formatCategoryLabel } from "@/lib/card-spending";
 import type { CardSpending, CardSpendingSummary, UtilizationBand } from "@/lib/card-spending";
-
-const BAND_LABEL: Record<UtilizationBand, string> = {
-  low: "Comfortable",
-  moderate: "Moderate",
-  high: "Running high",
-  maxed: "Nearly maxed",
-};
-
-const BAND_BAR: Record<UtilizationBand, string> = {
-  low: "bg-[var(--phosphor)]",
-  moderate: "bg-[var(--cyan)]",
-  high: "bg-[var(--amber)]",
-  maxed: "bg-[var(--red)]",
-};
-
-const BAND_TEXT: Record<UtilizationBand, string> = {
-  low: "text-[var(--phosphor)]",
-  moderate: "text-[var(--text-0)]",
-  high: "text-[var(--amber)]",
-  maxed: "text-[var(--red)]",
-};
 
 const BAND_PILL: Record<UtilizationBand, "default" | "warn" | "danger"> = {
   low: "default",
@@ -44,9 +24,7 @@ const BAND_PILL: Record<UtilizationBand, "default" | "warn" | "danger"> = {
   maxed: "danger",
 };
 
-function pct(ratio: number): string {
-  return `${(ratio * 100).toFixed(ratio >= 0.1 ? 0 : 1)}%`;
-}
+const pct = formatUtilization;
 
 export function CardSpendingView({ spending }: { spending: CardSpendingSummary }) {
   const { cards, crowded, overallUtilization, cardsWithoutLimit } = spending;
@@ -180,34 +158,7 @@ function CardSpendingRow({ card: c }: { card: CardSpending }) {
       <CardContent className="space-y-4 pt-4">
         {/* Utilization bar — the "is this card too full" read. */}
         {c.utilization != null && c.band ? (
-          <div className="space-y-1.5">
-            <div className="flex items-baseline justify-between text-[12px]">
-              <span className={cn("font-semibold tabular", BAND_TEXT[c.band])}>
-                {pct(c.utilization)} used
-              </span>
-              <span className="text-[var(--text-2)] tabular">
-                <Money cents={c.balanceCents ?? 0} /> of{" "}
-                <Money cents={c.creditLimitCents ?? 0} />
-              </span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--bg-3)]">
-              <div
-                className={cn("h-full rounded-full transition-all", BAND_BAR[c.band])}
-                style={{ width: `${Math.min(100, Math.max(2, c.utilization * 100))}%` }}
-              />
-            </div>
-            <div className="text-2xs text-[var(--text-3)]">
-              {c.headroomCents != null && c.headroomCents >= 0 ? (
-                <>
-                  <Money cents={c.headroomCents} /> left before the limit
-                </>
-              ) : (
-                <span className="text-[var(--red)]">
-                  <Money cents={Math.abs(c.headroomCents ?? 0)} /> over the limit
-                </span>
-              )}
-            </div>
-          </div>
+          <UtilizationBar balanceCents={c.balanceCents} limitCents={c.creditLimitCents} />
         ) : (
           <div className="rounded-md border border-dashed border-[var(--border-raw)] px-3 py-2 text-2xs text-[var(--text-3)]">
             No credit limit set for this card — add one in the card&apos;s edit dialog to see how

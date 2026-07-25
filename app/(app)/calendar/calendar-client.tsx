@@ -25,6 +25,7 @@ import {
 import { Money } from "@/components/money";
 import { MoneyInput } from "@/components/money-input";
 import { DateLabel } from "@/components/date-label";
+import { UtilizationBar } from "@/components/utilization-bar";
 import { cn } from "@/lib/cn";
 import { balanceToneClass, balanceSurfaceClass } from "@/lib/balance-tone";
 import { BillForm, type BillFormValues } from "../bills/bill-form";
@@ -561,6 +562,29 @@ function CompactDayRow({
 }
 
 /** A labeled figure in the paycheck-cycle summary strip. */
+/**
+ * Utilization for a card event. Draws nothing at all when the card has no
+ * known credit line — a calendar day is the wrong place to nag about missing
+ * setup, and an absent bar is quieter than a placeholder on every card event.
+ */
+function CardUtilization({
+  card,
+  className,
+}: {
+  card?: { balanceCents: number | null; creditLimitCents: number | null };
+  className?: string;
+}) {
+  if (!card) return null;
+  return (
+    <UtilizationBar
+      compact
+      balanceCents={card.balanceCents}
+      limitCents={card.creditLimitCents}
+      className={cn("mt-2 border-t border-[var(--border-raw)] pt-2", className)}
+    />
+  );
+}
+
 function CycleSummaryTile({
   label,
   value,
@@ -604,7 +628,15 @@ export function CalendarClient({
   startDate: string;
   endDate: string;
   categories: ReadonlyArray<string>;
-  cards: ReadonlyArray<{ id: string; name: string; isActive: boolean }>;
+  cards: ReadonlyArray<{
+    id: string;
+    name: string;
+    isActive: boolean;
+    /** Best-known balance; null when unknown, in which case no bar is drawn. */
+    balanceCents: number | null;
+    /** Credit line; null means UNKNOWN, not zero. */
+    creditLimitCents: number | null;
+  }>;
   /** Every credit-card payment override row (keyed by card + due date). Lets the
    *  calendar tell which events are user-scheduled — deletable and draggable. */
   overrides: ReadonlyArray<{ cardId: string; dueDate: string }>;
@@ -633,6 +665,7 @@ export function CalendarClient({
   }, [rows]);
 
   const activeCards = React.useMemo(() => cards.filter((c) => c.isActive), [cards]);
+  const cardById = React.useMemo(() => new Map(cards.map((c) => [c.id, c])), [cards]);
 
   // Set of `${cardId}:${dueDate}` that have a payment-override row. An event at
   // such a key was scheduled by the user, so it's deletable and (as a plain
@@ -1581,6 +1614,12 @@ export function CalendarClient({
                               <Money cents={paymentDueCents} />
                             </div>
                           ) : null}
+                          {/* How full the card is, wherever it's scheduled —
+                              due markers, planned payments, and paydowns alike.
+                              Renders nothing when the credit line is unknown. */}
+                          {isCardPayment ? (
+                            <CardUtilization card={cardById.get(ev.sourceId!)} />
+                          ) : null}
                         </div>
                         <div className="ml-auto flex items-center gap-2">
                           <span className={cn("tabular text-[13px] font-semibold", TONE_TEXT[tone])}>
@@ -1686,6 +1725,7 @@ export function CalendarClient({
       {planningCardPayment ? (
         <CardPaymentPlanDialog
           plan={planningCardPayment}
+          card={cardById.get(planningCardPayment.cardId)}
           today={today}
           saving={savingCardPayment}
           onClose={() => setPlanningCardPayment(null)}
@@ -1737,6 +1777,7 @@ export function CalendarClient({
 
 function CardPaymentPlanDialog({
   plan,
+  card,
   today,
   saving,
   onClose,
@@ -1744,6 +1785,8 @@ function CardPaymentPlanDialog({
   onReset,
 }: {
   plan: CardPaymentPlan;
+  /** The card this plan targets, for the utilization read. */
+  card?: { balanceCents: number | null; creditLimitCents: number | null };
   today: string;
   saving: boolean;
   onClose: () => void;
@@ -1797,6 +1840,7 @@ function CardPaymentPlanDialog({
                 </span>
               </div>
             ) : null}
+            <CardUtilization card={card} className="mt-0" />
           </div>
 
           <div className="space-y-1.5">

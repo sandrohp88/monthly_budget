@@ -124,6 +124,10 @@ components/
   projection-chart.tsx     ← Recharts area chart
   credit-card-visual.tsx   ← wallet card face: official art from public/cards/ (via
                              lib/card-art.ts registry) or a brand-gradient fallback
+  utilization-bar.tsx      ← shared credit-utilization bar (balance vs credit line, banded
+                             at 30/70/90%). Used by the credit-cards spending tab AND the
+                             calendar's card events so a card reads the same in both. A null
+                             limit renders NOTHING — never 0%.
   money.tsx, date-label.tsx, money-input.tsx
   category-dialog.tsx      ← shared "add new category" dialog (used in 2 places)
   plaid-draft-approve-dialog.tsx ← approve a Plaid draft into a real expense
