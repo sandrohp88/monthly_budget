@@ -45,6 +45,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
     ...(data.currentBalanceCents !== undefined
       ? { currentBalanceCents: data.currentBalanceCents }
       : {}),
+    ...(data.creditLimitCents !== undefined
+      ? { creditLimitCents: data.creditLimitCents }
+      : {}),
     ...(data.autoPay !== undefined ? { autoPay: data.autoPay } : {}),
     ...(data.notes !== undefined ? { notes: data.notes ?? null } : {}),
     ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),

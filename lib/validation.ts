@@ -181,6 +181,15 @@ const creditCardBaseSchema = z.object({
   /** Days between statement close and payment due (issuer grace period). */
   gracePeriodDays: z.number().int().min(0).max(60).default(14),
   currentBalanceCents: cents.refine((n) => n >= 0, "Balance must be non-negative").nullable().optional(),
+  /**
+   * Credit line, for utilization. Null means "unknown" — the UI renders no
+   * utilization rather than 0%. A user-set value is never overwritten by a
+   * Plaid sync (see seedCreditLimitFromPlaid in lib/repos.ts).
+   */
+  creditLimitCents: cents
+    .refine((n) => n > 0, "Credit limit must be positive")
+    .nullable()
+    .optional(),
   autoPay: z.boolean().default(false),
   notes: z.string().max(500).nullable().optional(),
 });

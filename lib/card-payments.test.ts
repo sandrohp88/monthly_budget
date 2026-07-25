@@ -23,6 +23,7 @@ function card(over: Partial<CreditCardRow> = {}): CreditCardRow {
     dueDay: 10,
     gracePeriodDays: 14,
     currentBalanceCents: null,
+    creditLimitCents: null,
     autoPay: false,
     notes: null,
     isActive: true,

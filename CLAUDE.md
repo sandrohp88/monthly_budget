@@ -91,10 +91,12 @@ app/
     assets/                ← manual net-worth line items
     bills/                 ← recurring + variable bills, payment overrides
     calendar/              ← month-grid of projection events; day click adds a bill
-    credit-cards/          ← two tabs. WALLET: official card art grid (balance + last digits
-                             only). FORECAST (forecast-client.tsx, lazy-loaded so Recharts
-                             stays out of the wallet's first load): month-by-month obligations
-                             per card, from lib/card-forecast.ts.
+    credit-cards/          ← three tabs. WALLET: official card art grid (balance + last digits
+                             only). SPENDING (spending-client.tsx): current-cycle charges from
+                             POSTED TRANSACTIONS + utilization vs credit line, from
+                             lib/card-spending.ts. FORECAST (forecast-client.tsx, lazy-loaded
+                             so Recharts stays out of the wallet's first load): month-by-month
+                             obligations per card, from lib/card-forecast.ts.
                              card-dialogs.tsx holds the shared card/statement/promo dialogs
       [id]/                ← per-card detail page: current statement, history, cycle
                              estimate, promos, what-if sheets, edit/archive
@@ -139,6 +141,10 @@ lib/
   auth.ts                  ← NextAuth instance + requireUserId/requireAdmin helpers
   api.ts                   ← ensureUser, readJson, jsonError helpers for routes
   credit-cards.ts          ← cycle date math (clamp Feb 31 → 28, etc.)
+  card-spending.ts         ← PURE: current-cycle charges per card from posted Plaid drafts,
+                             plus utilization vs the credit line. Answers "what's coming on
+                             the next statement" and "is this card too full" — the
+                             transaction-side counterpart to card-forecast.ts.
   card-forecast.ts         ← PURE: buckets the projection's credit-card events into
                              calendar months × card for the /credit-cards forecast tab.
                              Derivative by design — it only reshapes what card-payments.ts
@@ -346,6 +352,7 @@ weird gets emitted before merging.
 - `0027_statement_due_date_override` — `credit_card_statements.due_date_user_override` (set when the user edits a due date by hand; Plaid liability syncs then stop overwriting it — manual wins, same principle as paid records).
 - `0028_card_grace_period_days` — `credit_cards.grace_period_days` (per-card statement→due grace, default 14; feeds `dueDateFromStatement` everywhere instead of the old hardcoded floor).
 - `0029_paycheck_settled_by_draft` — `paychecks.settled_by_draft_id` + partial unique index (deposit-to-paycheck auto-reconciliation; a deposit draft settles at most one paycheck, ever — mirror of 0025).
+- `0034_credit_limits` — `credit_cards.credit_limit_cents` + `plaid_accounts.limit_cents` (utilization). Plaid's `balances.limit` fills the account column on every sync and SEEDS the card column only while it is NULL (`seedCreditLimitFromPlaid`) — manual wins after that, same rule as paid records and due-date overrides.
 
 ---
 
@@ -619,6 +626,14 @@ These bit us before. Don't repeat:
     summing estimates across months (as the forecast tab does) reads as "what cards cost per
     month if spending continues" — never as a growing balance. Any new rollup over card events
     must keep `estimated` markers visually separate from recorded statements for that reason.
+27. **`kind = 'card_payment'` is NOT enough to keep payments out of card spend.** Rows synced
+    before migration 0015 added the column, or synced while the account wasn't yet linked to a
+    card, are stored `kind = 'expense'` even though they are payments ("ONLINE PAYMENT, THANK
+    YOU" / "Payment Thank You - Web"). Summing them nets a cycle down — real dev data produced
+    a **negative** cycle spend. `lib/card-spending.ts` therefore runs `looksLikeCardPayment`
+    (the sync classifier's own predicate, reused so the two can't drift) as a second gate. Note
+    what stays IN: statement credits, rewards redemptions, and merchant refunds are legitimate
+    reductions to the next statement.
 
 ---
 

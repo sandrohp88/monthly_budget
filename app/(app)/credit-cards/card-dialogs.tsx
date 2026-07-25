@@ -98,6 +98,11 @@ export function CardDialog({
   const [trackCurrentBalance, setTrackCurrentBalance] = React.useState(
     card?.currentBalanceCents != null,
   );
+  // Credit line drives the utilization read on the spending tab. Left blank it
+  // stays null ("unknown"), which renders as no utilization rather than 0%.
+  const [creditLimitCents, setCreditLimit] = React.useState<number>(
+    card?.creditLimitCents ?? 0,
+  );
   const [autoPay, setAutoPay] = React.useState(card?.autoPay ?? false);
   const [notes, setNotes] = React.useState(card?.notes ?? "");
   const [saving, setSaving] = React.useState(false);
@@ -119,6 +124,7 @@ export function CardDialog({
           dueDay,
           gracePeriodDays,
           currentBalanceCents: trackCurrentBalance ? currentBalanceCents : null,
+          creditLimitCents: creditLimitCents > 0 ? creditLimitCents : null,
           autoPay,
           notes: notes.trim() || null,
         }),
@@ -264,6 +270,14 @@ export function CardDialog({
               <MoneyInput valueCents={currentBalanceCents} onChangeCents={setCurrentBalance} />
             </div>
           ) : null}
+          <div className="space-y-1.5">
+            <Label>Credit limit</Label>
+            <MoneyInput valueCents={creditLimitCents} onChangeCents={setCreditLimit} />
+            <div className="text-2xs text-[var(--text-3)]">
+              Drives the utilization read on the spending tab. Leave at $0 to skip it — a linked
+              card fills this in from the issuer on the next sync.
+            </div>
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor="cc-notes">Notes</Label>
             <Input id="cc-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
