@@ -16,8 +16,6 @@ import {
 } from "@/lib/credit-cards";
 import { buildCardSpending, type CardSpendingSummary } from "@/lib/card-spending";
 import { DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
-import { buildProjection } from "@/lib/projection-server";
-import { buildCardForecast, type CardForecast } from "@/lib/card-forecast";
 import { cardDisplayName } from "@/lib/card-art";
 import { CreditCardsClient, type WalletCard } from "./credit-cards-client";
 
@@ -28,14 +26,11 @@ export default async function CreditCardsPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [cards, accounts, items, settings, projection] = await Promise.all([
+  const [cards, accounts, items, settings] = await Promise.all([
     listCreditCards(userId), // active only — the wallet shows cards in use
     listPlaidAccounts(userId),
     listPlaidItems(userId),
     getSettings(userId),
-    // Cached per request — the forecast reshapes the same projection the
-    // ledger and calendar render, so the numbers can't drift apart.
-    buildProjection(userId),
   ]);
   const timezone = settings?.timezone ?? DEFAULT_TIMEZONE;
   const accountById = new Map(accounts.map((a) => [a.id, a]));
@@ -87,26 +82,16 @@ export default async function CreditCardsPage() {
     }),
   );
 
-  // Wallet display names (issuer-qualified) carry through to the forecast so a
-  // card reads the same in both tabs.
+  // Issuer-qualified display names, so a card reads the same in the wallet
+  // grid and the spending list.
   const cardNames = new Map(
     data.map((wc) => [wc.card.id, cardDisplayName(wc.card.name, wc.institution)] as const),
   );
-  const forecast: CardForecast | null = projection
-    ? buildCardForecast({
-        rows: projection.rows,
-        today: projection.today,
-        cardNames,
-        // The projection window overshoots its month count by a few days; only
-        // emit buckets it fully covers so the last month isn't truncated.
-        months: projection.projectionMonths,
-      })
-    : null;
 
   // ── Current-cycle spending, from real posted transactions ─────────────────
   // Each card's open cycle starts the day after its last statement closed, so
   // one query spanning the earliest window start covers every card.
-  const today = projection?.today ?? todayIso(timezone);
+  const today = todayIso(timezone);
   const spendingCards = data.map((wc) => ({
     cardId: wc.card.id,
     cardName: cardNames.get(wc.card.id) ?? wc.card.name,
@@ -135,12 +120,5 @@ export default async function CreditCardsPage() {
     today,
   });
 
-  return (
-    <CreditCardsClient
-      initialCards={data}
-      timezone={timezone}
-      forecast={forecast}
-      spending={spending}
-    />
-  );
+  return <CreditCardsClient initialCards={data} timezone={timezone} spending={spending} />;
 }
