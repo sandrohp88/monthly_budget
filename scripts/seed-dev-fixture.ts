@@ -131,6 +131,20 @@ async function main() {
     notes: null,
     settledByDraftId: null,
   });
+  // A PREVIOUS visa cycle left unpaid past its due date — surfaces as the
+  // OVERDUE marker on today ("was due …", all cover counts as late) and gives
+  // the late-payment planner something real to aim at.
+  await createStatement(everydayVisa.id, {
+    statementDate: addDaysIso(today, -52),
+    dueDate: addDaysIso(today, -22),
+    dueDateUserOverride: false,
+    statementBalanceCents: 90_000,
+    minimumPaymentCents: 2_500,
+    paidAmountCents: null,
+    paidDate: null,
+    notes: null,
+    settledByDraftId: null,
+  });
 
   const mastercardDueDate = addDaysIso(today, 15);
   await createStatement(rewardsMastercard.id, {

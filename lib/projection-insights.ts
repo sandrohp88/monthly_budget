@@ -63,6 +63,12 @@ export type UncoveredCardDue = {
   coverCents: number;
   shortfallCents: number;
   estimated: boolean;
+  /** Portion of coverCents dated after the issuer due date — pays the balance
+   *  but doesn't stop interest. A fully-late-covered due has shortfall 0 and
+   *  drops out of this list: the user planned it, stop nagging. */
+  lateCoverCents: number;
+  /** Set for an OVERDUE marker: the original (earliest) issuer due date. */
+  overdueSinceDate?: string;
 };
 
 export type ProjectionInsights = {
@@ -341,6 +347,8 @@ export function findUncoveredCardDues(
         coverCents: cover,
         shortfallCents: shortfall,
         estimated: ev.estimated === true,
+        lateCoverCents: Math.min(ev.lateCoverCents ?? 0, cover),
+        overdueSinceDate: ev.overdueSinceDate,
       });
     }
   }

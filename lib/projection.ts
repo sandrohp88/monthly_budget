@@ -93,6 +93,12 @@ export type OneTimeExpense = {
   dueMarker?: boolean;
   /** For a due marker: cash the user has scheduled toward this cycle's balance. */
   scheduledCoverCents?: number;
+  /** For a due marker: portion of scheduledCoverCents dated after the issuer
+   *  due date — it pays the balance but doesn't stop interest from accruing. */
+  lateCoverCents?: number;
+  /** For an OVERDUE due marker (unpaid statement whose due date passed,
+   *  surfaced on today): the earliest original issuer due date. */
+  overdueSinceDate?: string;
   /** For a due marker: the owed amount is an estimate, not a recorded statement. */
   estimated?: boolean;
   /**
@@ -149,6 +155,12 @@ export type ProjectionEvent = {
   dueMarker?: boolean;
   /** For a due marker: cash the user has scheduled toward this cycle's balance. */
   scheduledCoverCents?: number;
+  /** For a due marker: portion of scheduledCoverCents dated after the issuer
+   *  due date — it pays the balance but doesn't stop interest from accruing. */
+  lateCoverCents?: number;
+  /** For an OVERDUE due marker (unpaid statement whose due date passed,
+   *  surfaced on today): the earliest original issuer due date. */
+  overdueSinceDate?: string;
   /** For a due marker: the owed amount is an estimate, not a recorded statement. */
   estimated?: boolean;
 };
@@ -355,6 +367,8 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
       paydownTargetDate: e.paydownTargetDate,
       dueMarker: e.dueMarker,
       scheduledCoverCents: e.scheduledCoverCents,
+      lateCoverCents: e.lateCoverCents,
+      overdueSinceDate: e.overdueSinceDate,
       estimated: e.estimated,
     });
   }

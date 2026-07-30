@@ -274,8 +274,19 @@ export default async function DashboardPage() {
                 {d.label}
               </strong>{" "}
               (<Money cents={d.shortfallCents} />
-              {d.coverCents > 0 ? <> of <Money cents={d.owedCents} /> uncovered</> : null} due{" "}
-              <DateLabel iso={d.dueDate} format="short" />)
+              {d.coverCents > 0 ? <> of <Money cents={d.owedCents} /> uncovered</> : null}
+              {d.overdueSinceDate ? (
+                <>
+                  {" "}
+                  overdue since <DateLabel iso={d.overdueSinceDate} format="short" />
+                </>
+              ) : (
+                <>
+                  {" "}
+                  due <DateLabel iso={d.dueDate} format="short" />
+                </>
+              )}
+              )
             </span>
           ))}
           {uncoveredCardDues.length > 3 ? ` and ${uncoveredCardDues.length - 3} more` : ""}
