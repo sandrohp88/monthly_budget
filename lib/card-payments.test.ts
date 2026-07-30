@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cardPaymentLateWarning,
   cardPaymentMoveError,
   projectCardPayments,
   type StatementWithCardName,
@@ -463,44 +464,35 @@ describe("cardPaymentMoveError", () => {
     ).toBeNull();
   });
 
-  it("rejects moving a statement due after its due date", () => {
+  it("allows moving a statement due after its due date — paying late is a choice", () => {
     expect(
       cardPaymentMoveError(
         { fromDate: "2026-06-10", isPaydown: false, paymentDueCents: 200_00 },
         "2026-06-11",
         today,
       ),
-    ).toContain("after its due date");
+    ).toBeNull();
   });
 
-  it("uses relatedDate as the deadline for an already-moved payment", () => {
-    // Payment was moved from its 2026-06-10 issuer due date to 2026-06-04.
-    // Dragging it back out to 2026-06-08 is still on/before the deadline → ok.
+  it("warns (non-blocking) when a real due moves past its issuer due date", () => {
+    const input = {
+      fromDate: "2026-06-04",
+      isPaydown: false,
+      paymentDueCents: 200_00,
+      relatedDate: "2026-06-10",
+    };
+    // On/before the original issuer due date (relatedDate): no warning.
+    expect(cardPaymentLateWarning(input, "2026-06-08")).toBeNull();
+    // After it: allowed, but the interest note fires.
+    expect(cardPaymentMoveError(input, "2026-06-12", today)).toBeNull();
+    expect(cardPaymentLateWarning(input, "2026-06-12")).toContain("2026-06-10");
+    // Paydowns and plain planned payments carry no issuer deadline → no warning.
     expect(
-      cardPaymentMoveError(
-        {
-          fromDate: "2026-06-04",
-          isPaydown: false,
-          paymentDueCents: 200_00,
-          relatedDate: "2026-06-10",
-        },
-        "2026-06-08",
-        today,
+      cardPaymentLateWarning(
+        { fromDate: "2026-06-04", isPaydown: true, paymentDueCents: 0 },
+        "2026-09-30",
       ),
     ).toBeNull();
-    // …but past the original due date is still rejected.
-    expect(
-      cardPaymentMoveError(
-        {
-          fromDate: "2026-06-04",
-          isPaydown: false,
-          paymentDueCents: 200_00,
-          relatedDate: "2026-06-10",
-        },
-        "2026-06-12",
-        today,
-      ),
-    ).toContain("after its due date");
   });
 
   it("lets a paydown move to any future day", () => {
@@ -531,6 +523,158 @@ describe("cardPaymentMoveError", () => {
         today,
       ),
     ).toBeNull();
+  });
+});
+
+describe("projectCardPayments — overdue statements & late cover", () => {
+  // EMPTY.today = 2026-05-04; all "overdue" statements below were due before that.
+
+  it("an unpaid statement past its due date surfaces as an overdue marker on today", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ statementDate: "2026-03-15", dueDate: "2026-04-10" })],
+    });
+    const m = markersOf(r).find((e) => e.date === "2026-05-04");
+    expect(m).toMatchObject({
+      dueMarker: true,
+      estimated: false,
+      paymentDueCents: 200_00,
+      scheduledCoverCents: 0,
+      overdueSinceDate: "2026-04-10",
+      relatedDate: "2026-04-10",
+    });
+    expect(m?.description).toContain("(overdue)");
+    // Still zero-cash — an overdue balance is never force-paid either.
+    expect(cashTotal(r)).toBe(0);
+  });
+
+  it("a paid statement past its due date produces no overdue marker", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [
+        stmt({ statementDate: "2026-03-15", dueDate: "2026-04-10", paidAmountCents: 200_00 }),
+      ],
+    });
+    expect(markersOf(r)).toHaveLength(0);
+  });
+
+  it("multiple overdue statements on one card collapse into one marker (summed, earliest due)", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [
+        stmt({
+          id: "s1",
+          statementDate: "2026-02-15",
+          dueDate: "2026-03-10",
+          statementBalanceCents: 100_00,
+        }),
+        stmt({
+          id: "s2",
+          statementDate: "2026-03-15",
+          dueDate: "2026-04-10",
+          statementBalanceCents: 40_00,
+        }),
+      ],
+    });
+    const overdueMarkers = markersOf(r).filter((e) => e.overdueSinceDate);
+    expect(overdueMarkers).toHaveLength(1);
+    expect(overdueMarkers[0]).toMatchObject({
+      date: "2026-05-04",
+      paymentDueCents: 140_00,
+      overdueSinceDate: "2026-03-10",
+    });
+  });
+
+  it("any scheduled payment covers an overdue marker — as LATE cover", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ statementDate: "2026-03-15", dueDate: "2026-04-10" })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 200_00, notes: null }),
+      ],
+    });
+    const m = markersOf(r).find((e) => e.overdueSinceDate);
+    expect(m).toMatchObject({ scheduledCoverCents: 200_00, lateCoverCents: 200_00 });
+  });
+
+  it("a stale paydown targeting the passed due date still covers the overdue marker", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ statementDate: "2026-03-15", dueDate: "2026-04-10" })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 200_00, notes: "pays-down:2026-04-10" }),
+      ],
+    });
+    const m = markersOf(r).find((e) => e.overdueSinceDate);
+    expect(m).toMatchObject({ scheduledCoverCents: 200_00, lateCoverCents: 200_00 });
+  });
+
+  it("a moved payment dated after its due date is directed LATE cover for that due", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ dueDate: "2026-06-10" })],
+      cardPaymentOverrides: [
+        override({ id: "o1", dueDate: "2026-06-10", amountCents: 0, notes: "moved-to:2026-06-20" }),
+        override({
+          id: "o2",
+          dueDate: "2026-06-20",
+          amountCents: 200_00,
+          notes: "moved-from:2026-06-10",
+        }),
+      ],
+    });
+    const m = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(m).toMatchObject({ scheduledCoverCents: 200_00, lateCoverCents: 200_00 });
+    // The cash debits its own (late) day, not the due date.
+    const paid = cashOf(r).find((e) => e.date === "2026-06-20");
+    expect(paid?.amountCents).toBe(200_00);
+  });
+
+  it("an overdue marker drinks from the pool before future statements", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [
+        stmt({
+          id: "s1",
+          statementDate: "2026-03-15",
+          dueDate: "2026-04-10",
+          statementBalanceCents: 150_00,
+        }),
+        stmt({
+          id: "s2",
+          statementDate: "2026-05-15",
+          dueDate: "2026-06-10",
+          statementBalanceCents: 200_00,
+        }),
+      ],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-20", amountCents: 150_00, notes: null }),
+      ],
+    });
+    const overdueMarker = markersOf(r).find((e) => e.overdueSinceDate);
+    const june = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(overdueMarker).toMatchObject({ scheduledCoverCents: 150_00, lateCoverCents: 150_00 });
+    expect(june?.scheduledCoverCents).toBe(0);
+  });
+
+  it("on-time cover stays on-time — lateCoverCents is 0 for a payment before the due date", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ dueDate: "2026-06-10" })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-06-01", amountCents: 200_00, notes: null }),
+      ],
+    });
+    const m = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(m).toMatchObject({ scheduledCoverCents: 200_00, lateCoverCents: 0 });
   });
 });
 

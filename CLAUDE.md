@@ -648,6 +648,12 @@ These bit us before. Don't repeat:
     `plaid_transaction_drafts.account_id` is `ON DELETE CASCADE`, so it takes that account's whole
     transaction history with it (227 rows on the live DB as of 2026-07-24). Deactivating an item
     is the intended soft-delete; leave the rows alone.
+30. **Card due payments are never mandatory — don't reintroduce a hard block.**
+    `cardPaymentMoveError` only rejects past dates; scheduling after the issuer due date is
+    allowed everywhere (warn via `cardPaymentLateWarning`, record as `lateCoverCents` — a subset
+    of `scheduledCoverCents`, which stays the TOTAL cover). Unpaid past-due statements become
+    OVERDUE markers on today instead of vanishing. The projection never auto-debits a due date —
+    only user-scheduled payments move cash. See §17a "Calendar card-payment planning".
 
 ---
 
@@ -931,11 +937,27 @@ balance.
 Calendar credit-card events surface `paymentDueCents` as the statement amount
 needed to avoid interest, while estimated and deferred-interest events are
 labeled as such. Future card events open a payment planner backed by
-`credit_card_payment_overrides`; a payment may move earlier but the calendar
-flow will not save it after the issuer due date. Moved plans use paired
+`credit_card_payment_overrides`. A payment may be scheduled on ANY day today
+or later — including after the issuer due date: due dates are never mandatory,
+so the dialogs and drag flow show an interest warning (`cardPaymentLateWarning`)
+instead of blocking. Cash dated after its target's issuer due date lands as
+`lateCoverCents` on the due marker (a subset of `scheduledCoverCents`, which
+stays the TOTAL cover) — a late-covered marker renders amber ("interest may
+apply"), never all-clear green, and drops out of the uncovered-dues alert
+(the user planned it; stop nagging). Moved plans use paired
 `moved-to:YYYY-MM-DD` / `moved-from:YYYY-MM-DD` notes, matching the ledger
 planner. This only changes Finance_OS cash-flow projections — it never submits
 a payment to PayPal or another issuer.
+
+**Overdue statements.** An unpaid statement whose due date has passed does NOT
+disappear from the projection: `projectCardPayments` surfaces it as an OVERDUE
+due marker on today (same convention as expired promos), aggregated per card
+(summed owed, `overdueSinceDate` = earliest original due, `relatedDate` set so
+the planner aims moved cash at the passed date). All cover on an overdue
+marker is late by definition, and it consumes undirected scheduled cash before
+future statement markers (the issuer applies payments to what's already owed).
+The interest-alert push keys overdue dues by `overdueSinceDate` in the digest
+so the today-riding marker doesn't re-notify every midnight.
 
 **Scheduled paydowns (`pays-down:` notes).** Any calendar day can also open
 PLAN CARD PAYMENT: pick a card + amount + date, saved as an override row whose

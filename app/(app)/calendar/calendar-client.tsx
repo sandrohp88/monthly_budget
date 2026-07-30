@@ -35,7 +35,7 @@ import { formatCents } from "@/lib/money";
 import { cn } from "@/lib/cn";
 import { balanceToneClass, balanceSurfaceClass } from "@/lib/balance-tone";
 import { BillForm, type BillFormValues } from "../bills/bill-form";
-import { cardPaymentMoveError } from "@/lib/card-payments";
+import { cardPaymentLateWarning, cardPaymentMoveError } from "@/lib/card-payments";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
 
 const MONTH_NAMES = [
@@ -62,7 +62,11 @@ type DueCoverage = "covered" | "partial" | "uncovered";
 function dueCoverageOf(ev: ProjectionEvent): DueCoverage {
   const owed = ev.paymentDueCents ?? 0;
   const cover = ev.scheduledCoverCents ?? 0;
-  if (owed <= 0 || cover >= owed) return "covered";
+  if (owed <= 0 || cover >= owed) {
+    // Fully covered — but cash scheduled after the due date (or an overdue
+    // balance) still accrues interest, so it never reads as all-clear green.
+    return (ev.lateCoverCents ?? 0) > 0 || ev.overdueSinceDate ? "partial" : "covered";
+  }
   return cover > 0 ? "partial" : "uncovered";
 }
 
@@ -119,6 +123,7 @@ type DragPayment = {
 function cardPaymentDueLabel(label: string): string {
   const normalized = label.toLowerCase();
   if (normalized.includes("promo")) return "Deferred-interest payoff plan";
+  if (normalized.includes("overdue")) return "Overdue statement balance";
   if (normalized.includes("est")) return "Estimated amount due";
   if (normalized.includes("planned")) return "Planned card payment";
   return "Full statement to avoid interest";
@@ -1221,6 +1226,18 @@ export function CalendarClient({
       toast.error(error);
       return;
     }
+    // Late is allowed, not silent — dropping a real due after its issuer due
+    // date gets the interest note the PLAN dialog would have shown.
+    const lateWarning = cardPaymentLateWarning(
+      {
+        fromDate: drag.fromDate,
+        isPaydown: drag.isPaydown,
+        paymentDueCents: drag.paymentDueCents,
+        relatedDate: drag.relatedDate,
+      },
+      toDate,
+    );
+    if (lateWarning) toast.warning(lateWarning);
     if (drag.isPaydown) {
       // Keep the paydown's target due date; just move the payment's own day.
       await saveScheduledPayment(drag.cardId, toDate, drag.amountCents, drag.paydownTargetDate, {
@@ -1714,9 +1731,11 @@ export function CalendarClient({
                         : isCardCharge
                           ? "on card"
                           : isDueMarker
-                            ? ev.estimated
-                              ? "estimated card due"
-                              : "card statement due"
+                            ? ev.overdueSinceDate
+                              ? "overdue card statement"
+                              : ev.estimated
+                                ? "estimated card due"
+                                : "card statement due"
                             : isPaydown
                               ? "planned payment"
                               : isCardPayment
@@ -1756,9 +1775,21 @@ export function CalendarClient({
                           ) : null}
                           {isDueMarker && !isPastDay ? (
                             <div className="mt-1.5 space-y-1 text-2xs">
+                              {ev.overdueSinceDate ? (
+                                <div className="flex items-center justify-between gap-3 text-[var(--text-3)]">
+                                  <span>Was due</span>
+                                  <span className="text-[var(--red)]">
+                                    <DateLabel iso={ev.overdueSinceDate} format="short" />
+                                  </span>
+                                </div>
+                              ) : null}
                               <div className="flex items-center justify-between gap-3 text-[var(--text-3)]">
                                 <span>
-                                  {ev.estimated ? "Estimated balance" : "Statement balance"}
+                                  {ev.overdueSinceDate
+                                    ? "Overdue balance"
+                                    : ev.estimated
+                                      ? "Estimated balance"
+                                      : "Statement balance"}
                                 </span>
                                 <span className="tabular text-[var(--text-1)]">
                                   <Money cents={owedCents} />
@@ -1783,9 +1814,29 @@ export function CalendarClient({
                                 >
                                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                                   <span>
-                                    Nothing leaves checking for this on its own. If you don&apos;t
-                                    schedule a payment, <Money cents={uncoveredCents} /> will accrue
-                                    interest{ev.estimated ? " on the unpaid balance" : ""}.
+                                    {ev.overdueSinceDate ? (
+                                      <>
+                                        This balance is past due and accruing interest.{" "}
+                                        <Money cents={uncoveredCents} /> has no scheduled payment —
+                                        schedule one whenever it fits; nothing leaves checking on
+                                        its own.
+                                      </>
+                                    ) : (
+                                      <>
+                                        Nothing leaves checking for this on its own. If you
+                                        don&apos;t schedule a payment,{" "}
+                                        <Money cents={uncoveredCents} /> will accrue interest
+                                        {ev.estimated ? " on the unpaid balance" : ""}.
+                                      </>
+                                    )}
+                                  </span>
+                                </div>
+                              ) : (ev.lateCoverCents ?? 0) > 0 || ev.overdueSinceDate ? (
+                                <div className="flex gap-1.5 border border-[var(--amber)]/50 bg-[var(--amber)]/10 p-2 text-2xs normal-case tracking-normal text-[var(--amber)]">
+                                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                  <span>
+                                    Covered by payments scheduled after the due date — the issuer
+                                    may charge interest until they post.
                                   </span>
                                 </div>
                               ) : (
@@ -2038,7 +2089,6 @@ function CardPaymentPlanDialog({
               id="calendar-card-payment-date"
               type="date"
               min={today}
-              max={originalDueDate}
               value={plannedDate}
               onChange={(event) => setPlannedDate(event.target.value)}
               disabled={saving}
@@ -2086,10 +2136,20 @@ function CardPaymentPlanDialog({
               </span>
             </div>
           ) : null}
-          {afterDueDate || beforeToday ? (
+          {beforeToday ? (
             <div className="flex gap-2 border border-[var(--red)]/50 bg-[var(--red)]/10 p-3 text-[11px] text-[var(--red)]">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>Choose a future date on or before the card due date.</span>
+              <span>Choose today or a future date.</span>
+            </div>
+          ) : null}
+          {afterDueDate && !beforeToday ? (
+            <div className="flex gap-2 border border-[var(--amber)]/50 bg-[var(--amber)]/10 p-3 text-[11px] text-[var(--amber)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                After the <DateLabel iso={originalDueDate} format="short" /> due date — the issuer
+                may charge interest until this payment posts. Scheduling it anyway keeps the cash
+                plan honest.
+              </span>
             </div>
           ) : null}
           {exceedsBalance ? (
@@ -2126,7 +2186,7 @@ function CardPaymentPlanDialog({
             <Button
               type="submit"
               variant="primary"
-              disabled={saving || amountCents <= 0 || !plannedDate || afterDueDate || beforeToday}
+              disabled={saving || amountCents <= 0 || !plannedDate || beforeToday}
             >
               {saving ? "Saving…" : "Save payment plan"}
             </Button>

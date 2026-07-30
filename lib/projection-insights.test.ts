@@ -286,8 +286,41 @@ describe("findUncoveredCardDues", () => {
         coverCents: 0,
         shortfallCents: 423_10,
         estimated: false,
+        lateCoverCents: 0,
+        overdueSinceDate: undefined,
       },
     ]);
+  });
+
+  it("a due fully covered by LATE cash drops out — the user planned it", () => {
+    const dues = findUncoveredCardDues(
+      [
+        row("2026-06-10", 0, 0, 500_00, [
+          marker("Chase", 400_00, 400_00, { lateCoverCents: 400_00 }),
+        ]),
+      ],
+      { today: "2026-06-01" },
+    );
+
+    expect(dues).toEqual([]);
+  });
+
+  it("an uncovered OVERDUE marker reports its original due date", () => {
+    const dues = findUncoveredCardDues(
+      [
+        row("2026-06-01", 0, 0, 500_00, [
+          marker("Chase (overdue)", 300_00, 0, { overdueSinceDate: "2026-05-10" }),
+        ]),
+      ],
+      { today: "2026-06-01" },
+    );
+
+    expect(dues).toHaveLength(1);
+    expect(dues[0]).toMatchObject({
+      dueDate: "2026-06-01",
+      overdueSinceDate: "2026-05-10",
+      shortfallCents: 300_00,
+    });
   });
 
   it("reports only the remaining shortfall for a partially covered due", () => {

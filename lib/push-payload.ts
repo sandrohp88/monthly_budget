@@ -38,7 +38,13 @@ function formatMoney(cents: number, currency: string): string {
  * or cleared) notifies immediately.
  */
 export function interestDigest(dues: readonly UncoveredCardDue[]): string {
-  return dues.map((d) => `${d.cardId}:${d.dueDate}:${d.shortfallCents}`).join("|");
+  // An overdue marker rides on TODAY, so its dueDate changes every midnight —
+  // key it by the original issuer due date instead, or the digest would churn
+  // daily and re-notify on every first-morning tick instead of per the re-nag
+  // cadence.
+  return dues
+    .map((d) => `${d.cardId}:${d.overdueSinceDate ?? d.dueDate}:${d.shortfallCents}`)
+    .join("|");
 }
 
 /** Compose the notification for a non-empty set of uncovered dues. */
@@ -49,14 +55,17 @@ export function buildInterestPushPayload(
   const first = dues[0];
   if (!first) return null;
   const totalShortfall = dues.reduce((s, d) => s + d.shortfallCents, 0);
+  const firstWhen = first.overdueSinceDate
+    ? `overdue since ${formatIso(first.overdueSinceDate, "short")}`
+    : `due ${formatIso(first.dueDate, "short")}`;
   const title =
     dues.length === 1
-      ? `${formatMoney(first.shortfallCents, currency)} due ${formatIso(first.dueDate, "short")} — no payment planned`
+      ? `${formatMoney(first.shortfallCents, currency)} ${firstWhen} — no payment planned`
       : `${formatMoney(totalShortfall, currency)} uncovered on ${dues.length} cards`;
   const rest = dues.length - 1;
   const body =
-    `No planned payment covers ${first.label} (${formatMoney(first.shortfallCents, currency)} due ` +
-    `${formatIso(first.dueDate, "short")})` +
+    `No planned payment covers ${first.label} (${formatMoney(first.shortfallCents, currency)} ` +
+    `${firstWhen})` +
     (rest > 0 ? ` and ${rest} more` : "") +
     ". Uncovered balances accrue interest past the due date.";
   return { title, body, url: "/calendar", tag: "interest-alert" };

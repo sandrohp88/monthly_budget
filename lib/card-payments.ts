@@ -21,6 +21,13 @@
  * silently drains cash, but the due date is never hidden and the interest risk
  * is surfaced.
  *
+ * Due dates are never mandatory: a payment may be scheduled on any day —
+ * including AFTER the issuer due date (paying late on purpose is the user's
+ * call; the marker keeps carrying the interest note). An unpaid statement
+ * whose due date has already passed doesn't disappear either — it surfaces as
+ * an OVERDUE marker on today (same convention as expired promos) that
+ * scheduled payments can still be aimed at.
+ *
  * Pure: no I/O, deterministic for its inputs, unit-tested in
  * card-payments.test.ts and guarded end-to-end by projection-server.test.ts.
  */
@@ -108,12 +115,9 @@ export type CardPaymentMoveInput = {
  * mirror the calendar dialogs (CardPaymentPlanDialog / ScheduleCardPaymentDialog):
  *
  *   - Never move a payment into the past.
- *   - A statement / open-cycle-estimate / promo due (`paymentDueCents > 0`) may
- *     only move EARLIER — never after the issuer due date, because paying after
- *     it defeats the "avoid interest" purpose. The issuer due date is the date
- *     the payment was moved from (`relatedDate`) if already moved, else
- *     `fromDate`.
- *   - A scheduled paydown or a plain planned payment can move to any future day.
+ *   - Anywhere else is allowed — including after the issuer due date. Paying
+ *     late is a choice the app records, not a mistake it blocks; pair with
+ *     `cardPaymentLateWarning` to surface the interest note.
  *
  * `toDate === fromDate` is a no-op the caller should skip; it validates as null.
  */
@@ -123,12 +127,22 @@ export function cardPaymentMoveError(
   today: string,
 ): string | null {
   if (toDate < today) return "Choose today or a future date.";
+  return null;
+}
+
+/**
+ * Non-blocking companion to `cardPaymentMoveError`: the interest note for a
+ * real card due (`paymentDueCents > 0`) being scheduled after its issuer due
+ * date. Null when the chosen day carries no late-payment risk.
+ */
+export function cardPaymentLateWarning(
+  input: CardPaymentMoveInput,
+  toDate: string,
+): string | null {
   if (input.isPaydown || input.paymentDueCents <= 0) return null;
   const dueDate = input.relatedDate ?? input.fromDate;
-  if (toDate > dueDate) {
-    return `Move earlier — a card payment can't be scheduled after its due date ${dueDate}.`;
-  }
-  return null;
+  if (toDate <= dueDate) return null;
+  return `Scheduled after the ${dueDate} due date — the issuer may charge interest until it's paid.`;
 }
 
 /** A scheduled cash payment parsed from an override (plain or moved). */
@@ -150,6 +164,12 @@ type DueMarker = {
   owedCents: number;
   balanceCents: number;
   estimated: boolean;
+  /**
+   * Set on an OVERDUE marker (unpaid statements whose issuer due date already
+   * passed, surfaced on today): the original due dates it aggregates. Any cash
+   * scheduled toward it is late by definition.
+   */
+  overdueDueDates?: Set<string>;
 };
 
 export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCardPaymentsResult {
@@ -328,14 +348,17 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     ...variableBillChargeGroups.keys(),
   ]);
   const promoPaydownRemainingByKey = new Map<string, number>();
-  const explicitPaydownCoverByKey = new Map<string, number>();
+  const paydownEntriesByTarget = new Map<string, Array<{ date: string; amountCents: number }>>();
   const prepayPoolByCard = new Map<string, number>();
   for (const p of paydowns) {
     if (p.date < today || p.amountCents <= 0) continue;
     const key = overrideKey(p.cardId, p.targetDate);
     // A paydown always counts as coverage toward a due marker on its target
-    // date (display only — the marker has no cash of its own).
-    explicitPaydownCoverByKey.set(key, (explicitPaydownCoverByKey.get(key) ?? 0) + p.amountCents);
+    // date (display only — the marker has no cash of its own). Entries keep
+    // their payment date so coverage can tell on-time cash from late cash.
+    const entries = paydownEntriesByTarget.get(key) ?? [];
+    entries.push({ date: p.date, amountCents: p.amountCents });
+    paydownEntriesByTarget.set(key, entries);
     // If that date ALSO carries promo/variable cash, the paydown reduces it too
     // so the same money isn't projected twice.
     if (cashChargeKeys.has(key)) {
@@ -434,17 +457,33 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     markers.push(m);
   };
 
-  // 1. Recorded statements due today or later. The owed amount is the
-  // Interest Saving Balance, not the full statement balance: outstanding 0%
-  // promo principal isn't exposed to interest and its future chunks are
-  // already projected as promo cash on later due dates — marking the full
-  // balance here would both overstate the interest risk and double-represent
-  // the promo principal.
+  // 1. Recorded statements. The owed amount is the Interest Saving Balance,
+  // not the full statement balance: outstanding 0% promo principal isn't
+  // exposed to interest and its future chunks are already projected as promo
+  // cash on later due dates — marking the full balance here would both
+  // overstate the interest risk and double-represent the promo principal.
+  //
+  // A statement whose due date already passed but still shows an unpaid ISB
+  // portion is OVERDUE — the obligation didn't vanish with the date. It
+  // surfaces on TODAY (same convention as expired promos) so it stays in view
+  // and payments can still be aimed at it. Multiple overdue statements on one
+  // card collapse into a single marker (summed owed, all original due dates).
+  const overdueByCard = new Map<string, { cardName: string; owed: number; dueDates: Set<string> }>();
   for (const s of statements) {
-    if (s.dueDate < today) continue;
     const isbDue = interestSavingCashDueCents(s, promosByCard.get(s.cardId) ?? []);
     const owed = Math.max(0, isbDue - (s.paidAmountCents ?? 0));
     if (owed <= 0) continue;
+    if (s.dueDate < today) {
+      const agg = overdueByCard.get(s.cardId) ?? {
+        cardName: s.cardName,
+        owed: 0,
+        dueDates: new Set<string>(),
+      };
+      agg.owed += owed;
+      agg.dueDates.add(s.dueDate);
+      overdueByCard.set(s.cardId, agg);
+      continue;
+    }
     pushMarker({
       cardId: s.cardId,
       cardName: s.cardName,
@@ -453,6 +492,29 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       balanceCents: displayBalanceForCard(s.cardId, owed),
       estimated: false,
     });
+  }
+  for (const [cardId, agg] of overdueByCard) {
+    // A statement can also be due exactly today — merge the overdue balance
+    // into that marker rather than losing one of them to the per-key dedupe.
+    const existing = markers.find((m) => m.cardId === cardId && m.dueDate === today);
+    if (existing) {
+      existing.owedCents += agg.owed;
+      existing.balanceCents = Math.max(
+        existing.balanceCents,
+        displayBalanceForCard(cardId, existing.owedCents),
+      );
+      existing.overdueDueDates = agg.dueDates;
+    } else {
+      pushMarker({
+        cardId,
+        cardName: agg.cardName,
+        dueDate: today,
+        owedCents: agg.owed,
+        balanceCents: displayBalanceForCard(cardId, agg.owed),
+        estimated: false,
+        overdueDueDates: agg.dueDates,
+      });
+    }
   }
 
   // 2 + 3. Open-cycle estimate (this cycle) and carried-forward future cycles.
@@ -518,11 +580,14 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   markers.sort((a, b) =>
     a.cardId === b.cardId ? a.dueDate.localeCompare(b.dueDate) : a.cardId.localeCompare(b.cardId),
   );
-  const paymentsByCard = new Map<string, Array<{ date: string; remaining: number }>>();
+  const paymentsByCard = new Map<
+    string,
+    Array<{ date: string; remaining: number; targetDueDate: string }>
+  >();
   for (const s of scheduledPayments) {
     if (s.amountCents <= 0) continue;
     const list = paymentsByCard.get(s.cardId) ?? [];
-    list.push({ date: s.date, remaining: s.amountCents });
+    list.push({ date: s.date, remaining: s.amountCents, targetDueDate: s.targetDueDate });
     paymentsByCard.set(s.cardId, list);
   }
 
@@ -550,7 +615,11 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   // statements earliest-first, then the estimate balance, then promo prepay.
   const statementMarkerKeys = new Set<string>();
   for (const m of markers) {
-    if (!m.estimated) statementMarkerKeys.add(overrideKey(m.cardId, m.dueDate));
+    if (m.estimated) continue;
+    statementMarkerKeys.add(overrideKey(m.cardId, m.dueDate));
+    // An overdue marker also answers to its original issuer due date(s) — a
+    // paydown stored against the passed date is still directed at it.
+    for (const d of m.overdueDueDates ?? []) statementMarkerKeys.add(overrideKey(m.cardId, d));
   }
   for (const p of paydowns) {
     if (p.date < today || p.amountCents <= 0) continue;
@@ -563,28 +632,54 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       continue;
     }
     const list = paymentsByCard.get(p.cardId) ?? [];
-    list.push({ date: p.date, remaining: p.amountCents });
+    list.push({ date: p.date, remaining: p.amountCents, targetDueDate: p.targetDate });
     paymentsByCard.set(p.cardId, list);
   }
   for (const list of paymentsByCard.values()) list.sort((a, b) => a.date.localeCompare(b.date));
 
   const coverByMarker = new Map<DueMarker, number>();
+  const lateCoverByMarker = new Map<DueMarker, number>();
   for (const [cardId, cardMarkers] of markersByCard) {
     const pool = paymentsByCard.get(cardId) ?? [];
     const statementMarkers = cardMarkers.filter((m) => !m.estimated);
     const estimateMarkers = cardMarkers.filter((m) => m.estimated);
 
-    // 1. Recorded statements: explicit paydown + plain payments, earliest first.
+    // 1. Recorded statements: explicit paydowns + pool payments, earliest due
+    //    first (an overdue marker sits on today, so it drinks from the pool
+    //    before future statements — the issuer applies cash to what's already
+    //    owed). Cash dated on/before the issuer due date is ON-TIME cover;
+    //    cash dated after it — a deliberately late plan, or anything aimed at
+    //    an overdue marker — is LATE cover: it still counts toward the
+    //    balance, but the marker keeps carrying the interest note. Undirected
+    //    pool cash never covers a future statement late (it flows on to the
+    //    next due it precedes instead); only directed cash (moved-from /
+    //    pays-down) and overdue markers accept late money.
     for (const sm of statementMarkers) {
-      let cover = explicitPaydownCoverByKey.get(overrideKey(cardId, sm.dueDate)) ?? 0;
-      for (const p of pool) {
-        if (cover >= sm.owedCents) break;
-        if (p.remaining <= 0 || p.date > sm.dueDate) continue;
-        const take = Math.min(p.remaining, sm.owedCents - cover);
-        cover += take;
-        p.remaining -= take;
+      const overdue = sm.overdueDueDates != null;
+      const targetKeys = new Set<string>([overrideKey(cardId, sm.dueDate)]);
+      for (const d of sm.overdueDueDates ?? []) targetKeys.add(overrideKey(cardId, d));
+      let onTime = 0;
+      let late = 0;
+      for (const key of targetKeys) {
+        for (const pd of paydownEntriesByTarget.get(key) ?? []) {
+          if (overdue || pd.date > sm.dueDate) late += pd.amountCents;
+          else onTime += pd.amountCents;
+        }
       }
-      coverByMarker.set(sm, Math.min(cover, sm.owedCents));
+      for (const p of pool) {
+        if (onTime + late >= sm.owedCents) break;
+        if (p.remaining <= 0) continue;
+        const onTimeHere = !overdue && p.date <= sm.dueDate;
+        const directedHere = targetKeys.has(overrideKey(cardId, p.targetDueDate));
+        if (!onTimeHere && !directedHere && !overdue) continue;
+        const take = Math.min(p.remaining, sm.owedCents - onTime - late);
+        p.remaining -= take;
+        if (onTimeHere) onTime += take;
+        else late += take;
+      }
+      const cover = Math.min(onTime + late, sm.owedCents);
+      coverByMarker.set(sm, cover);
+      lateCoverByMarker.set(sm, Math.min(late, cover));
     }
 
     // 2. Estimated cycles share one running balance (recurringEstimate). Cash
@@ -645,17 +740,28 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
 
   const markerExtras: OneTimeExpense[] = markers.map((m) => {
     const cover = Math.min(coverByMarker.get(m) ?? 0, m.owedCents);
+    const lateCover = Math.min(lateCoverByMarker.get(m) ?? 0, cover);
+    const overdueSince = m.overdueDueDates ? [...m.overdueDueDates].sort()[0] : undefined;
     return {
       date: m.dueDate,
-      description: m.estimated ? `${m.cardName} (est.)` : m.cardName,
+      description: m.estimated
+        ? `${m.cardName} (est.)`
+        : overdueSince
+          ? `${m.cardName} (overdue)`
+          : m.cardName,
       amountCents: 0,
       sourceId: m.cardId,
       sourceType: "creditCardPayment" as const,
       originalAmountCents: m.owedCents,
+      // The original issuer due date, so the payment planner aims moved cash
+      // at the passed date (directed late cover) instead of at today.
+      relatedDate: overdueSince,
       paymentDueCents: m.owedCents,
       paymentBalanceCents: m.balanceCents,
       dueMarker: true,
       scheduledCoverCents: cover,
+      lateCoverCents: lateCover,
+      overdueSinceDate: overdueSince,
       estimated: m.estimated,
     };
   });

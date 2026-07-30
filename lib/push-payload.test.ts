@@ -16,6 +16,7 @@ const due = (over: Partial<UncoveredCardDue> = {}): UncoveredCardDue => ({
   coverCents: 0,
   shortfallCents: 423_10,
   estimated: false,
+  lateCoverCents: 0,
   ...over,
 });
 
@@ -33,6 +34,15 @@ describe("interestDigest", () => {
     const base = interestDigest([due()]);
     expect(interestDigest([due({ shortfallCents: 400_00 })])).not.toBe(base);
     expect(interestDigest([])).not.toBe(base);
+  });
+
+  it("keys an overdue due by its original due date so the digest survives midnight", () => {
+    // An overdue marker rides on today, so dueDate moves daily — the digest must not.
+    const monday = interestDigest([due({ dueDate: "2026-07-27", overdueSinceDate: "2026-07-20" })]);
+    const tuesday = interestDigest([
+      due({ dueDate: "2026-07-28", overdueSinceDate: "2026-07-20" }),
+    ]);
+    expect(monday).toBe(tuesday);
   });
 });
 

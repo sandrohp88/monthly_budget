@@ -1189,11 +1189,28 @@ function ProjectionEventItem({
     const owed = event.paymentDueCents ?? 0;
     const cover = Math.min(event.scheduledCoverCents ?? 0, owed);
     const remaining = Math.max(0, owed - cover);
+    // Late cash pays the balance but doesn't stop interest — a marker covered
+    // only after its due date (or an overdue balance) never reads all-clear.
+    const lateRisk = (event.lateCoverCents ?? 0) > 0 || Boolean(event.overdueSinceDate);
     return (
       <div key={`${event.sourceId}-${row.date}-${eventIndex}`} className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <SoftPill tone={remaining === 0 ? "income" : cover > 0 ? "warning" : "danger"}>
-            {event.estimated ? "Est. due" : "Statement due"}
+          <SoftPill
+            tone={
+              remaining === 0
+                ? lateRisk
+                  ? "warning"
+                  : "income"
+                : cover > 0
+                  ? "warning"
+                  : "danger"
+            }
+          >
+            {event.overdueSinceDate
+              ? "Overdue"
+              : event.estimated
+                ? "Est. due"
+                : "Statement due"}
           </SoftPill>
           <button
             type="button"
@@ -1220,6 +1237,11 @@ function ProjectionEventItem({
           <span>
             Balance <Money cents={owed} />
           </span>
+          {event.overdueSinceDate ? (
+            <span className="text-[var(--red)]">
+              Was due <DateLabel iso={event.overdueSinceDate} format="short" />
+            </span>
+          ) : null}
           {cover > 0 ? (
             <span className="text-[var(--phosphor)]">
               Scheduled <Money cents={cover} />
@@ -1229,6 +1251,8 @@ function ProjectionEventItem({
             <span className="text-[var(--red)]">
               Interest risk <Money cents={remaining} />
             </span>
+          ) : lateRisk ? (
+            <span className="text-[var(--amber)]">Covered late — interest may apply</span>
           ) : (
             <span className="text-[var(--phosphor)]">Covered — no interest</span>
           )}
