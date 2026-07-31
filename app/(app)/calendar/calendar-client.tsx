@@ -100,6 +100,8 @@ type CardPaymentPlan = {
   amountCents: number;
   originalAmountCents: number;
   paymentDueCents: number;
+  /** Issuer minimum still owed, when the underlying statement records one. */
+  paymentMinimumCents?: number;
   paymentBalanceCents?: number;
   dueLabel: string;
 };
@@ -1140,7 +1142,15 @@ export function CalendarClient({
     try {
       const originalDate = plan.relatedDate ?? plan.dueDate;
       const moved = plannedDate !== originalDate;
-      if (moved) {
+      if (amountCents === 0) {
+        // A $0 plan is a per-cycle SKIP: nothing leaves checking, the balance
+        // stays owed. It lives on the event's own date (moving a skip is
+        // meaningless) and clears any moved-payment rows.
+        await putCardPaymentOverride(plan.cardId, plan.dueDate, 0, null);
+        if (plan.relatedDate && plan.relatedDate !== plan.dueDate) {
+          await deleteCardPaymentOverride(plan.cardId, plan.relatedDate);
+        }
+      } else if (moved) {
         // Pay earlier than the issuer due date: leave a vacate marker on the due
         // date and put the real payment on the chosen day (linked back so it
         // still counts against that due date's balance).
@@ -1739,9 +1749,11 @@ export function CalendarClient({
                             : isPaydown
                               ? "planned payment"
                               : isCardPayment
-                                ? paymentDueCents > 0
-                                  ? "card payment"
-                                  : "card plan"
+                                ? ev.label.includes("— skipped")
+                                  ? "skipped — balance stays owed"
+                                  : paymentDueCents > 0
+                                    ? "card payment"
+                                    : "card plan"
                                 : ev.kind;
                     return (
                       <div
@@ -1795,6 +1807,14 @@ export function CalendarClient({
                                   <Money cents={owedCents} />
                                 </span>
                               </div>
+                              {(ev.paymentMinimumCents ?? 0) > 0 ? (
+                                <div className="flex items-center justify-between gap-3 text-[var(--text-3)]">
+                                  <span>Issuer minimum</span>
+                                  <span className="tabular text-[var(--text-1)]">
+                                    <Money cents={ev.paymentMinimumCents!} />
+                                  </span>
+                                </div>
+                              ) : null}
                               {coverCents > 0 ? (
                                 <div className="flex items-center justify-between gap-3 text-[var(--text-3)]">
                                   <span>Scheduled to pay</span>
@@ -1902,6 +1922,7 @@ export function CalendarClient({
                                     originalAmountCents:
                                       ev.originalAmountCents ?? paymentDueCents,
                                     paymentDueCents: isDueMarker ? uncoveredCents : paymentDueCents,
+                                    paymentMinimumCents: ev.paymentMinimumCents,
                                     paymentBalanceCents: ev.paymentBalanceCents,
                                     dueLabel,
                                   })
@@ -2072,6 +2093,14 @@ function CardPaymentPlanDialog({
                 <Money cents={plan.paymentDueCents} />
               </span>
             </div>
+            {(plan.paymentMinimumCents ?? 0) > 0 ? (
+              <div className="flex items-center justify-between gap-3">
+                <span>Issuer minimum payment</span>
+                <span className="tabular text-[var(--text-0)]">
+                  <Money cents={plan.paymentMinimumCents!} />
+                </span>
+              </div>
+            ) : null}
             {plan.paymentBalanceCents != null ? (
               <div className="flex items-center justify-between gap-3">
                 <span>Displayed card balance</span>
@@ -2113,6 +2142,17 @@ function CardPaymentPlanDialog({
               >
                 Pay amount due
               </Button>
+              {(plan.paymentMinimumCents ?? 0) > 0 ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setAmountCents(plan.paymentMinimumCents!)}
+                  disabled={saving}
+                >
+                  Pay minimum
+                </Button>
+              ) : null}
               {plan.paymentBalanceCents != null ? (
                 <Button
                   type="button"
@@ -2124,15 +2164,40 @@ function CardPaymentPlanDialog({
                   Pay card balance
                 </Button>
               ) : null}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setAmountCents(0)}
+                disabled={saving}
+              >
+                Skip this cycle
+              </Button>
             </div>
           </div>
 
-          {shortfallCents > 0 ? (
+          {amountCents === 0 ? (
+            <div className="flex gap-2 border border-[var(--amber)]/50 bg-[var(--amber)]/10 p-3 text-[11px] text-[var(--amber)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                Plans $0 for this cycle — nothing leaves checking. The balance stays owed and
+                interest may accrue until a payment is scheduled.
+              </span>
+            </div>
+          ) : shortfallCents > 0 ? (
             <div className="flex gap-2 border border-[var(--red)]/50 bg-[var(--red)]/10 p-3 text-[11px] text-[var(--red)]">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 This plan is short <Money cents={shortfallCents} /> of the full statement amount
                 needed to avoid interest.
+                {(plan.paymentMinimumCents ?? 0) > 0 &&
+                amountCents < plan.paymentMinimumCents! ? (
+                  <>
+                    {" "}
+                    It&apos;s also below the <Money cents={plan.paymentMinimumCents!} /> issuer
+                    minimum.
+                  </>
+                ) : null}
               </span>
             </div>
           ) : null}
@@ -2186,7 +2251,7 @@ function CardPaymentPlanDialog({
             <Button
               type="submit"
               variant="primary"
-              disabled={saving || amountCents <= 0 || !plannedDate || beforeToday}
+              disabled={saving || amountCents < 0 || !plannedDate || beforeToday}
             >
               {saving ? "Saving…" : "Save payment plan"}
             </Button>

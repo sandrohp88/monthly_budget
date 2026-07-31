@@ -117,6 +117,8 @@ type PaymentAdjustment = {
   amountCents: number;
   originalAmountCents: number;
   paymentDueCents?: number;
+  /** Issuer minimum still owed, when the underlying statement records one. */
+  paymentMinimumCents?: number;
   paymentBalanceCents?: number;
   promoSummaries?: PromoPaymentSummary[];
   /** Scheduled paydown rows keep reducing their target — preserve the link on save. */
@@ -308,6 +310,14 @@ export function ProjectionClient({
           if (adjustment.dueDate !== plannedDate) {
             await deleteOverride(adjustment, adjustment.dueDate);
           }
+        }
+      } else if (adjustment.targetType === "creditCardPayment" && amountCents === 0) {
+        // A $0 card plan is a per-cycle SKIP: nothing leaves checking, the
+        // balance stays owed. It lives on the event's own date (moving a skip
+        // is meaningless) and clears any moved-payment rows.
+        await putOverride(adjustment, adjustment.dueDate, 0, null);
+        if (adjustment.relatedDate && adjustment.relatedDate !== adjustment.dueDate) {
+          await deleteOverride(adjustment, adjustment.relatedDate);
         }
       } else if (movedCardPayment) {
         await putOverride(adjustment, originalDate, 0, `moved-to:${plannedDate}`);
@@ -1224,6 +1234,7 @@ function ProjectionEventItem({
                 amountCents: remaining,
                 originalAmountCents: owed,
                 paymentDueCents: remaining,
+                paymentMinimumCents: event.paymentMinimumCents,
                 paymentBalanceCents: event.paymentBalanceCents,
                 promoSummaries: promoSummariesByCard[event.sourceId!] ?? [],
               })
@@ -1454,6 +1465,12 @@ function PaymentAdjustmentDialog({
                 yet.
               </div>
             ) : null}
+            {adjustment.targetType === "creditCardPayment" && amountCents === 0 ? (
+              <div className="text-2xs text-[var(--amber)]">
+                Plans $0 for this cycle — nothing leaves checking; the balance stays owed and
+                interest may accrue until a payment is scheduled.
+              </div>
+            ) : null}
             {adjustment.targetType === "creditCardPayment" ? (
               <div className="flex flex-wrap gap-2 pt-1">
                 <Button
@@ -1465,6 +1482,17 @@ function PaymentAdjustmentDialog({
                 >
                   Pay due
                 </Button>
+                {(adjustment.paymentMinimumCents ?? 0) > 0 ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setAmountCents(adjustment.paymentMinimumCents!)}
+                    disabled={saving}
+                  >
+                    Pay minimum
+                  </Button>
+                ) : null}
                 {paymentBalanceCents != null ? (
                   <Button
                     type="button"
@@ -1476,6 +1504,15 @@ function PaymentAdjustmentDialog({
                     Pay balance
                   </Button>
                 ) : null}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setAmountCents(0)}
+                  disabled={saving}
+                >
+                  Skip this cycle
+                </Button>
               </div>
             ) : null}
           </div>
