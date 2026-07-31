@@ -83,6 +83,10 @@ function movedFromDate(notes: string | null | undefined): string | undefined {
   return match?.[1];
 }
 
+function isMovedToVacate(notes: string | null | undefined): boolean {
+  return /(?:^|\s)moved-to:\d{4}-\d{2}-\d{2}(?:\s|$)/.test(notes ?? "");
+}
+
 /**
  * Scheduled paydown marker: `pays-down:<dueDate>` in an override's notes means
  * "this planned payment reduces whatever the projection charges on that card
@@ -170,6 +174,11 @@ type DueMarker = {
    * scheduled toward it is late by definition.
    */
   overdueDueDates?: Set<string>;
+  /**
+   * Issuer minimum payment still owed for this cycle (recorded statements
+   * only) — the realistic floor when the full balance can't be paid.
+   */
+  minimumCents?: number;
 };
 
 export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCardPaymentsResult {
@@ -248,8 +257,12 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       continue;
     }
     // `moved-to:` rows are zero-amount vacate markers — the real payment is the
-    // matching `moved-from:` row. Skip anything with no cash.
-    if (o.amountCents <= 0) continue;
+    // matching `moved-from:` row. An explicit ZERO without a vacate note is
+    // different: it's a per-cycle SKIP ("I'm not paying this projected chunk
+    // this cycle") and must reach overrideByKey so it zeroes the promo/variable
+    // cash on its date. Nothing is ever mandatory — including payoff plans.
+    if (o.amountCents < 0) continue;
+    if (o.amountCents === 0 && isMovedToVacate(o.notes)) continue;
     nonPaydownOverrides.push({
       cardId: o.cardId,
       date: o.dueDate,
@@ -377,6 +390,11 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     return consumed;
   };
 
+  // An explicit $0 override on a chunk's date is a per-cycle SKIP: no cash
+  // leaves checking, but the event stays visible (zero-amount) so the calendar
+  // shows the skipped plan and the user can reset it. The balance stays owed —
+  // promo remaining only changes through reconciliation.
+  const skippedExtras = new Set<OneTimeExpense>();
   const promoExtras: OneTimeExpense[] = [];
   for (const chunk of promoChunksByCardDate.values()) {
     const key = overrideKey(chunk.cardId, chunk.dueDate);
@@ -385,40 +403,50 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     // payment that would double-count.
     const override = overrideByKey.get(key);
     if (override != null) claimedOverrideKeys.add(key);
+    const skipped = override === 0;
     const baseCents = override ?? chunk.amountCents;
     const consumed = consumeAtChunk(chunk.cardId, chunk.dueDate, baseCents);
     const amountCents = baseCents - consumed;
-    if (amountCents <= 0) continue;
-    promoExtras.push({
+    if (amountCents <= 0 && !skipped) continue;
+    const event: OneTimeExpense = {
       date: chunk.dueDate,
-      description: `${chunk.cardName} promo (${chunk.descriptions.join(", ")})`,
-      amountCents,
+      description: skipped
+        ? `${chunk.cardName} promo (${chunk.descriptions.join(", ")}) — skipped`
+        : `${chunk.cardName} promo (${chunk.descriptions.join(", ")})`,
+      amountCents: Math.max(0, amountCents),
       sourceId: chunk.cardId,
       sourceType: "creditCardPayment",
       originalAmountCents: chunk.amountCents,
-      paymentDueCents: Math.max(0, chunk.amountCents - consumed),
+      paymentDueCents: skipped ? 0 : Math.max(0, chunk.amountCents - consumed),
       paymentBalanceCents: chunk.balanceCents,
-    });
+    };
+    if (skipped) skippedExtras.add(event);
+    promoExtras.push(event);
   }
   const variableBillExtras: OneTimeExpense[] = [];
   for (const group of variableBillChargeGroups.values()) {
     const key = overrideKey(group.cardId, group.dueDate);
     const override = overrideByKey.get(key);
     if (override != null) claimedOverrideKeys.add(key);
+    const skipped = override === 0;
     const baseCents = override ?? group.amountCents;
     const consumed = consumeAtChunk(group.cardId, group.dueDate, baseCents);
     const amountCents = baseCents - consumed;
-    if (amountCents <= 0) continue;
-    variableBillExtras.push({
+    if (amountCents <= 0 && !skipped) continue;
+    const event: OneTimeExpense = {
       date: group.dueDate,
-      description: `${group.cardName} variable spend (${group.names.join(", ")})`,
-      amountCents,
+      description: skipped
+        ? `${group.cardName} variable spend (${group.names.join(", ")}) — skipped`
+        : `${group.cardName} variable spend (${group.names.join(", ")})`,
+      amountCents: Math.max(0, amountCents),
       sourceId: group.cardId,
       sourceType: "creditCardPayment",
       originalAmountCents: group.amountCents,
-      paymentDueCents: amountCents,
+      paymentDueCents: skipped ? 0 : amountCents,
       paymentBalanceCents: displayBalanceForCard(group.cardId, group.amountCents),
-    });
+    };
+    if (skipped) skippedExtras.add(event);
+    variableBillExtras.push(event);
   }
 
   // Overrides not claimed by a promo/variable chunk are scheduled cash payments:
@@ -468,18 +496,29 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   // surfaces on TODAY (same convention as expired promos) so it stays in view
   // and payments can still be aimed at it. Multiple overdue statements on one
   // card collapse into a single marker (summed owed, all original due dates).
-  const overdueByCard = new Map<string, { cardName: string; owed: number; dueDates: Set<string> }>();
+  const overdueByCard = new Map<
+    string,
+    { cardName: string; owed: number; minimum: number; dueDates: Set<string> }
+  >();
   for (const s of statements) {
     const isbDue = interestSavingCashDueCents(s, promosByCard.get(s.cardId) ?? []);
     const owed = Math.max(0, isbDue - (s.paidAmountCents ?? 0));
     if (owed <= 0) continue;
+    // The issuer minimum still outstanding — the realistic floor when the full
+    // balance can't be paid. Partial payments count toward it first.
+    const minimum = Math.min(
+      Math.max(0, (s.minimumPaymentCents ?? 0) - (s.paidAmountCents ?? 0)),
+      owed,
+    );
     if (s.dueDate < today) {
       const agg = overdueByCard.get(s.cardId) ?? {
         cardName: s.cardName,
         owed: 0,
+        minimum: 0,
         dueDates: new Set<string>(),
       };
       agg.owed += owed;
+      agg.minimum += minimum;
       agg.dueDates.add(s.dueDate);
       overdueByCard.set(s.cardId, agg);
       continue;
@@ -491,6 +530,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       owedCents: owed,
       balanceCents: displayBalanceForCard(s.cardId, owed),
       estimated: false,
+      minimumCents: minimum,
     });
   }
   for (const [cardId, agg] of overdueByCard) {
@@ -504,6 +544,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
         displayBalanceForCard(cardId, existing.owedCents),
       );
       existing.overdueDueDates = agg.dueDates;
+      existing.minimumCents = (existing.minimumCents ?? 0) + agg.minimum;
     } else {
       pushMarker({
         cardId,
@@ -513,6 +554,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
         balanceCents: displayBalanceForCard(cardId, agg.owed),
         estimated: false,
         overdueDueDates: agg.dueDates,
+        minimumCents: agg.minimum,
       });
     }
   }
@@ -736,7 +778,8 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       prepayPoolByCard.set(e.sourceId!, pool - credit);
     }
   }
-  const promoCashExtras = promoExtras.filter((e) => e.amountCents > 0);
+  // Skipped chunks carry no cash but must stay visible (resettable).
+  const promoCashExtras = promoExtras.filter((e) => e.amountCents > 0 || skippedExtras.has(e));
 
   const markerExtras: OneTimeExpense[] = markers.map((m) => {
     const cover = Math.min(coverByMarker.get(m) ?? 0, m.owedCents);
@@ -757,6 +800,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       // at the passed date (directed late cover) instead of at today.
       relatedDate: overdueSince,
       paymentDueCents: m.owedCents,
+      paymentMinimumCents: m.minimumCents,
       paymentBalanceCents: m.balanceCents,
       dueMarker: true,
       scheduledCoverCents: cover,
@@ -770,7 +814,9 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   const plannedCardExtras: OneTimeExpense[] = [];
   for (const s of scheduledPayments) {
     const card = cardById.get(s.cardId);
-    if (!card) continue;
+    // A $0 row that wasn't claimed by a chunk (a skip saved on a marker date)
+    // is inert — no cash, nothing to render.
+    if (!card || s.amountCents <= 0) continue;
     plannedCardExtras.push({
       date: s.date,
       description: `${card.name} planned payment`,

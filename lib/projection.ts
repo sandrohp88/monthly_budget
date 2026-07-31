@@ -87,6 +87,8 @@ export type OneTimeExpense = {
   originalAmountCents?: number;
   relatedDate?: string;
   paymentDueCents?: number;
+  /** For a statement due marker: the issuer minimum payment still owed. */
+  paymentMinimumCents?: number;
   paymentBalanceCents?: number;
   isPaid?: boolean;
   /** See ProjectionEvent.dueMarker — a zero-cash credit-card due-date marker. */
@@ -138,6 +140,8 @@ export type ProjectionEvent = {
   originalAmountCents?: number;
   relatedDate?: string;
   paymentDueCents?: number;
+  /** For a statement due marker: the issuer minimum payment still owed. */
+  paymentMinimumCents?: number;
   paymentBalanceCents?: number;
   isPaid?: boolean;
   /** Set when the underlying bill/expense is charged to a credit card — the
@@ -361,6 +365,7 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
       originalAmountCents: e.originalAmountCents,
       relatedDate: e.relatedDate,
       paymentDueCents: e.paymentDueCents,
+      paymentMinimumCents: e.paymentMinimumCents,
       paymentBalanceCents: e.paymentBalanceCents,
       isPaid: e.isPaid,
       chargedToCardName: e.chargedToCardName,

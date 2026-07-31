@@ -949,6 +949,18 @@ apply"), never all-clear green, and drops out of the uncovered-dues alert
 planner. This only changes Finance_OS cash-flow projections — it never submits
 a payment to PayPal or another issuer.
 
+**Per-cycle skips ($0 plans) and minimums.** Promo chunks and variable-spend
+charges are projected cash but still never mandatory: an explicit zero-amount
+override with NO `moved-to:` note is a per-cycle SKIP — the engine zeroes that
+date's chunk cash and emits the event as a visible zero-cash "— skipped" row
+(resettable via its dialog). `moved-to:` vacate rows keep their meaning; don't
+conflate the two (`isMovedToVacate` in lib/card-payments.ts is the gate). Both
+payment dialogs accept $0 ("Skip this cycle") and always write the skip on the
+event's OWN date. Statement markers also carry `paymentMinimumCents` (issuer
+minimum still owed, partial payments count toward it first; overdue aggregates
+sum it) — surfaced as a "Pay minimum" quick amount, the realistic floor when
+the full balance can't be paid.
+
 **Overdue statements.** An unpaid statement whose due date has passed does NOT
 disappear from the projection: `projectCardPayments` surfaces it as an OVERDUE
 due marker on today (same convention as expired promos), aggregated per card

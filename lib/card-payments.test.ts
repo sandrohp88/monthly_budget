@@ -678,6 +678,116 @@ describe("projectCardPayments — overdue statements & late cover", () => {
   });
 });
 
+describe("projectCardPayments — $0 skip overrides & minimum payment", () => {
+  // EMPTY.today = 2026-05-04. card() has a 500_00 promo helper available.
+
+  it("an explicit $0 override skips a promo chunk's cash for that cycle", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      promos: [promo({ monthlyPaymentCents: 50_00 })],
+      cardPaymentOverrides: [override({ dueDate: "2026-06-10", amountCents: 0, notes: null })],
+    });
+    // The June chunk carries no cash but stays visible (resettable).
+    const june = cashOf(r).find((e) => e.date === "2026-06-10");
+    expect(june).toMatchObject({ amountCents: 0, paymentDueCents: 0 });
+    expect(june?.description).toContain("— skipped");
+    expect(june?.originalAmountCents).toBe(50_00);
+    // Later cycles are untouched — skipping one cycle isn't skipping the plan.
+    const july = cashOf(r).find((e) => e.date === "2026-07-10");
+    expect(july?.amountCents).toBe(50_00);
+  });
+
+  it("a moved-to vacate row is NOT a skip — vacate mechanics unchanged", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      promos: [promo({ monthlyPaymentCents: 50_00 })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-06-10", amountCents: 0, notes: "moved-to:2026-06-01" }),
+        override({ id: "o2", dueDate: "2026-06-01", amountCents: 50_00, notes: "moved-from:2026-06-10" }),
+      ],
+    });
+    // The moved payment debits its own date; the chunk is absorbed via the
+    // prepay pool, not left double-counted; and no "skipped" row appears.
+    const total = cashOf(r).reduce((s, e) => s + e.amountCents, 0);
+    expect(total).toBe(500_00); // full promo remaining across the window, not 550
+    expect(cashOf(r).some((e) => e.description.includes("— skipped"))).toBe(false);
+  });
+
+  it("a $0 override on a variable-spend charge skips that cycle's cash", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      variableBills: [
+        {
+          id: "vb1",
+          userId: "u1",
+          name: "Groceries",
+          category: "Food",
+          amountCents: 400_00,
+          intervalMonths: 1,
+          anchorDate: "2026-05-05",
+          notes: null,
+          isActive: true,
+          createdAt: 0,
+          updatedAt: 0,
+          cardIds: ["c1"],
+        },
+      ],
+      cardPaymentOverrides: [override({ dueDate: "2026-06-10", amountCents: 0, notes: null })],
+    });
+    const june = cashOf(r).find((e) => e.date === "2026-06-10");
+    expect(june).toMatchObject({ amountCents: 0, paymentDueCents: 0 });
+    expect(june?.description).toContain("— skipped");
+  });
+
+  it("a statement marker carries the issuer minimum still owed", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ minimumPaymentCents: 35_00 })],
+    });
+    const m = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(m?.paymentMinimumCents).toBe(35_00);
+  });
+
+  it("partial payments reduce the outstanding minimum first", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [stmt({ minimumPaymentCents: 35_00, paidAmountCents: 20_00 })],
+    });
+    const m = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(m?.paymentMinimumCents).toBe(15_00);
+  });
+
+  it("an overdue aggregate sums the outstanding minimums", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      statements: [
+        stmt({
+          id: "s1",
+          statementDate: "2026-02-15",
+          dueDate: "2026-03-10",
+          statementBalanceCents: 100_00,
+          minimumPaymentCents: 25_00,
+        }),
+        stmt({
+          id: "s2",
+          statementDate: "2026-03-15",
+          dueDate: "2026-04-10",
+          statementBalanceCents: 40_00,
+          minimumPaymentCents: 10_00,
+        }),
+      ],
+    });
+    const m = markersOf(r).find((e) => e.overdueSinceDate);
+    expect(m?.paymentMinimumCents).toBe(35_00);
+  });
+});
+
 describe("projectCardPayments — over-sized paydown credits the promo balance", () => {
   const cardBase = card({ currentBalanceCents: null, dueDay: 10 });
   const promo1 = promo({
