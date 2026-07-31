@@ -103,6 +103,8 @@ type CardPaymentPlan = {
   /** Issuer minimum still owed, when the underlying statement records one. */
   paymentMinimumCents?: number;
   paymentBalanceCents?: number;
+  /** True when opened from a zero-cash due marker — skips don't apply there. */
+  isDueMarker?: boolean;
   dueLabel: string;
 };
 
@@ -780,6 +782,9 @@ export function CalendarClient({
       if (ev.sourceType !== "creditCardPayment" || !ev.sourceId) return false;
       // Due markers are informational, not payments — nothing to reschedule.
       if (ev.dueMarker) return false;
+      // A skipped cycle has an override row but no cash — moving it would
+      // delete the skip (reviving the chunk) and plant a stray $0 elsewhere.
+      if (ev.skipped) return false;
       if (ev.isPaid || ev.chargedToCardName || iso < today) return false;
       // A real due (has cash), a scheduled paydown, or a plain planned override.
       // A fully-covered $0 slot with no plan of its own is not draggable.
@@ -1144,11 +1149,12 @@ export function CalendarClient({
       const moved = plannedDate !== originalDate;
       if (amountCents === 0) {
         // A $0 plan is a per-cycle SKIP: nothing leaves checking, the balance
-        // stays owed. It lives on the event's own date (moving a skip is
-        // meaningless) and clears any moved-payment rows.
-        await putCardPaymentOverride(plan.cardId, plan.dueDate, 0, null);
-        if (plan.relatedDate && plan.relatedDate !== plan.dueDate) {
-          await deleteCardPaymentOverride(plan.cardId, plan.relatedDate);
+        // stays owed. It lives on the chunk's own date — for a moved payment
+        // that's originalDate, not the moved row's date — and clears any
+        // moved-payment rows so the vacated cycle can't silently revive.
+        await putCardPaymentOverride(plan.cardId, originalDate, 0, null);
+        if (plan.dueDate !== originalDate) {
+          await deleteCardPaymentOverride(plan.cardId, plan.dueDate);
         }
       } else if (moved) {
         // Pay earlier than the issuer due date: leave a vacate marker on the due
@@ -1749,7 +1755,7 @@ export function CalendarClient({
                             : isPaydown
                               ? "planned payment"
                               : isCardPayment
-                                ? ev.label.includes("— skipped")
+                                ? ev.skipped
                                   ? "skipped — balance stays owed"
                                   : paymentDueCents > 0
                                     ? "card payment"
@@ -1924,6 +1930,7 @@ export function CalendarClient({
                                     paymentDueCents: isDueMarker ? uncoveredCents : paymentDueCents,
                                     paymentMinimumCents: ev.paymentMinimumCents,
                                     paymentBalanceCents: ev.paymentBalanceCents,
+                                    isDueMarker,
                                     dueLabel,
                                   })
                                 }
@@ -1935,6 +1942,7 @@ export function CalendarClient({
                           ) : null}
                           {isCardPayment &&
                           !isDueMarker &&
+                          !ev.skipped &&
                           !ev.isPaid &&
                           !isPastDay &&
                           isScheduledPayment(ev, selectedDate) ? (
@@ -2054,7 +2062,18 @@ function CardPaymentPlanDialog({
   onSave: (plan: CardPaymentPlan, amountCents: number, plannedDate: string) => Promise<void>;
   onReset: (plan: CardPaymentPlan) => Promise<void>;
 }) {
-  const [amountCents, setAmountCents] = React.useState(plan.amountCents);
+  const [amountCents, setAmountCentsRaw] = React.useState(plan.amountCents);
+  // A $0 save is destructive (per-cycle skip), and MoneyInput reports a cleared
+  // field as 0 — so $0 only saves when explicitly armed by "Skip this cycle".
+  const [skipArmed, setSkipArmed] = React.useState(false);
+  const setAmountCents = (cents: number) => {
+    setAmountCentsRaw(cents);
+    setSkipArmed(false);
+  };
+  const armSkip = () => {
+    setAmountCentsRaw(0);
+    setSkipArmed(true);
+  };
   const [plannedDate, setPlannedDate] = React.useState(plan.dueDate);
   const originalDueDate = plan.relatedDate ?? plan.dueDate;
   const shortfallCents = Math.max(0, plan.paymentDueCents - amountCents);
@@ -2164,19 +2183,21 @@ function CardPaymentPlanDialog({
                   Pay card balance
                 </Button>
               ) : null}
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setAmountCents(0)}
-                disabled={saving}
-              >
-                Skip this cycle
-              </Button>
+              {!plan.isDueMarker ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={armSkip}
+                  disabled={saving}
+                >
+                  Skip this cycle
+                </Button>
+              ) : null}
             </div>
           </div>
 
-          {amountCents === 0 ? (
+          {amountCents === 0 && skipArmed ? (
             <div className="flex gap-2 border border-[var(--amber)]/50 bg-[var(--amber)]/10 p-3 text-[11px] text-[var(--amber)]">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
@@ -2251,7 +2272,13 @@ function CardPaymentPlanDialog({
             <Button
               type="submit"
               variant="primary"
-              disabled={saving || amountCents < 0 || !plannedDate || beforeToday}
+              disabled={
+                saving ||
+                amountCents < 0 ||
+                (amountCents === 0 && (!skipArmed || plan.isDueMarker)) ||
+                !plannedDate ||
+                beforeToday
+              }
             >
               {saving ? "Saving…" : "Save payment plan"}
             </Button>

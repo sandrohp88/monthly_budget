@@ -953,13 +953,20 @@ a payment to PayPal or another issuer.
 charges are projected cash but still never mandatory: an explicit zero-amount
 override with NO `moved-to:` note is a per-cycle SKIP — the engine zeroes that
 date's chunk cash and emits the event as a visible zero-cash "— skipped" row
-(resettable via its dialog). `moved-to:` vacate rows keep their meaning; don't
-conflate the two (`isMovedToVacate` in lib/card-payments.ts is the gate). Both
-payment dialogs accept $0 ("Skip this cycle") and always write the skip on the
-event's OWN date. Statement markers also carry `paymentMinimumCents` (issuer
-minimum still owed, partial payments count toward it first; overdue aggregates
-sum it) — surfaced as a "Pay minimum" quick amount, the realistic floor when
-the full balance can't be paid.
+carrying `skipped: true` (the structured flag the UI keys on; the label suffix
+is display only). `moved-to:` vacate rows keep their meaning; don't conflate
+the two (`isMovedToVacate` in lib/card-payments.ts is the gate). Both payment
+dialogs offer "Skip this cycle" on chunk-backed rows only — never on due
+markers or scheduled paydowns, where the engine has no skip semantics — and a
+$0 save must be armed by that button (a cleared amount field alone won't
+submit). The skip is always written on the chunk's ORIGINAL date: skipping a
+previously-moved payment writes $0 on the vacated cycle date and deletes the
+moved-from row. Skipped rows aren't draggable or trash-deletable (both would
+silently un-skip); reset via the dialog restores the cycle. Statement markers
+also carry `paymentMinimumCents` (issuer minimum still owed, partial payments
+count toward it first; overdue aggregates sum it) — surfaced as a "Pay
+minimum" quick amount, the realistic floor when the full balance can't be
+paid.
 
 **Overdue statements.** An unpaid statement whose due date has passed does NOT
 disappear from the projection: `projectCardPayments` surfaces it as an OVERDUE

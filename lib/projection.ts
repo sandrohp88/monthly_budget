@@ -90,6 +90,8 @@ export type OneTimeExpense = {
   /** For a statement due marker: the issuer minimum payment still owed. */
   paymentMinimumCents?: number;
   paymentBalanceCents?: number;
+  /** Per-cycle SKIP: an explicit $0 plan — zero cash, balance stays owed. */
+  skipped?: boolean;
   isPaid?: boolean;
   /** See ProjectionEvent.dueMarker — a zero-cash credit-card due-date marker. */
   dueMarker?: boolean;
@@ -143,6 +145,8 @@ export type ProjectionEvent = {
   /** For a statement due marker: the issuer minimum payment still owed. */
   paymentMinimumCents?: number;
   paymentBalanceCents?: number;
+  /** Per-cycle SKIP: an explicit $0 plan — zero cash, balance stays owed. */
+  skipped?: boolean;
   isPaid?: boolean;
   /** Set when the underlying bill/expense is charged to a credit card — the
    *  event is a zero-cash marker (the card's payment carries the cash). */
@@ -367,6 +371,7 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
       paymentDueCents: e.paymentDueCents,
       paymentMinimumCents: e.paymentMinimumCents,
       paymentBalanceCents: e.paymentBalanceCents,
+      skipped: e.skipped,
       isPaid: e.isPaid,
       chargedToCardName: e.chargedToCardName,
       paydownTargetDate: e.paydownTargetDate,

@@ -78,13 +78,18 @@ export type ProjectCardPaymentsResult = {
 
 const overrideKey = (cardId: string, dueDate: string) => `${cardId}:${dueDate}`;
 
-function movedFromDate(notes: string | null | undefined): string | undefined {
-  const match = notes?.match(/(?:^|\s)moved-from:(\d{4}-\d{2}-\d{2})(?:\s|$)/);
+/** One grammar for all note markers: `<tag>:<iso-date>` on its own word boundary. */
+function noteTagDate(notes: string | null | undefined, tag: string): string | undefined {
+  const match = notes?.match(new RegExp(`(?:^|\\s)${tag}:(\\d{4}-\\d{2}-\\d{2})(?:\\s|$)`));
   return match?.[1];
 }
 
+function movedFromDate(notes: string | null | undefined): string | undefined {
+  return noteTagDate(notes, "moved-from");
+}
+
 function isMovedToVacate(notes: string | null | undefined): boolean {
-  return /(?:^|\s)moved-to:\d{4}-\d{2}-\d{2}(?:\s|$)/.test(notes ?? "");
+  return noteTagDate(notes, "moved-to") != null;
 }
 
 /**
@@ -94,8 +99,7 @@ function isMovedToVacate(notes: string | null | undefined): boolean {
  * calendar's PLAN CARD PAYMENT flow.
  */
 export function paydownTargetDate(notes: string | null | undefined): string | undefined {
-  const match = notes?.match(/(?:^|\s)pays-down:(\d{4}-\d{2}-\d{2})(?:\s|$)/);
-  return match?.[1];
+  return noteTagDate(notes, "pays-down");
 }
 
 export type CardPaymentMoveInput = {
@@ -363,6 +367,18 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   const promoPaydownRemainingByKey = new Map<string, number>();
   const paydownEntriesByTarget = new Map<string, Array<{ date: string; amountCents: number }>>();
   const prepayPoolByCard = new Map<string, number>();
+  // Directed slices of the pool: moved-payment cash aimed back at the chunk
+  // date it vacated. Applied before the soonest-first sweep.
+  const directedPrepayByCard = new Map<string, Array<{ targetDate: string; amount: number }>>();
+  const addPrepay = (cardId: string, amount: number, targetDate?: string) => {
+    if (amount <= 0) return;
+    prepayPoolByCard.set(cardId, (prepayPoolByCard.get(cardId) ?? 0) + amount);
+    if (targetDate) {
+      const list = directedPrepayByCard.get(cardId) ?? [];
+      list.push({ targetDate, amount });
+      directedPrepayByCard.set(cardId, list);
+    }
+  };
   for (const p of paydowns) {
     if (p.date < today || p.amountCents <= 0) continue;
     const key = overrideKey(p.cardId, p.targetDate);
@@ -391,10 +407,9 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   };
 
   // An explicit $0 override on a chunk's date is a per-cycle SKIP: no cash
-  // leaves checking, but the event stays visible (zero-amount) so the calendar
-  // shows the skipped plan and the user can reset it. The balance stays owed —
-  // promo remaining only changes through reconciliation.
-  const skippedExtras = new Set<OneTimeExpense>();
+  // leaves checking, but the event stays visible (zero-amount, `skipped`) so
+  // the calendar shows the skipped plan and the user can reset it. The balance
+  // stays owed — promo remaining only changes through reconciliation.
   const promoExtras: OneTimeExpense[] = [];
   for (const chunk of promoChunksByCardDate.values()) {
     const key = overrideKey(chunk.cardId, chunk.dueDate);
@@ -408,20 +423,19 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     const consumed = consumeAtChunk(chunk.cardId, chunk.dueDate, baseCents);
     const amountCents = baseCents - consumed;
     if (amountCents <= 0 && !skipped) continue;
-    const event: OneTimeExpense = {
+    promoExtras.push({
       date: chunk.dueDate,
       description: skipped
         ? `${chunk.cardName} promo (${chunk.descriptions.join(", ")}) — skipped`
         : `${chunk.cardName} promo (${chunk.descriptions.join(", ")})`,
-      amountCents: Math.max(0, amountCents),
+      amountCents,
       sourceId: chunk.cardId,
       sourceType: "creditCardPayment",
       originalAmountCents: chunk.amountCents,
       paymentDueCents: skipped ? 0 : Math.max(0, chunk.amountCents - consumed),
       paymentBalanceCents: chunk.balanceCents,
-    };
-    if (skipped) skippedExtras.add(event);
-    promoExtras.push(event);
+      skipped: skipped || undefined,
+    });
   }
   const variableBillExtras: OneTimeExpense[] = [];
   for (const group of variableBillChargeGroups.values()) {
@@ -433,20 +447,19 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     const consumed = consumeAtChunk(group.cardId, group.dueDate, baseCents);
     const amountCents = baseCents - consumed;
     if (amountCents <= 0 && !skipped) continue;
-    const event: OneTimeExpense = {
+    variableBillExtras.push({
       date: group.dueDate,
       description: skipped
         ? `${group.cardName} variable spend (${group.names.join(", ")}) — skipped`
         : `${group.cardName} variable spend (${group.names.join(", ")})`,
-      amountCents: Math.max(0, amountCents),
+      amountCents,
       sourceId: group.cardId,
       sourceType: "creditCardPayment",
       originalAmountCents: group.amountCents,
-      paymentDueCents: skipped ? 0 : amountCents,
+      paymentDueCents: amountCents,
       paymentBalanceCents: displayBalanceForCard(group.cardId, group.amountCents),
-    };
-    if (skipped) skippedExtras.add(event);
-    variableBillExtras.push(event);
+      skipped: skipped || undefined,
+    });
   }
 
   // Overrides not claimed by a promo/variable chunk are scheduled cash payments:
@@ -468,7 +481,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   for (const [key, remaining] of promoPaydownRemainingByKey) {
     if (remaining <= 0) continue;
     const cardId = key.slice(0, key.lastIndexOf(":"));
-    prepayPoolByCard.set(cardId, (prepayPoolByCard.get(cardId) ?? 0) + remaining);
+    addPrepay(cardId, remaining);
   }
 
   // ── Due-date markers (zero cash) ──────────────────────────────────────────
@@ -624,12 +637,19 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   );
   const paymentsByCard = new Map<
     string,
-    Array<{ date: string; remaining: number; targetDueDate: string }>
+    // `directTarget` is set on MOVED payments only: leftover cash from a
+    // moved-from row must cancel the chunk it vacated, not the card's soonest.
+    Array<{ date: string; remaining: number; targetDueDate: string; directTarget?: string }>
   >();
   for (const s of scheduledPayments) {
     if (s.amountCents <= 0) continue;
     const list = paymentsByCard.get(s.cardId) ?? [];
-    list.push({ date: s.date, remaining: s.amountCents, targetDueDate: s.targetDueDate });
+    list.push({
+      date: s.date,
+      remaining: s.amountCents,
+      targetDueDate: s.targetDueDate,
+      directTarget: s.relatedDate,
+    });
     paymentsByCard.set(s.cardId, list);
   }
 
@@ -743,43 +763,54 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       }
       // Plain cash beyond what the estimate can absorb credits promo chunks.
       const plainLeftover = pool.reduce((s, p) => s + Math.max(0, p.remaining), 0);
-      prepayPoolByCard.set(
-        cardId,
-        (prepayPoolByCard.get(cardId) ?? 0) + Math.max(0, plainLeftover - estBalance),
-      );
+      addPrepay(cardId, Math.max(0, plainLeftover - estBalance));
     } else {
-      const leftover = pool.reduce((s, p) => s + Math.max(0, p.remaining), 0);
-      if (leftover > 0) prepayPoolByCard.set(cardId, (prepayPoolByCard.get(cardId) ?? 0) + leftover);
+      for (const p of pool) addPrepay(cardId, p.remaining, p.directTarget);
     }
   }
   // Cards with scheduled payments but no markers at all: their cash credits promo.
   for (const [cardId, pool] of paymentsByCard) {
     if (markersByCard.has(cardId)) continue;
-    const leftover = pool.reduce((s, p) => s + Math.max(0, p.remaining), 0);
-    if (leftover > 0) prepayPoolByCard.set(cardId, (prepayPoolByCard.get(cardId) ?? 0) + leftover);
+    for (const p of pool) addPrepay(cardId, p.remaining, p.directTarget);
   }
 
-  // Apply the promo prepayment pool (paydown excess + scheduled surplus) to each
-  // card's promo chunks, soonest first. Fully-covered chunks drop out.
+  // Apply the prepayment pool (paydown excess + scheduled surplus) to each
+  // card's promo/variable chunks: moved-payment cash cancels the chunk it
+  // vacated first, then whatever remains sweeps soonest-first. Fully-covered
+  // chunks drop out.
   if (prepayPoolByCard.size > 0) {
-    const promoByCard = promoExtras
+    const creditable = [...promoExtras, ...variableBillExtras]
       .filter((e) => e.sourceId != null && prepayPoolByCard.has(e.sourceId))
       .sort((a, b) =>
         a.sourceId === b.sourceId
           ? a.date.localeCompare(b.date)
           : a.sourceId!.localeCompare(b.sourceId!),
       );
-    for (const e of promoByCard) {
+    const applyCredit = (e: OneTimeExpense, cents: number) => {
+      e.amountCents -= cents;
+      e.paymentDueCents = Math.max(0, (e.paymentDueCents ?? 0) - cents);
+      prepayPoolByCard.set(e.sourceId!, (prepayPoolByCard.get(e.sourceId!) ?? 0) - cents);
+    };
+    for (const [cardId, targets] of directedPrepayByCard) {
+      for (const t of targets) {
+        const pool = prepayPoolByCard.get(cardId) ?? 0;
+        if (pool <= 0) break;
+        const target = creditable.find(
+          (e) => e.sourceId === cardId && e.date === t.targetDate && e.amountCents > 0,
+        );
+        if (!target) continue;
+        applyCredit(target, Math.min(pool, t.amount, target.amountCents));
+      }
+    }
+    for (const e of creditable) {
       const pool = prepayPoolByCard.get(e.sourceId!) ?? 0;
       if (pool <= 0 || e.amountCents <= 0) continue;
-      const credit = Math.min(pool, e.amountCents);
-      e.amountCents -= credit;
-      e.paymentDueCents = Math.max(0, (e.paymentDueCents ?? 0) - credit);
-      prepayPoolByCard.set(e.sourceId!, pool - credit);
+      applyCredit(e, Math.min(pool, e.amountCents));
     }
   }
   // Skipped chunks carry no cash but must stay visible (resettable).
-  const promoCashExtras = promoExtras.filter((e) => e.amountCents > 0 || skippedExtras.has(e));
+  const promoCashExtras = promoExtras.filter((e) => e.amountCents > 0 || e.skipped);
+  const variableCashExtras = variableBillExtras.filter((e) => e.amountCents > 0 || e.skipped);
 
   const markerExtras: OneTimeExpense[] = markers.map((m) => {
     const cover = Math.min(coverByMarker.get(m) ?? 0, m.owedCents);
@@ -859,10 +890,10 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   // paid" payment are different things even when they land on the same day.
   const kindByEvent = new Map<OneTimeExpense, string>();
   for (const e of promoCashExtras) kindByEvent.set(e, "promo");
-  for (const e of variableBillExtras) kindByEvent.set(e, "variable");
+  for (const e of variableCashExtras) kindByEvent.set(e, "variable");
   for (const e of plannedCardExtras) kindByEvent.set(e, "planned");
   const cashExtras = mergeByDueDate(
-    [...promoCashExtras, ...variableBillExtras, ...plannedCardExtras],
+    [...promoCashExtras, ...variableCashExtras, ...plannedCardExtras],
     kindByEvent,
     cardById,
   );
@@ -908,9 +939,13 @@ function mergeByDueDate(
     }
     const cardName = (first.sourceId ? cardById.get(first.sourceId)?.name : undefined) ?? "Card";
     const kinds = [...new Set(group.map((e) => kindByEvent.get(e) ?? "payment"))];
+    // A merged row is a skip only when every member is one (a single $0
+    // override zeroes all chunks sharing its date); skip + real cash is cash.
+    const skipped = group.every((e) => e.skipped);
     out.push({
       ...first,
-      description: `${cardName} payment (${kinds.join(" + ")})`,
+      description: `${cardName} payment (${kinds.join(" + ")})${skipped ? " — skipped" : ""}`,
+      skipped: skipped || undefined,
       amountCents: group.reduce((s, e) => s + e.amountCents, 0),
       originalAmountCents: group.reduce((s, e) => s + (e.originalAmountCents ?? 0), 0),
       paymentDueCents: group.reduce((s, e) => s + (e.paymentDueCents ?? 0), 0),

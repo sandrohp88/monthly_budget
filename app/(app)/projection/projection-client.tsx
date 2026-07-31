@@ -120,6 +120,8 @@ type PaymentAdjustment = {
   /** Issuer minimum still owed, when the underlying statement records one. */
   paymentMinimumCents?: number;
   paymentBalanceCents?: number;
+  /** True when opened from a zero-cash due marker — skips don't apply there. */
+  dueMarker?: boolean;
   promoSummaries?: PromoPaymentSummary[];
   /** Scheduled paydown rows keep reducing their target — preserve the link on save. */
   paydownTargetDate?: string;
@@ -311,13 +313,18 @@ export function ProjectionClient({
             await deleteOverride(adjustment, adjustment.dueDate);
           }
         }
-      } else if (adjustment.targetType === "creditCardPayment" && amountCents === 0) {
+      } else if (
+        adjustment.targetType === "creditCardPayment" &&
+        amountCents === 0 &&
+        !adjustment.dueMarker
+      ) {
         // A $0 card plan is a per-cycle SKIP: nothing leaves checking, the
-        // balance stays owed. It lives on the event's own date (moving a skip
-        // is meaningless) and clears any moved-payment rows.
-        await putOverride(adjustment, adjustment.dueDate, 0, null);
-        if (adjustment.relatedDate && adjustment.relatedDate !== adjustment.dueDate) {
-          await deleteOverride(adjustment, adjustment.relatedDate);
+        // balance stays owed. It lives on the chunk's own date — for a moved
+        // payment that's originalDate, not the moved row's date — and clears
+        // any moved-payment rows so the vacated cycle can't silently revive.
+        await putOverride(adjustment, originalDate, 0, null);
+        if (adjustment.dueDate !== originalDate) {
+          await deleteOverride(adjustment, adjustment.dueDate);
         }
       } else if (movedCardPayment) {
         await putOverride(adjustment, originalDate, 0, `moved-to:${plannedDate}`);
@@ -1236,6 +1243,7 @@ function ProjectionEventItem({
                 paymentDueCents: remaining,
                 paymentMinimumCents: event.paymentMinimumCents,
                 paymentBalanceCents: event.paymentBalanceCents,
+                dueMarker: true,
                 promoSummaries: promoSummariesByCard[event.sourceId!] ?? [],
               })
             }
@@ -1367,7 +1375,18 @@ function PaymentAdjustmentDialog({
   ) => Promise<void>;
   onReset: (adjustment: PaymentAdjustment) => Promise<void>;
 }) {
-  const [amountCents, setAmountCents] = React.useState(adjustment.amountCents);
+  const [amountCents, setAmountCentsRaw] = React.useState(adjustment.amountCents);
+  // A $0 save is destructive (per-cycle skip), and MoneyInput reports a cleared
+  // field as 0 — so $0 only saves when explicitly armed by "Skip this cycle".
+  const [skipArmed, setSkipArmed] = React.useState(false);
+  const setAmountCents = (cents: number) => {
+    setAmountCentsRaw(cents);
+    setSkipArmed(false);
+  };
+  const armSkip = () => {
+    setAmountCentsRaw(0);
+    setSkipArmed(true);
+  };
   const [plannedDate, setPlannedDate] = React.useState(adjustment.dueDate);
   const adjusted = amountCents !== adjustment.originalAmountCents;
   const dateAdjusted = Boolean(adjustment.relatedDate) || plannedDate !== adjustment.dueDate;
@@ -1386,7 +1405,8 @@ function PaymentAdjustmentDialog({
   );
 
   React.useEffect(() => {
-    setAmountCents(adjustment.amountCents);
+    setAmountCentsRaw(adjustment.amountCents);
+    setSkipArmed(false);
     setPlannedDate(adjustment.dueDate);
   }, [adjustment]);
 
@@ -1465,10 +1485,18 @@ function PaymentAdjustmentDialog({
                 yet.
               </div>
             ) : null}
-            {adjustment.targetType === "creditCardPayment" && amountCents === 0 ? (
+            {adjustment.targetType === "creditCardPayment" && amountCents === 0 && skipArmed ? (
               <div className="text-2xs text-[var(--amber)]">
-                Plans $0 for this cycle — nothing leaves checking; the balance stays owed and
+                Plans $0 for this cycle — nothing leaves checking. The balance stays owed and
                 interest may accrue until a payment is scheduled.
+              </div>
+            ) : null}
+            {adjustment.targetType === "creditCardPayment" &&
+            amountCents > 0 &&
+            (adjustment.paymentMinimumCents ?? 0) > 0 &&
+            amountCents < adjustment.paymentMinimumCents! ? (
+              <div className="text-2xs text-[var(--red)]">
+                Below the <Money cents={adjustment.paymentMinimumCents!} /> issuer minimum.
               </div>
             ) : null}
             {adjustment.targetType === "creditCardPayment" ? (
@@ -1504,15 +1532,17 @@ function PaymentAdjustmentDialog({
                     Pay balance
                   </Button>
                 ) : null}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setAmountCents(0)}
-                  disabled={saving}
-                >
-                  Skip this cycle
-                </Button>
+                {!adjustment.dueMarker && !adjustment.paydownTargetDate ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={armSkip}
+                    disabled={saving}
+                  >
+                    Skip this cycle
+                  </Button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -1573,7 +1603,15 @@ function PaymentAdjustmentDialog({
               <Button
                 type="submit"
                 variant="primary"
-                disabled={saving || amountCents < 0 || !plannedDate}
+                disabled={
+                  saving ||
+                  amountCents < 0 ||
+                  (amountCents === 0 &&
+                    adjustment.targetType === "creditCardPayment" &&
+                    !adjustment.paydownTargetDate &&
+                    (!skipArmed || adjustment.dueMarker)) ||
+                  !plannedDate
+                }
               >
                 {saving ? "SAVING..." : "Save plan"}
               </Button>

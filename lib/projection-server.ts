@@ -309,7 +309,10 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   // live balance) carries the effect and the plan settles like everything
   // else.
   const decorateScheduledExtra = <T extends OneTimeExpense>(e: T): T =>
-    lookback && !e.dueMarker
+    // Skipped rows are exempt like due markers: no cash ever left checking, so
+    // pivoting one into a "paid" marker would assert the full original amount
+    // settled — the opposite of what the user recorded.
+    lookback && !e.dueMarker && !e.skipped
       ? {
           ...e,
           settledBeforeDate: e.userScheduled ? today : settleBefore,

@@ -713,6 +713,42 @@ describe("projectCardPayments — $0 skip overrides & minimum payment", () => {
     const total = cashOf(r).reduce((s, e) => s + e.amountCents, 0);
     expect(total).toBe(500_00); // full promo remaining across the window, not 550
     expect(cashOf(r).some((e) => e.description.includes("— skipped"))).toBe(false);
+    // Directed absorption: the VACATED cycle's chunk is the one canceled — the
+    // moved cash must not knock out a different month's payment instead.
+    expect(cashOf(r).some((e) => e.date === "2026-06-10")).toBe(false);
+    expect(cashOf(r).find((e) => e.date === "2026-05-10")?.amountCents).toBe(50_00);
+  });
+
+  it("a moved variable-spend payment is absorbed, not double-counted", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      variableBills: [
+        {
+          id: "vb1",
+          userId: "u1",
+          name: "Groceries",
+          category: "Food",
+          amountCents: 400_00,
+          intervalMonths: 1,
+          anchorDate: "2026-05-05",
+          notes: null,
+          isActive: true,
+          createdAt: 0,
+          updatedAt: 0,
+          cardIds: ["c1"],
+        },
+      ],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-06-10", amountCents: 0, notes: "moved-to:2026-06-01" }),
+        override({ id: "o2", dueDate: "2026-06-01", amountCents: 400_00, notes: "moved-from:2026-06-10" }),
+      ],
+    });
+    // Three charges project in the window; moving June's payment must not add
+    // cash (the vacated 06-10 chunk is canceled by the moved cash).
+    const total = cashOf(r).reduce((s, e) => s + e.amountCents, 0);
+    expect(total).toBe(1200_00);
+    expect(cashOf(r).some((e) => e.date === "2026-06-10" && e.amountCents > 0)).toBe(false);
   });
 
   it("a $0 override on a variable-spend charge skips that cycle's cash", () => {
@@ -740,6 +776,48 @@ describe("projectCardPayments — $0 skip overrides & minimum payment", () => {
     const june = cashOf(r).find((e) => e.date === "2026-06-10");
     expect(june).toMatchObject({ amountCents: 0, paymentDueCents: 0 });
     expect(june?.description).toContain("— skipped");
+  });
+
+  it("skipped rows carry the structured skipped flag", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      promos: [promo({ monthlyPaymentCents: 50_00 })],
+      cardPaymentOverrides: [override({ dueDate: "2026-06-10", amountCents: 0, notes: null })],
+    });
+    expect(cashOf(r).find((e) => e.date === "2026-06-10")?.skipped).toBe(true);
+    expect(cashOf(r).find((e) => e.date === "2026-07-10")?.skipped).toBeUndefined();
+  });
+
+  it("a skip covering promo + variable on one date survives the merge", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      promos: [promo({ monthlyPaymentCents: 50_00 })],
+      variableBills: [
+        {
+          id: "vb1",
+          userId: "u1",
+          name: "Groceries",
+          category: "Food",
+          amountCents: 400_00,
+          intervalMonths: 1,
+          anchorDate: "2026-05-05",
+          notes: null,
+          isActive: true,
+          createdAt: 0,
+          updatedAt: 0,
+          cardIds: ["c1"],
+        },
+      ],
+      cardPaymentOverrides: [override({ dueDate: "2026-06-10", amountCents: 0, notes: null })],
+    });
+    // One $0 override zeroes both chunk kinds; the merged row must still read
+    // as a skip (flag AND label) so the calendar can show/reset it.
+    const june = cashOf(r).filter((e) => e.date === "2026-06-10");
+    expect(june).toHaveLength(1);
+    expect(june[0]).toMatchObject({ amountCents: 0, skipped: true });
+    expect(june[0]!.description).toContain("— skipped");
   });
 
   it("a statement marker carries the issuer minimum still owed", () => {
