@@ -434,15 +434,23 @@ function DayCell({
           {Number(iso.slice(8, 10))}
         </span>
         {row ? (
-          <span
-            className={cn(
-              "tabular rounded-[2px] px-1 text-2xs font-semibold",
-              balanceToneClass(row.balanceCents),
-              balanceSurfaceClass(row.balanceCents),
-            )}
-            title={balanceTitle(row, today, currency)}
-          >
-            <Money cents={row.balanceCents} />
+          <span className="flex items-baseline gap-1" title={balanceTitle(row, today, currency)}>
+            {/* The bank's figure, on screen rather than hidden behind a hover:
+                on a day with cash in flight the two numbers ARE the point. */}
+            {showsPostedBalance(row, today) ? (
+              <span className="tabular text-2xs text-[var(--text-3)] line-through">
+                <Money cents={row.postedBalanceCents} />
+              </span>
+            ) : null}
+            <span
+              className={cn(
+                "tabular rounded-[2px] px-1 text-2xs font-semibold",
+                balanceToneClass(row.balanceCents),
+                balanceSurfaceClass(row.balanceCents),
+              )}
+            >
+              <Money cents={row.balanceCents} />
+            </span>
           </span>
         ) : null}
       </div>
@@ -624,14 +632,23 @@ function CompactDayRow({
         })}
       </div>
       <span
-        className={cn(
-          "tabular mt-0.5 shrink-0 rounded-[2px] px-1 text-2xs font-semibold",
-          balanceToneClass(row.balanceCents),
-          balanceSurfaceClass(row.balanceCents),
-        )}
+        className="mt-0.5 flex shrink-0 items-baseline gap-1"
         title={balanceTitle(row, today, currency)}
       >
-        <Money cents={row.balanceCents} />
+        {showsPostedBalance(row, today) ? (
+          <span className="tabular text-2xs text-[var(--text-3)] line-through">
+            <Money cents={row.postedBalanceCents} />
+          </span>
+        ) : null}
+        <span
+          className={cn(
+            "tabular rounded-[2px] px-1 text-2xs font-semibold",
+            balanceToneClass(row.balanceCents),
+            balanceSurfaceClass(row.balanceCents),
+          )}
+        >
+          <Money cents={row.balanceCents} />
+        </span>
       </span>
     </button>
   );
@@ -1689,6 +1706,9 @@ export function CalendarClient({
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.onCard)}>Charged to card</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.settled)}>Paid / settled</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.posted)}>Posted (history)</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.awaitingPost)}>
+          Sent, awaiting post
+        </span>
       </div>
 
       <div className="flex flex-wrap items-center gap-3 text-2xs text-[var(--text-3)]">
@@ -1729,6 +1749,12 @@ export function CalendarClient({
         </span>
         <span className={cn("tabular rounded-[2px] px-1.5 py-0.5", balanceToneClass(-1), balanceSurfaceClass(-1))}>
           Negative
+        </span>
+        {/* Struck-through reads as "cancelled" without this: it is the bank's
+            own figure, shown only while money is in flight. */}
+        <span className="flex items-baseline gap-1">
+          <span className="tabular text-[var(--text-3)] line-through">$10,000</span>
+          <span className="text-[var(--text-2)]">= posted at bank, before money in flight clears</span>
         </span>
       </div>
 
