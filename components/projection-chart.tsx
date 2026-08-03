@@ -15,11 +15,19 @@ import { useTheme } from "next-themes";
 import { formatCents } from "@/lib/money";
 import { useCurrency } from "@/components/currency-provider";
 
-type Point = { date: string; balanceCents: number };
+/**
+ * `postedBalanceCents` is optional and deliberately sparse: the caller passes
+ * it only for days where it differs from the soft balance (see
+ * showsPostedBalance). Recharts breaks the line at nulls, so the posted series
+ * is drawn only across the in-flight window and stops at today instead of
+ * running parallel into the forecast forever.
+ */
+type Point = { date: string; balanceCents: number; postedBalanceCents?: number | null };
 
 type ChartTokens = {
   cyan: string;
   cyanGlow: string;
+  amber: string;
   red: string;
   borderRaw: string;
   border2: string;
@@ -31,6 +39,7 @@ type ChartTokens = {
 const FALLBACK_TOKENS: ChartTokens = {
   cyan: "#00E5FF",
   cyanGlow: "rgba(0, 229, 255, 0.35)",
+  amber: "#FFB300",
   red: "#FF1744",
   borderRaw: "#1F2B38",
   border2: "#2A3E54",
@@ -56,6 +65,7 @@ function readChartTokens(): ChartTokens {
   return {
     cyan: read("--cyan", FALLBACK_TOKENS.cyan),
     cyanGlow: read("--cyan-glow", FALLBACK_TOKENS.cyanGlow),
+    amber: read("--amber", FALLBACK_TOKENS.amber),
     red: read("--red", FALLBACK_TOKENS.red),
     borderRaw: read("--border-raw", FALLBACK_TOKENS.borderRaw),
     border2: read("--border-2", FALLBACK_TOKENS.border2),
@@ -78,7 +88,16 @@ export function ProjectionChart({ data }: { data: ReadonlyArray<Point> }) {
   }, [themeKey]);
 
   const formatted = React.useMemo(
-    () => data.map((d) => ({ date: d.date, balance: d.balanceCents / 100 })),
+    () =>
+      data.map((d) => ({
+        date: d.date,
+        balance: d.balanceCents / 100,
+        posted: d.postedBalanceCents != null ? d.postedBalanceCents / 100 : null,
+      })),
+    [data],
+  );
+  const hasPosted = React.useMemo(
+    () => data.some((d) => d.postedBalanceCents != null),
     [data],
   );
 
@@ -114,7 +133,10 @@ export function ProjectionChart({ data }: { data: ReadonlyArray<Point> }) {
           <Tooltip
             formatter={(v: number) => formatCents(Math.round(v * 100), currency)}
             labelStyle={{ color: tokens.text1, fontSize: 12, fontFamily: "var(--font-ui)" }}
-            itemStyle={{ color: tokens.cyan, fontFamily: "var(--font-ui)", fontSize: 12 }}
+            // No hardcoded color: with two series each item takes its own
+            // stroke, so "Available" and "Posted at bank" stay tellable apart.
+            // Single-series charts are unaffected — cyan is already the stroke.
+            itemStyle={{ fontFamily: "var(--font-ui)", fontSize: 12 }}
             contentStyle={{
               background: tokens.bg1,
               border: `1px solid ${tokens.border2}`,
@@ -126,12 +148,30 @@ export function ProjectionChart({ data }: { data: ReadonlyArray<Point> }) {
           <Area
             type="monotone"
             dataKey="balance"
+            name="Available"
             stroke={tokens.cyan}
             strokeWidth={2}
             fill={`url(#${gradientId})`}
             dot={false}
             isAnimationActive={false}
           />
+          {/* The bank's view, drawn only where it disagrees. Dashed and
+              unfilled so it reads as a reference against the real line, and
+              amber to match the in-flight markers elsewhere. */}
+          {hasPosted ? (
+            <Area
+              type="monotone"
+              dataKey="posted"
+              name="Posted at bank"
+              stroke={tokens.amber}
+              strokeWidth={1.5}
+              strokeDasharray="3 3"
+              fill="none"
+              dot={false}
+              connectNulls={false}
+              isAnimationActive={false}
+            />
+          ) : null}
         </AreaChart>
       </ResponsiveContainer>
     </div>

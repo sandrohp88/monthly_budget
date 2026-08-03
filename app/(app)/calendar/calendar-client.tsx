@@ -34,6 +34,7 @@ import { useCurrency } from "@/components/currency-provider";
 import { formatCents } from "@/lib/money";
 import { cn } from "@/lib/cn";
 import { balanceToneClass, balanceSurfaceClass } from "@/lib/balance-tone";
+import { showsPostedBalance } from "@/lib/soft-balance";
 import { BillForm, type BillFormValues } from "../bills/bill-form";
 import { cardPaymentLateWarning, cardPaymentMoveError } from "@/lib/card-payments";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
@@ -76,6 +77,27 @@ const DUE_TONE: Record<DueCoverage, EventTone> = {
   partial: "duePartial",
   uncovered: "dueUncovered",
 };
+
+/**
+ * Hover text for a day's balance chip. A grid cell has no room for a second
+ * figure, so on days where money is still in flight the tooltip carries the
+ * bank's view alongside the spendable one — otherwise the user is left to
+ * wonder why this app and their banking app disagree. The day-detail panel
+ * shows the pair properly.
+ */
+function balanceTitle(
+  row: { date: string; balanceCents: number; postedBalanceCents: number },
+  today: string,
+  currency: string,
+): string {
+  if (!showsPostedBalance(row, today)) return "Balance left after this day";
+  const inFlight = row.postedBalanceCents - row.balanceCents;
+  return [
+    `Balance left after this day: ${formatCents(row.balanceCents, currency)}`,
+    `Posted at bank: ${formatCents(row.postedBalanceCents, currency)}`,
+    `In flight, not yet posted: ${formatCents(inFlight, currency)}`,
+  ].join("\n");
+}
 
 /** Next projected payment slot for a card — what a scheduled paydown reduces. */
 type NextCardPayment = {
@@ -412,15 +434,23 @@ function DayCell({
           {Number(iso.slice(8, 10))}
         </span>
         {row ? (
-          <span
-            className={cn(
-              "tabular rounded-[2px] px-1 text-2xs font-semibold",
-              balanceToneClass(row.balanceCents),
-              balanceSurfaceClass(row.balanceCents),
-            )}
-            title="Balance left after this day"
-          >
-            <Money cents={row.balanceCents} />
+          <span className="flex items-baseline gap-1" title={balanceTitle(row, today, currency)}>
+            {/* The bank's figure, on screen rather than hidden behind a hover:
+                on a day with cash in flight the two numbers ARE the point. */}
+            {showsPostedBalance(row, today) ? (
+              <span className="tabular text-2xs text-[var(--text-3)] line-through">
+                <Money cents={row.postedBalanceCents} />
+              </span>
+            ) : null}
+            <span
+              className={cn(
+                "tabular rounded-[2px] px-1 text-2xs font-semibold",
+                balanceToneClass(row.balanceCents),
+                balanceSurfaceClass(row.balanceCents),
+              )}
+            >
+              <Money cents={row.balanceCents} />
+            </span>
           </span>
         ) : null}
       </div>
@@ -602,14 +632,23 @@ function CompactDayRow({
         })}
       </div>
       <span
-        className={cn(
-          "tabular mt-0.5 shrink-0 rounded-[2px] px-1 text-2xs font-semibold",
-          balanceToneClass(row.balanceCents),
-          balanceSurfaceClass(row.balanceCents),
-        )}
-        title="Balance left after this day"
+        className="mt-0.5 flex shrink-0 items-baseline gap-1"
+        title={balanceTitle(row, today, currency)}
       >
-        <Money cents={row.balanceCents} />
+        {showsPostedBalance(row, today) ? (
+          <span className="tabular text-2xs text-[var(--text-3)] line-through">
+            <Money cents={row.postedBalanceCents} />
+          </span>
+        ) : null}
+        <span
+          className={cn(
+            "tabular rounded-[2px] px-1 text-2xs font-semibold",
+            balanceToneClass(row.balanceCents),
+            balanceSurfaceClass(row.balanceCents),
+          )}
+        >
+          <Money cents={row.balanceCents} />
+        </span>
       </span>
     </button>
   );
@@ -1667,6 +1706,9 @@ export function CalendarClient({
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.onCard)}>Charged to card</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.settled)}>Paid / settled</span>
         <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.posted)}>Posted (history)</span>
+        <span className={cn("rounded-[2px] border px-1.5 py-0.5", TONE_CLASSES.awaitingPost)}>
+          Sent, awaiting post
+        </span>
       </div>
 
       <div className="flex flex-wrap items-center gap-3 text-2xs text-[var(--text-3)]">
@@ -1707,6 +1749,12 @@ export function CalendarClient({
         </span>
         <span className={cn("tabular rounded-[2px] px-1.5 py-0.5", balanceToneClass(-1), balanceSurfaceClass(-1))}>
           Negative
+        </span>
+        {/* Struck-through reads as "cancelled" without this: it is the bank's
+            own figure, shown only while money is in flight. */}
+        <span className="flex items-baseline gap-1">
+          <span className="tabular text-[var(--text-3)] line-through">$10,000</span>
+          <span className="text-[var(--text-2)]">= posted at bank, before money in flight clears</span>
         </span>
       </div>
 
@@ -1978,11 +2026,35 @@ export function CalendarClient({
                   })
                 )}
                 {selectedRow ? (
-                  <div className="flex items-center justify-between border-t border-[var(--border-raw)] pt-2 text-[12px] text-[var(--text-2)]">
-                    <span>End-of-day balance</span>
-                    <span className={cn("tabular font-semibold", balanceToneClass(selectedRow.balanceCents))}>
-                      <Money cents={selectedRow.balanceCents} />
-                    </span>
+                  <div className="border-t border-[var(--border-raw)] pt-2 text-[12px] text-[var(--text-2)]">
+                    <div className="flex items-center justify-between">
+                      <span>End-of-day balance</span>
+                      <span
+                        className={cn("tabular font-semibold", balanceToneClass(selectedRow.balanceCents))}
+                      >
+                        <Money cents={selectedRow.balanceCents} />
+                      </span>
+                    </div>
+                    {/* Where the two disagree, spell out why rather than
+                        leaving the user to reconcile against their bank app. */}
+                    {showsPostedBalance(selectedRow, today) ? (
+                      <>
+                        <div className="mt-1 flex items-center justify-between text-[var(--text-3)]">
+                          <span>Posted at bank</span>
+                          <span className="tabular">
+                            <Money cents={selectedRow.postedBalanceCents} />
+                          </span>
+                        </div>
+                        <div className="mt-0.5 flex items-center justify-between text-[var(--amber)]">
+                          <span>In flight, not yet posted</span>
+                          <span className="tabular">
+                            <Money
+                              cents={selectedRow.postedBalanceCents - selectedRow.balanceCents}
+                            />
+                          </span>
+                        </div>
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

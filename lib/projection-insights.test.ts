@@ -13,6 +13,9 @@ const row = (
   incomeCents,
   expenseCents,
   balanceCents,
+  // These fixtures predate the soft/posted split; with no in-flight events
+  // the two series are identical by definition.
+  postedBalanceCents: balanceCents,
   events,
 });
 

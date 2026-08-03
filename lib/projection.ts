@@ -215,7 +215,26 @@ export type ProjectionRow = {
   date: string;
   incomeCents: number;
   expenseCents: number;
+  /**
+   * The SOFT balance — what is actually left to spend. Counts cash that is
+   * committed but hasn't posted yet (see `awaitingPost`), because money on its
+   * way out of the account is not money you can spend twice. This is the
+   * primary figure everywhere in the app.
+   */
   balanceCents: number;
+  /**
+   * The POSTED balance — the same walk counting only cash that has really
+   * moved, so it tracks what the bank's own app would show. Identical to
+   * `balanceCents` until the first in-flight item, then higher by exactly the
+   * amount still in flight.
+   *
+   * Only meaningful up to today: nothing in the future has "posted", and every
+   * in-flight item is dated today or earlier, so past today the two series just
+   * run parallel forever. The UI renders it through today only — showing it on
+   * a future day would assert that a payment already in flight might never
+   * land.
+   */
+  postedBalanceCents: number;
   events: ProjectionEvent[];
 };
 
@@ -560,30 +579,41 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
 
   const rows: ProjectionRow[] = [];
   let balance = input.startingBalanceCents;
+  // Second accumulator for the posted series. Same walk, same events, minus
+  // the ones the bank hasn't moved yet — so the pair brackets reality: what
+  // your bank shows today, and what you actually have.
+  let postedBalance = input.startingBalanceCents;
 
   for (let ts = startTs; ts <= endTs; ts += DAY_MS) {
     const date = formatIsoDate(ts);
     const events = byDate.get(date) ?? [];
     let income = 0;
     let expense = 0;
+    let postedIncome = 0;
+    let postedExpense = 0;
     for (const ev of events) {
       if (ev.kind === "paycheck") {
         income += ev.amountCents;
+        if (!ev.awaitingPost) postedIncome += ev.amountCents;
       } else if (ev.kind === "extra" && ev.amountCents < 0) {
         // Negative-amount extras are credits (Plaid refunds, returns,
         // statement credits). They add to the running balance — surface
         // them in the income column instead of as a "−-$X" expense.
         income += -ev.amountCents;
+        if (!ev.awaitingPost) postedIncome += -ev.amountCents;
       } else {
         expense += ev.amountCents;
+        if (!ev.awaitingPost) postedExpense += ev.amountCents;
       }
     }
     balance += income - expense;
+    postedBalance += postedIncome - postedExpense;
     rows.push({
       date,
       incomeCents: income,
       expenseCents: expense,
       balanceCents: balance,
+      postedBalanceCents: postedBalance,
       events,
     });
   }

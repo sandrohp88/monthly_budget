@@ -24,6 +24,7 @@ import { ProjectionChart } from "@/components/projection-chart";
 import { addDaysIso, DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
 import { findWorstDay } from "@/lib/projection";
 import { findUncoveredCardDues } from "@/lib/projection-insights";
+import { showsPostedBalance } from "@/lib/soft-balance";
 import { cn } from "@/lib/cn";
 import { Plus } from "lucide-react";
 import { BudgetUtilization } from "@/components/budget-utilization";
@@ -136,7 +137,13 @@ export default async function DashboardPage() {
   // Balance vs projection delta: compare live Plaid balance to today's projected balance
   const todayRow = rows.find((r) => r.date === today);
   const projectedTodayCents = todayRow?.balanceCents ?? projection.startingBalanceCents;
-  const currentBalanceCents = liveBalance ?? projectedTodayCents;
+  // Two answers to two different questions. POSTED is what the bank would show
+  // right now; SOFT subtracts money already on its way out. The soft figure is
+  // primary — it's the one you can actually plan against — with posted shown
+  // beside it so the app's number can be reconciled against a banking app's.
+  const postedNowCents = liveBalance ?? todayRow?.postedBalanceCents ?? projectedTodayCents;
+  const inFlightCents = pendingPosting.totalHeldCents;
+  const currentBalanceCents = postedNowCents - inFlightCents;
   // Cash held for unposted payments is a DELIBERATE gap between the live
   // balance and the projection, not drift: the money is still inside
   // `balances.current` precisely because it hasn't posted. Adding it back
@@ -186,7 +193,17 @@ export default async function DashboardPage() {
           label="Current balance"
           value={<Money cents={currentBalanceCents} />}
           variant={balanceVariant(currentBalanceCents)}
-          delta={liveBalance != null ? "live · linked accounts" : "projected as of today"}
+          delta={
+            inFlightCents > 0 ? (
+              <>
+                posted <Money cents={postedNowCents} /> · <Money cents={inFlightCents} /> in flight
+              </>
+            ) : liveBalance != null ? (
+              "live · linked accounts"
+            ) : (
+              "projected as of today"
+            )
+          }
         />
         <Tile
           compact
@@ -344,7 +361,15 @@ export default async function DashboardPage() {
           <div className="text-2xs text-[var(--text-2)]">Next {projectionMonths} months</div>
         </CardHeader>
         <CardContent className="p-3 pt-0">
-          <ProjectionChart data={rows.map((r) => ({ date: r.date, balanceCents: r.balanceCents }))} />
+          <ProjectionChart
+            data={rows.map((r) => ({
+              date: r.date,
+              balanceCents: r.balanceCents,
+              // Sparse by design — only where the bank's view differs, so the
+              // dashed line spans the in-flight window and stops at today.
+              postedBalanceCents: showsPostedBalance(r, today) ? r.postedBalanceCents : null,
+            }))}
+          />
         </CardContent>
       </Card>
 
@@ -406,8 +431,20 @@ export default async function DashboardPage() {
                     </div>
                     <div className="mt-2 flex items-center justify-between border-t border-[var(--border-raw)] pt-1.5 text-2xs text-[var(--text-3)]">
                       <span>End of day</span>
-                      <span className={cn("tabular text-2xs font-semibold", balanceClass(row.balanceCents))}>
-                        <Money cents={row.balanceCents} />
+                      <span className="flex items-baseline gap-1.5">
+                        {showsPostedBalance(row, today) ? (
+                          <span
+                            className="tabular text-2xs text-[var(--text-3)] line-through"
+                            title="Posted balance — what the bank shows before money in flight clears"
+                          >
+                            <Money cents={row.postedBalanceCents} />
+                          </span>
+                        ) : null}
+                        <span
+                          className={cn("tabular text-2xs font-semibold", balanceClass(row.balanceCents))}
+                        >
+                          <Money cents={row.balanceCents} />
+                        </span>
                       </span>
                     </div>
                   </Link>

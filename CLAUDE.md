@@ -888,8 +888,29 @@ only the unexplained remainder becomes an anonymous "Pending at bank" event on
 today. Once everything is attributed, the projection's today-close converges on
 the bank's own available balance — that's the tell that the wiring is right.
 
+### Soft vs posted balance
+
+`ProjectionRow` carries two running balances from one walk:
+
+- **`balanceCents` — the SOFT balance.** Counts in-flight cash. Primary
+  everywhere: it's the number you can actually plan against.
+- **`postedBalanceCents` — the POSTED balance.** Skips every `awaitingPost`
+  event, so it tracks what the bank's own app would show.
+
+`showsPostedBalance(row, today)` (lib/soft-balance.ts) is the single rule for
+displaying the pair — shared by the dashboard tile, the agenda, the ledger
+table, the calendar and the chart, so they can't drift. It requires the row to
+be **today or earlier**: every in-flight item is dated today or earlier, so
+past today the two series just run parallel at a constant gap. Real
+arithmetic, but rendering it on a future day asserts that a payment already in
+flight might never land. The chart takes `postedBalanceCents` sparsely (null
+where the rule says no) so Recharts breaks the dashed line at today instead of
+drawing it to the horizon.
+
 ### Don't
 
+- ❌ Don't render the posted balance on future rows — see above. Two balances
+  differing tomorrow is the constant carried gap, not news.
 - ❌ Don't write `available_balance_cents` from a different payload than
   `balance_cents`. Their difference is the float; a fresh current against a
   stale available invents one, and that fiction holds real cash out of the
