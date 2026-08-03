@@ -34,6 +34,7 @@ import { useCurrency } from "@/components/currency-provider";
 import { formatCents } from "@/lib/money";
 import { cn } from "@/lib/cn";
 import { balanceToneClass, balanceSurfaceClass } from "@/lib/balance-tone";
+import { showsPostedBalance } from "@/lib/soft-balance";
 import { BillForm, type BillFormValues } from "../bills/bill-form";
 import { cardPaymentLateWarning, cardPaymentMoveError } from "@/lib/card-payments";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
@@ -76,6 +77,27 @@ const DUE_TONE: Record<DueCoverage, EventTone> = {
   partial: "duePartial",
   uncovered: "dueUncovered",
 };
+
+/**
+ * Hover text for a day's balance chip. A grid cell has no room for a second
+ * figure, so on days where money is still in flight the tooltip carries the
+ * bank's view alongside the spendable one — otherwise the user is left to
+ * wonder why this app and their banking app disagree. The day-detail panel
+ * shows the pair properly.
+ */
+function balanceTitle(
+  row: { date: string; balanceCents: number; postedBalanceCents: number },
+  today: string,
+  currency: string,
+): string {
+  if (!showsPostedBalance(row, today)) return "Balance left after this day";
+  const inFlight = row.postedBalanceCents - row.balanceCents;
+  return [
+    `Balance left after this day: ${formatCents(row.balanceCents, currency)}`,
+    `Posted at bank: ${formatCents(row.postedBalanceCents, currency)}`,
+    `In flight, not yet posted: ${formatCents(inFlight, currency)}`,
+  ].join("\n");
+}
 
 /** Next projected payment slot for a card — what a scheduled paydown reduces. */
 type NextCardPayment = {
@@ -418,7 +440,7 @@ function DayCell({
               balanceToneClass(row.balanceCents),
               balanceSurfaceClass(row.balanceCents),
             )}
-            title="Balance left after this day"
+            title={balanceTitle(row, today, currency)}
           >
             <Money cents={row.balanceCents} />
           </span>
@@ -607,7 +629,7 @@ function CompactDayRow({
           balanceToneClass(row.balanceCents),
           balanceSurfaceClass(row.balanceCents),
         )}
-        title="Balance left after this day"
+        title={balanceTitle(row, today, currency)}
       >
         <Money cents={row.balanceCents} />
       </span>
@@ -1978,11 +2000,35 @@ export function CalendarClient({
                   })
                 )}
                 {selectedRow ? (
-                  <div className="flex items-center justify-between border-t border-[var(--border-raw)] pt-2 text-[12px] text-[var(--text-2)]">
-                    <span>End-of-day balance</span>
-                    <span className={cn("tabular font-semibold", balanceToneClass(selectedRow.balanceCents))}>
-                      <Money cents={selectedRow.balanceCents} />
-                    </span>
+                  <div className="border-t border-[var(--border-raw)] pt-2 text-[12px] text-[var(--text-2)]">
+                    <div className="flex items-center justify-between">
+                      <span>End-of-day balance</span>
+                      <span
+                        className={cn("tabular font-semibold", balanceToneClass(selectedRow.balanceCents))}
+                      >
+                        <Money cents={selectedRow.balanceCents} />
+                      </span>
+                    </div>
+                    {/* Where the two disagree, spell out why rather than
+                        leaving the user to reconcile against their bank app. */}
+                    {showsPostedBalance(selectedRow, today) ? (
+                      <>
+                        <div className="mt-1 flex items-center justify-between text-[var(--text-3)]">
+                          <span>Posted at bank</span>
+                          <span className="tabular">
+                            <Money cents={selectedRow.postedBalanceCents} />
+                          </span>
+                        </div>
+                        <div className="mt-0.5 flex items-center justify-between text-[var(--amber)]">
+                          <span>In flight, not yet posted</span>
+                          <span className="tabular">
+                            <Money
+                              cents={selectedRow.postedBalanceCents - selectedRow.balanceCents}
+                            />
+                          </span>
+                        </div>
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

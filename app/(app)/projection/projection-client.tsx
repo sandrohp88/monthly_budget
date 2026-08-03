@@ -43,6 +43,7 @@ import { buildLedgerSummary } from "@/lib/projection-ledger";
 import { addDaysIso, startOfMonthIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 import { balanceToneClass } from "@/lib/balance-tone";
+import { showsPostedBalance } from "@/lib/soft-balance";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Filter
@@ -667,6 +668,14 @@ export function ProjectionClient({
                                 )}
                               >
                                 <Money cents={r.balanceCents} />
+                                {showsPostedBalance(r, today) ? (
+                                  <div
+                                    className="mt-0.5 text-[11px] font-normal text-[var(--text-3)]"
+                                    title="Posted balance — what the bank shows before money in flight clears"
+                                  >
+                                    posted <Money cents={r.postedBalanceCents} />
+                                  </div>
+                                ) : null}
                               </td>
                             ) : null}
                           </tr>

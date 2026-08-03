@@ -843,6 +843,74 @@ describe("paid occurrences (bank-draft reconciliation)", () => {
   });
 });
 
+describe("soft vs posted balance", () => {
+  // Two answers to two different questions: what does the bank show me right
+  // now, and what do I actually have left. They differ by exactly the cash
+  // that is on its way out but hasn't landed.
+  const heldBill: Bill = {
+    id: "rent",
+    name: "Rent",
+    amountCents: 1450_00,
+    intervalMonths: 1,
+    anchorDate: "2026-05-01",
+    heldOccurrences: [
+      { date: "2026-05-01", amountCents: 1450_00, reason: "unconfirmed", holdDate: "2026-05-01" },
+    ],
+  };
+
+  it("runs both series, diverging by the in-flight amount on the hold date", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2026-04-29",
+      endDate: "2026-05-03",
+      startingBalanceCents: 10_000_00,
+      bills: [heldBill],
+    });
+
+    // Before the hold: identical.
+    expect(rows[0]).toMatchObject({
+      date: "2026-04-29",
+      balanceCents: 10_000_00,
+      postedBalanceCents: 10_000_00,
+    });
+    // On the hold date the soft balance drops; the posted one does not,
+    // because the bank has not moved that money yet.
+    expect(rows.find((r) => r.date === "2026-05-01")).toMatchObject({
+      balanceCents: 8_550_00,
+      postedBalanceCents: 10_000_00,
+    });
+    // ...and the gap carries forward at exactly the held amount.
+    const last = rows[rows.length - 1]!;
+    expect(last.postedBalanceCents - last.balanceCents).toBe(1450_00);
+  });
+
+  it("keeps the two series identical when nothing is in flight", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2026-04-29",
+      endDate: "2026-05-03",
+      startingBalanceCents: 10_000_00,
+      bills: [{ ...heldBill, heldOccurrences: [] }],
+    });
+    for (const r of rows) expect(r.postedBalanceCents).toBe(r.balanceCents);
+  });
+
+  it("excludes an in-flight CREDIT from the posted series too", () => {
+    // The rule is "has the bank moved it", not "is it money out" — so it
+    // applies symmetrically to a refund that hasn't landed.
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2026-05-01",
+      endDate: "2026-05-02",
+      startingBalanceCents: 100_00,
+      extras: [
+        { date: "2026-05-01", description: "Refund", amountCents: -40_00, awaitingPost: true },
+      ],
+    });
+    expect(rows[0]).toMatchObject({ balanceCents: 140_00, postedBalanceCents: 100_00 });
+  });
+});
+
 describe("card-charged bill and extra markers", () => {
   it("emits zero-cash markers for a card-charged bill without moving the balance", () => {
     const rows = computeProjection({
