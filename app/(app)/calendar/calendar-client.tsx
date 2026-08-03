@@ -51,6 +51,7 @@ type EventTone =
   | "expense"
   | "settled"
   | "posted"
+  | "awaitingPost"
   | "onCard"
   | "dueCovered"
   | "duePartial"
@@ -184,6 +185,11 @@ function isCredit(ev: ProjectionEvent): boolean {
 
 function toneOf(ev: ProjectionEvent, isPast: boolean): EventTone {
   if (ev.isPaid && ev.amountCents === 0) return "settled";
+  // Money in flight: due date reached, cash still held, nothing posted. Checked
+  // BEFORE the isPast branch on purpose — an awaiting-post bill sits on a past
+  // date by definition, and the gray history tone would read "already handled"
+  // for the one thing that definitely isn't.
+  if (ev.awaitingPost) return "awaitingPost";
   // Events on days before today are history — posted transactions from the
   // lookback window, not upcoming obligations. Rendering them in the pending
   // red reads as "unpaid bill", which is exactly wrong.
@@ -239,6 +245,9 @@ const TONE_CLASSES: Record<EventTone, string> = {
   expense: "border-[var(--red)]/40 bg-[var(--red)]/10 text-[var(--red)]",
   settled: "border-[var(--border-raw)] bg-[var(--bg-2)] text-[var(--text-3)] line-through",
   posted: "border-[var(--border-raw)] bg-[var(--bg-2)] text-[var(--text-2)]",
+  // Dotted border = in motion. Amber, not red: the cash is spoken for, but
+  // this is not a missed obligation.
+  awaitingPost: "border-dotted border-[var(--amber)]/60 bg-[var(--amber)]/10 text-[var(--amber)]",
   onCard: "border-[var(--olive)]/50 bg-[var(--olive)]/10 text-[var(--olive)]",
   // Due-date markers: dashed border marks them as informational (no cash), color
   // encodes interest risk.
@@ -253,6 +262,7 @@ const TONE_TEXT: Record<EventTone, string> = {
   expense: "text-[var(--red)]",
   settled: "text-[var(--text-3)] line-through",
   posted: "text-[var(--text-2)]",
+  awaitingPost: "text-[var(--amber)]",
   onCard: "text-[var(--olive)]",
   dueCovered: "text-[var(--mint)]",
   duePartial: "text-[var(--amber)]",
@@ -1741,7 +1751,13 @@ export function CalendarClient({
                     const originalDueDate = ev.relatedDate ?? selectedDate;
                     const dueLabel = cardPaymentDueLabel(ev.label);
                     const statusLabel = ev.isPaid
-                      ? "paid"
+                      ? ev.paidExternally
+                        ? "paid outside your linked accounts"
+                        : "paid"
+                      : ev.awaitingPost
+                        ? ev.heldSinceDate
+                          ? `awaiting post — due ${ev.heldSinceDate}`
+                          : "awaiting post — cash still held"
                       : isPastDay
                         ? "posted"
                         : isCardCharge

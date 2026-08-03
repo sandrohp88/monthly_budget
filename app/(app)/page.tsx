@@ -27,6 +27,7 @@ import { findUncoveredCardDues } from "@/lib/projection-insights";
 import { cn } from "@/lib/cn";
 import { Plus } from "lucide-react";
 import { BudgetUtilization } from "@/components/budget-utilization";
+import { PendingPostingAlert } from "@/components/pending-posting-alert";
 
 export const dynamic = "force-dynamic";
 
@@ -65,7 +66,8 @@ export default async function DashboardPage() {
     getSettings(userId),
   ]);
   if (!projection) redirect("/setup");
-  const { rows, projectionMonths, promoDriftByCard, unpaidRecentOccurrences } = projection;
+  const { rows, projectionMonths, promoDriftByCard, unpaidRecentOccurrences, pendingPosting } =
+    projection;
   const totalPromoDriftCents = Object.values(promoDriftByCard).reduce((s, n) => s + n, 0);
   const driftedCardCount = Object.keys(promoDriftByCard).length;
 
@@ -135,7 +137,16 @@ export default async function DashboardPage() {
   const todayRow = rows.find((r) => r.date === today);
   const projectedTodayCents = todayRow?.balanceCents ?? projection.startingBalanceCents;
   const currentBalanceCents = liveBalance ?? projectedTodayCents;
-  const balanceDeltaCents = liveBalance != null ? liveBalance - projectedTodayCents : null;
+  // Cash held for unposted payments is a DELIBERATE gap between the live
+  // balance and the projection, not drift: the money is still inside
+  // `balances.current` precisely because it hasn't posted. Adding it back
+  // before comparing leaves only the genuinely unexplained remainder —
+  // otherwise this alert fires permanently and blames "unexpected income" for
+  // money the user just told us is on its way out.
+  const balanceDeltaCents =
+    liveBalance != null
+      ? liveBalance - (projectedTodayCents + pendingPosting.totalHeldCents)
+      : null;
   const balanceDeltaSignificant =
     balanceDeltaCents != null && Math.abs(balanceDeltaCents) > 50_00; // > $50 drift
 
@@ -244,25 +255,13 @@ export default async function DashboardPage() {
         />
       </TileGrid>
 
-      {unpaidRecentOccurrences.length > 0 ? (
-        <AlertBar tag="Unpaid" variant="amber">
-          No matching payment has posted for{" "}
-          {unpaidRecentOccurrences.slice(0, 3).map((o, i) => (
-            <span key={`${o.billId}-${o.dueDate}`}>
-              {i > 0 ? ", " : ""}
-              <strong className="text-[var(--amber)]">{o.billName}</strong> (due{" "}
-              <DateLabel iso={o.dueDate} format="short" /> · <Money cents={o.expectedCents} />)
-            </span>
-          ))}
-          {unpaidRecentOccurrences.length > 3
-            ? ` and ${unpaidRecentOccurrences.length - 3} more`
-            : ""}
-          . If a payment posted under different wording, link it to the bill.{" "}
-          <Link href="/transactions" className="text-[var(--mint)] hover:underline">
-            Review transactions →
-          </Link>
-        </AlertBar>
-      ) : null}
+      <PendingPostingAlert
+        occurrences={unpaidRecentOccurrences}
+        answered={pendingPosting.answered}
+        totalHeldCents={pendingPosting.totalHeldCents}
+        unattributedCents={pendingPosting.unattributedCents}
+        today={today}
+      />
 
       {uncoveredCardDues.length > 0 ? (
         <AlertBar tag="Interest" variant={uncoveredDueUrgent ? "red" : "amber"}>

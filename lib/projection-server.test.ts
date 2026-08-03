@@ -29,6 +29,7 @@ import {
   createPromo,
   createStatement,
   updateSettings,
+  upsertBillPaymentState,
   upsertCreditCardPaymentOverride,
   upsertPlaidAccount,
   updatePlaidAccount,
@@ -471,12 +472,14 @@ describe("buildProjection linked starting balance", () => {
     await updatePlaidAccount(userId, "checking", { useAsStartingBalance: true });
   }
 
-  it("anchors on today and skips bills that already happened (their cash is inside the live balance)", async () => {
-    // The Plaid balance is current, so a bill that posted before today is
-    // already accounted for. Replaying it would double-debit. The projection
-    // therefore starts at today and ignores past occurrences entirely.
+  it("anchors on today and holds a past occurrence no transaction has confirmed", async () => {
+    // The Plaid balance is `balances.current`, which excludes pending debits —
+    // so a bill that came due yesterday and hasn't POSTED is still sitting
+    // inside it. Releasing that cash because the date passed (the old
+    // behavior) read the balance high by the whole bill. With no matching
+    // draft the occurrence rides today as a live debit instead.
     const user = await makeUser();
-    await seedLinkedStartingBalance(user.id, 500_00);
+    await seedLinkedStartingBalance(user.id, 5000_00);
     await createBill(user.id, {
       name: "Blue Falls",
       category: "Housing",
@@ -492,14 +495,26 @@ describe("buildProjection linked starting balance", () => {
     const projection = await buildProjection(user.id);
 
     expect(projection?.startDate).toBe("2026-05-04");
-    expect(projection?.startingBalanceCents).toBe(500_00);
+    expect(projection?.startingBalanceCents).toBe(5000_00);
     expect(projection?.rows[0]?.date).toBe("2026-05-04");
-    expect(projection?.rows[0]?.balanceCents).toBe(500_00);
+    // Yesterday's occurrence falls outside the rendered window, so it rides
+    // the first visible day rather than vanishing — carrying its own due date.
+    expect(projection?.rows[0]?.events).toContainEqual(
+      expect.objectContaining({
+        kind: "bill",
+        label: "Blue Falls",
+        amountCents: 4400_00,
+        awaitingPost: true,
+        heldSinceDate: "2026-05-03",
+      }),
+    );
+    expect(projection?.rows[0]?.balanceCents).toBe(600_00);
+    expect(projection?.pendingPosting.attributedCents).toBe(4400_00);
 
-    // The next month's occurrence (2026-06-03) should still be projected as
-    // a normal cash debit — only past occurrences are skipped.
+    // The next month's occurrence is still a normal, unheld cash debit.
     const nextMonth = projection?.rows.find((r) => r.date === "2026-06-03");
     expect(nextMonth?.expenseCents).toBe(4400_00);
+    expect(nextMonth?.events.find((e) => e.label === "Blue Falls")?.awaitingPost).toBeUndefined();
   });
 
   it("reconstructs past balances from drafts when startingBalanceAsOf is rolled back", async () => {
@@ -568,16 +583,21 @@ describe("buildProjection linked starting balance", () => {
     expect(today?.balanceCents).toBe(500_00);
   });
 
-  it("renders past scheduled bills as paid markers (zero amount, isPaid) in lookback mode", async () => {
+  it("renders past scheduled bills as paid markers once they age past the hold window", async () => {
+    // A due date in the past is not evidence of payment, so a RECENT unmatched
+    // occurrence keeps its cash (covered below). Past OVERDUE_LOOKBACK_DAYS,
+    // though, the projection stops arguing: an occurrence that never matched
+    // was almost certainly paid outside the linked accounts, and holding its
+    // cash forever would be its own kind of wrong.
     const user = await makeUser();
     await seedLinkedStartingBalance(user.id, 500_00);
-    await updateSettings(user.id, { startingBalanceAsOf: "2026-05-01" });
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-04-01" });
     await createBill(user.id, {
       name: "Blue Falls",
       category: "Housing",
       amountCents: 4400_00,
       intervalMonths: 1,
-      anchorDate: "2026-05-03", // before today=2026-05-04
+      anchorDate: "2026-04-03", // 31 days before today=2026-05-04
       autoPay: false,
       paidViaCardId: null,
       notes: null,
@@ -585,8 +605,8 @@ describe("buildProjection linked starting balance", () => {
     });
 
     const projection = await buildProjection(user.id);
-    const may3 = projection?.rows.find((r) => r.date === "2026-05-03");
-    const billEvent = may3?.events.find((ev) => ev.label === "Blue Falls");
+    const apr3 = projection?.rows.find((r) => r.date === "2026-04-03");
+    const billEvent = apr3?.events.find((ev) => ev.label === "Blue Falls");
 
     expect(billEvent).toMatchObject({
       kind: "bill",
@@ -594,8 +614,12 @@ describe("buildProjection linked starting balance", () => {
       originalAmountCents: 4400_00,
       isPaid: true,
     });
-    // Past occurrence is a marker only — no balance impact.
-    expect(may3?.expenseCents).toBe(0);
+    // Aged-out occurrence is a marker only — no balance impact.
+    expect(apr3?.expenseCents).toBe(0);
+    // ...while THIS month's occurrence (2026-05-03, yesterday) is still inside
+    // the window and keeps its cash. Same bill, two occurrences, two answers —
+    // which is the point: age decides, not the bill.
+    expect(projection?.pendingPosting.bills.map((b) => b.dueDate)).toEqual(["2026-05-03"]);
   });
 
   it("a planned card payment dated TODAY stays live in lookback mode (not phantom-settled)", async () => {
@@ -780,5 +804,231 @@ describe("scheduled paydown with a stale pays-down target (Prime Visa 9873, 2026
     });
     // The due marker never debits cash — only the scheduled payment moved money.
     expect(dueRow?.expenseCents).toBe(0);
+  });
+});
+
+describe("buildProjection pending posting (money out, not yet posted)", () => {
+  // The production report (Aug 1 bills, 2026-08-03): the ACH pull had left the
+  // bank but hadn't posted. Plaid's live balance is `balances.current`, which
+  // excludes pending debits, so the money was still inside it — while the
+  // occurrence, being in the past, had stopped being projected. The balance
+  // read high by the full amount of every bill in flight, and the "Unpaid"
+  // alert had no action that could fix the number.
+
+  async function seedLinked(
+    userId: string,
+    balanceCents: number,
+    availableBalanceCents?: number | null,
+  ) {
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins",
+      institutionName: "Bank",
+      accessTokenEnc: "00",
+      accessTokenIv: "00",
+      accessTokenTag: "00",
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "checking",
+      itemId: item.id,
+      userId,
+      name: "Checking",
+      mask: "0001",
+      type: "depository",
+      subtype: "checking",
+      balanceCents,
+      availableBalanceCents: availableBalanceCents ?? null,
+      updatedAt: Date.now(),
+    });
+    await updatePlaidAccount(userId, "checking", { useAsStartingBalance: true });
+  }
+
+  async function seedBill(userId: string) {
+    return createBill(userId, {
+      name: "Household Rent",
+      category: "Housing",
+      amountCents: 2000_00,
+      intervalMonths: 1,
+      anchorDate: "2026-05-01", // 3 days before mocked today=2026-05-04
+      autoPay: true,
+      paidViaCardId: null,
+      notes: null,
+      isActive: true,
+    });
+  }
+
+  it("holds an unposted bill's cash instead of freeing it when the date passes", async () => {
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-04-25" });
+    await seedBill(user.id);
+
+    const projection = await buildProjection(user.id);
+    const may1 = projection?.rows.find((r) => r.date === "2026-05-01");
+
+    // Before this change the occurrence rendered isPaid with amountCents 0.
+    expect(may1?.events.find((e) => e.label === "Household Rent")).toMatchObject({
+      kind: "bill",
+      amountCents: 2000_00,
+      awaitingPost: true,
+    });
+    expect(may1?.expenseCents).toBe(2000_00);
+    expect(projection?.pendingPosting.attributedCents).toBe(2000_00);
+    expect(projection?.pendingPosting.totalHeldCents).toBe(2000_00);
+    // ...and the alert still asks about it, because nobody has answered yet.
+    expect(projection?.unpaidRecentOccurrences.map((o) => o.dueDate)).toEqual(["2026-05-01"]);
+  });
+
+  it("surfaces the bank's own pending float when no bill explains it", async () => {
+    // current $10,000 / available $9,250 — the bank says $750 is already gone.
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00, 9_250_00);
+
+    const projection = await buildProjection(user.id);
+    const today = projection?.rows.find((r) => r.date === "2026-05-04");
+
+    expect(projection?.pendingPosting.bankPendingOutflowCents).toBe(750_00);
+    expect(projection?.pendingPosting.unattributedCents).toBe(750_00);
+    expect(today?.events).toContainEqual(
+      expect.objectContaining({
+        label: "Pending at bank",
+        amountCents: 750_00,
+        awaitingPost: true,
+      }),
+    );
+    expect(today?.balanceCents).toBe(9_250_00);
+  });
+
+  it("lets a marked bill ATTRIBUTE the bank float instead of stacking on it", async () => {
+    // The invariant: totalHeld = max(bankPendingOutflow, attributed). The bill
+    // the user marked sent IS the money the bank is reporting as pending —
+    // holding both would double-count a single $2,000 payment.
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00, 8_000_00); // bank: $2,000 pending
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-04-25" });
+    const bill = await seedBill(user.id);
+    await upsertBillPaymentState(user.id, bill!.id, {
+      dueDate: "2026-05-01",
+      state: "sent",
+      amountCents: null,
+      markedDate: "2026-05-01",
+      notes: null,
+    });
+
+    const projection = await buildProjection(user.id);
+
+    expect(projection?.pendingPosting.bankPendingOutflowCents).toBe(2000_00);
+    expect(projection?.pendingPosting.attributedCents).toBe(2000_00);
+    expect(projection?.pendingPosting.unattributedCents).toBe(0);
+    expect(projection?.pendingPosting.totalHeldCents).toBe(2000_00);
+    // Held exactly once: $10,000 − $2,000, not − $4,000.
+    const today = projection?.rows.find((r) => r.date === "2026-05-04");
+    expect(today?.balanceCents).toBe(8_000_00);
+    // And the alert stops asking — the user answered.
+    expect(projection?.unpaidRecentOccurrences).toEqual([]);
+  });
+
+  it("holds the larger of the two when the bank sees more pending than bills explain", async () => {
+    // $2,000 bill marked sent, but the bank shows $2,500 pending: the extra
+    // $500 is some other unposted spend and still has to come out.
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00, 7_500_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-04-25" });
+    const bill = await seedBill(user.id);
+    await upsertBillPaymentState(user.id, bill!.id, {
+      dueDate: "2026-05-01",
+      state: "sent",
+      amountCents: null,
+      markedDate: "2026-05-01",
+      notes: null,
+    });
+
+    const projection = await buildProjection(user.id);
+    expect(projection?.pendingPosting.attributedCents).toBe(2000_00);
+    expect(projection?.pendingPosting.unattributedCents).toBe(500_00);
+    expect(projection?.pendingPosting.totalHeldCents).toBe(2500_00);
+    expect(projection?.rows.find((r) => r.date === "2026-05-04")?.balanceCents).toBe(7_500_00);
+  });
+
+  it("settles an occurrence paid outside the linked accounts and frees its cash", async () => {
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-04-25" });
+    const bill = await seedBill(user.id);
+    await upsertBillPaymentState(user.id, bill!.id, {
+      dueDate: "2026-05-01",
+      state: "paid_externally",
+      amountCents: null,
+      markedDate: "2026-05-01",
+      notes: null,
+    });
+
+    const projection = await buildProjection(user.id);
+    const may1 = projection?.rows.find((r) => r.date === "2026-05-01");
+
+    expect(may1?.events.find((e) => e.label === "Household Rent")).toMatchObject({
+      amountCents: 0,
+      isPaid: true,
+      paidExternally: true,
+    });
+    expect(may1?.expenseCents).toBe(0);
+    expect(projection?.pendingPosting.totalHeldCents).toBe(0);
+    expect(projection?.unpaidRecentOccurrences).toEqual([]);
+  });
+
+  it("hands the hold back to reconciliation once the transaction posts", async () => {
+    // The self-healing half: the `sent` mark is never cleared by anything, it
+    // simply stops mattering. A matched draft outranks it, the occurrence
+    // becomes a paid marker, and the cash is released because the live balance
+    // has now really dropped.
+    const user = await makeUser();
+    await seedLinked(user.id, 8_000_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-04-25" });
+    const bill = await seedBill(user.id);
+    await upsertBillPaymentState(user.id, bill!.id, {
+      dueDate: "2026-05-01",
+      state: "sent",
+      amountCents: null,
+      markedDate: "2026-05-01",
+      notes: null,
+    });
+    await upsertPlaidDraft({
+      id: "txn-household",
+      userId: user.id,
+      accountId: "checking",
+      date: "2026-05-02",
+      description: "HOUSEHOLD RENT ACH",
+      originalDescription: null,
+      amountCents: 2000_00,
+      plaidCategory: null,
+      merchantName: "Household Rent",
+      pending: false,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+
+    const projection = await buildProjection(user.id);
+    const may1 = projection?.rows.find((r) => r.date === "2026-05-01");
+
+    expect(may1?.events.find((e) => e.label === "Household Rent")).toMatchObject({
+      amountCents: 0,
+      isPaid: true,
+    });
+    expect(projection?.pendingPosting.totalHeldCents).toBe(0);
+    expect(projection?.rows.find((r) => r.date === "2026-05-04")?.balanceCents).toBe(8_000_00);
+  });
+
+  it("holds nothing in manual mode — there is no transaction feed to be behind", async () => {
+    const user = await makeUser();
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-05-04" });
+    await seedBill(user.id);
+
+    const projection = await buildProjection(user.id);
+    expect(projection?.pendingPosting.totalHeldCents).toBe(0);
+    expect(projection?.pendingPosting.bills).toEqual([]);
   });
 });
