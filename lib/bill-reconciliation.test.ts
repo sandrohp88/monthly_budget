@@ -3,8 +3,12 @@ import {
   billAliasList,
   draftNamesBill,
   enumerateBillOccurrences,
+  findExternallyPaidOccurrences,
+  findHeldOccurrences,
   findUnpaidRecentOccurrences,
   matchPaidBillOccurrences,
+  occurrenceKey,
+  type BillPaymentMark,
 } from "./bill-reconciliation";
 
 const nvEnergy = {
@@ -360,5 +364,172 @@ describe("findUnpaidRecentOccurrences", () => {
   it("skips occurrences whose override plans zero cash", () => {
     const withZero = { ...bill, overridesByDate: new Map([["2026-07-01", 0]]) };
     expect(findUnpaidRecentOccurrences([withZero], new Map(), { today: "2026-07-09" })).toEqual([]);
+  });
+
+  it("stops asking once the user has answered", () => {
+    const answeredKeys = new Set([occurrenceKey("b1", "2026-07-01")]);
+    expect(
+      findUnpaidRecentOccurrences([bill], new Map(), { today: "2026-07-09", answeredKeys }),
+    ).toEqual([]);
+  });
+});
+
+describe("findHeldOccurrences", () => {
+  const bill = {
+    id: "b1",
+    name: "Rent",
+    amountCents: 1450_00,
+    intervalMonths: 1,
+    anchorDate: "2026-07-01",
+  };
+  const noMarks: BillPaymentMark[] = [];
+
+  it("holds a due occurrence nothing has confirmed as posted", () => {
+    // The production case: due Jul 1, today Jul 3, nothing posted. The bank's
+    // `current` balance still contains this money, so the projection must too.
+    expect(findHeldOccurrences([bill], new Map(), noMarks, { today: "2026-07-03" })).toEqual([
+      {
+        billId: "b1",
+        billName: "Rent",
+        dueDate: "2026-07-01",
+        amountCents: 1450_00,
+        reason: "unconfirmed",
+        holdDate: "2026-07-01",
+      },
+    ]);
+  });
+
+  it("holds from the due date with no grace period", () => {
+    // The unpaid ALERT waits two days before nagging; a hold must not. The day
+    // a bill comes due is the day its cash stops being spendable.
+    expect(findHeldOccurrences([bill], new Map(), noMarks, { today: "2026-07-01" })).toHaveLength(1);
+    // ...but not before it is due.
+    expect(findHeldOccurrences([bill], new Map(), noMarks, { today: "2026-06-30" })).toEqual([]);
+  });
+
+  it("releases the hold once a posted transaction matches it", () => {
+    const paid = new Map([["b1", [{ date: "2026-07-01" }]]]);
+    expect(findHeldOccurrences([bill], paid, noMarks, { today: "2026-07-03" })).toEqual([]);
+  });
+
+  it("keeps holding a `sent` occurrence, on the date the money left", () => {
+    const marks: BillPaymentMark[] = [
+      {
+        billId: "b1",
+        dueDate: "2026-07-01",
+        state: "sent",
+        amountCents: null,
+        markedDate: "2026-06-29",
+      },
+    ];
+    expect(findHeldOccurrences([bill], new Map(), marks, { today: "2026-07-03" })).toEqual([
+      {
+        billId: "b1",
+        billName: "Rent",
+        dueDate: "2026-07-01",
+        amountCents: 1450_00,
+        reason: "sent",
+        holdDate: "2026-06-29",
+      },
+    ]);
+  });
+
+  it("holds a `sent` occurrence paid ahead of its own due date", () => {
+    // Paid Jul 20 for an Aug 1 bill: the money is gone now, so the hold rides
+    // today even though the occurrence is still in the future.
+    const marks: BillPaymentMark[] = [
+      {
+        billId: "b1",
+        dueDate: "2026-08-01",
+        state: "sent",
+        amountCents: null,
+        markedDate: "2026-07-20",
+      },
+    ];
+    const held = findHeldOccurrences([bill], new Map(), marks, { today: "2026-07-20" });
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({ dueDate: "2026-08-01", holdDate: "2026-07-20" });
+  });
+
+  it("uses the actual amount sent when it differs from the plan", () => {
+    const marks: BillPaymentMark[] = [
+      {
+        billId: "b1",
+        dueDate: "2026-07-01",
+        state: "sent",
+        amountCents: 1500_00,
+        markedDate: "2026-07-01",
+      },
+    ];
+    expect(
+      findHeldOccurrences([bill], new Map(), marks, { today: "2026-07-03" })[0]?.amountCents,
+    ).toBe(1500_00);
+  });
+
+  it("releases the cash for an occurrence paid outside the linked accounts", () => {
+    const marks: BillPaymentMark[] = [
+      {
+        billId: "b1",
+        dueDate: "2026-07-01",
+        state: "paid_externally",
+        amountCents: null,
+        markedDate: "2026-07-01",
+      },
+    ];
+    expect(findHeldOccurrences([bill], new Map(), marks, { today: "2026-07-03" })).toEqual([]);
+    expect(findExternallyPaidOccurrences(marks)).toEqual([
+      { billId: "b1", dueDate: "2026-07-01", amountCents: null },
+    ]);
+  });
+
+  it("a matched payment beats a stale `sent` claim", () => {
+    // Self-healing: the mark never has to be cleared. Once reality arrives it
+    // simply stops mattering.
+    const paid = new Map([["b1", [{ date: "2026-07-01" }]]]);
+    const marks: BillPaymentMark[] = [
+      {
+        billId: "b1",
+        dueDate: "2026-07-01",
+        state: "sent",
+        amountCents: null,
+        markedDate: "2026-07-01",
+      },
+    ];
+    expect(findHeldOccurrences([bill], paid, marks, { today: "2026-07-03" })).toEqual([]);
+  });
+
+  it("goes quiet past the lookback window instead of holding cash forever", () => {
+    // Jul 1 occurrence, 14 days later (> 12-day lookback) — assumed paid
+    // outside the linked accounts, cash released.
+    const held = findHeldOccurrences([bill], new Map(), noMarks, { today: "2026-07-15" });
+    expect(held.map((h) => h.dueDate)).toEqual([]);
+  });
+
+  it("keeps holding a `sent` occurrence past the lookback window", () => {
+    // The window bounds GUESSES, not the user's own statement. If they said
+    // the money is out, it stays out until something posts.
+    const marks: BillPaymentMark[] = [
+      {
+        billId: "b1",
+        dueDate: "2026-07-01",
+        state: "sent",
+        amountCents: null,
+        markedDate: "2026-07-01",
+      },
+    ];
+    expect(findHeldOccurrences([bill], new Map(), marks, { today: "2026-07-20" })).toHaveLength(1);
+  });
+
+  it("holds nothing for a zero-planned occurrence", () => {
+    const withZero = { ...bill, overridesByDate: new Map([["2026-07-01", 0]]) };
+    expect(findHeldOccurrences([withZero], new Map(), noMarks, { today: "2026-07-03" })).toEqual([]);
+  });
+
+  it("holds the overridden amount, not the base amount", () => {
+    const withOverride = { ...bill, overridesByDate: new Map([["2026-07-01", 900_00]]) };
+    expect(
+      findHeldOccurrences([withOverride], new Map(), noMarks, { today: "2026-07-03" })[0]
+        ?.amountCents,
+    ).toBe(900_00);
   });
 });

@@ -246,6 +246,20 @@
       "when": 1784001600004,
       "tag": "0034_credit_limits",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1784001600005,
+      "tag": "0035_account_available_balance",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1784001600006,
+      "tag": "0036_bill_payment_states",
+      "breakpoints": true
     }
   ]
 }

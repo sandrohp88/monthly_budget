@@ -517,6 +517,12 @@ export async function syncPlaidTransactions(
             type: acct.type,
             subtype: acct.subtype ?? null,
             balanceCents: balance !== null ? toCents(balance) : null,
+            // Written here (not only in refreshAccountsFromPlaid) because
+            // current and available must always come from the SAME payload —
+            // their difference is the pending float, and a fresh current
+            // against a stale available invents one out of nothing.
+            availableBalanceCents:
+              acct.balances.available != null ? toCents(acct.balances.available) : null,
             limitCents: acct.balances.limit != null ? toCents(acct.balances.limit) : null,
             updatedAt: Date.now(),
           });
@@ -832,6 +838,9 @@ export async function refreshAccountsFromPlaid(
         type: acct.type,
         subtype: acct.subtype ?? null,
         balanceCents: balance !== null ? toCents(balance) : null,
+        // Same payload as balanceCents — see the column doc in schema.ts.
+        availableBalanceCents:
+          acct.balances.available != null ? toCents(acct.balances.available) : null,
         limitCents,
         updatedAt: Date.now(),
       });

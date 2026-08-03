@@ -4,6 +4,7 @@ import { addDaysIso, todayIso } from "./dates";
 import {
   getSettings,
   listBillPaymentOverridesForUser,
+  listBillPaymentStatesForUser,
   listBills,
   listCreditCardPaymentOverridesForUser,
   listCreditCards,
@@ -16,7 +17,7 @@ import {
   listStartingBalanceDraftsInRange,
   listStatementsForUser,
   listVariableBills,
-  getPrimaryLinkedBalance,
+  getLinkedBalanceSnapshot,
 } from "./repos";
 import {
   computeProjection,
@@ -28,8 +29,13 @@ import {
 import { projectCardPayments } from "./card-payments";
 import {
   billAliasList,
+  findExternallyPaidOccurrences,
+  findHeldOccurrences,
   findUnpaidRecentOccurrences,
   matchPaidBillOccurrences,
+  occurrenceKey,
+  type BillPaymentMark,
+  type HeldBillOccurrence,
   type UnpaidRecentOccurrence,
 } from "./bill-reconciliation";
 
@@ -87,8 +93,40 @@ export type ProjectionBundle = {
   /**
    * Recently-due bill occurrences with NO matched payment (linked mode only)
    * — the "was this actually paid?" alert feed. Empty in manual mode.
+   * Occurrences the user has already answered for (sent / paid externally)
+   * drop out.
    */
   unpaidRecentOccurrences: UnpaidRecentOccurrence[];
+  /**
+   * Money committed but not yet posted, still held out of the projected
+   * balance (linked mode only). `bills` are occurrences nothing has confirmed
+   * as posted; `unattributedCents` is the remainder of the bank's own pending
+   * float that no bill explains. See the pending-float block in
+   * _buildProjection for the invariant that keeps the two from double-counting.
+   */
+  pendingPosting: {
+    bills: HeldBillOccurrence[];
+    /**
+     * Every occurrence the user has answered for, so the UI can offer to take
+     * it back. Without this a mark is a one-way door: an answered occurrence
+     * leaves the unpaid alert, which is the only place it was reachable.
+     */
+    answered: Array<{
+      billId: string;
+      billName: string;
+      dueDate: string;
+      state: "sent" | "paid_externally";
+      amountCents: number;
+    }>;
+    /** Σ max(0, current − available) reported by the bank, 0 when unknown. */
+    bankPendingOutflowCents: number;
+    /** Σ of the held bill occurrences above. */
+    attributedCents: number;
+    /** max(0, bankPendingOutflow − attributed) — pending spend no bill explains. */
+    unattributedCents: number;
+    /** attributed + unattributed: total cash held back from the balance. */
+    totalHeldCents: number;
+  };
 };
 
 export const buildProjection = cache(_buildProjection);
@@ -110,11 +148,12 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     extras,
     statements,
     activeCards,
-    linkedBalance,
+    balanceSnapshot,
     plaidAccts,
     promos,
     promoPayments,
     variableBills,
+    billPaymentMarks,
   ] =
     await Promise.all([
       listBills(userId, false),
@@ -124,12 +163,14 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
       listExtras(userId),
       listStatementsForUser(userId),
       listCreditCards(userId, false),
-      getPrimaryLinkedBalance(userId),
+      getLinkedBalanceSnapshot(userId),
       listPlaidAccounts(userId),
       listPromos(userId, false),
       listAllPromoPayments(userId),
       listVariableBills(userId, false),
+      listBillPaymentStatesForUser(userId),
     ]);
+  const linkedBalance = balanceSnapshot?.balanceCents ?? null;
   const activeCardIds = new Set(activeCards.map((c) => c.id));
   const billOverridesByBill = new Map<string, Array<{ date: string; amountCents: number }>>();
   for (const override of billPaymentOverrides) {
@@ -203,6 +244,12 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   const billMatchesByDraftId: ProjectionBundle["billMatchesByDraftId"] = {};
   const paidOccurrencesByBillOut: ProjectionBundle["paidOccurrencesByBill"] = {};
   let unpaidRecentOccurrences: UnpaidRecentOccurrence[] = [];
+  // Cash committed but not yet posted — see the pending-float block below.
+  let heldOccurrences: HeldBillOccurrence[] = [];
+  const heldByBill = new Map<string, HeldBillOccurrence[]>();
+  const externallyPaidByBill = new Map<string, Array<{ date: string; amountCents: number | null }>>();
+  let unattributedPendingCents = 0;
+  let answeredOccurrences: ProjectionBundle["pendingPosting"]["answered"] = [];
   if (linked) {
     const [recentDrafts, linkDescriptors] = await Promise.all([
       listStartingBalanceDraftsInRange(
@@ -262,11 +309,83 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
         };
       }
     }
+    // ── Money committed but not yet posted ──────────────────────────────
+    // A due date passing is not evidence that a bill was paid. Plaid's live
+    // balance is `balances.current`, which excludes pending debits, so an ACH
+    // pull that has left the account but hasn't posted is invisible on both
+    // sides: still inside the live balance, and (once its date passes) no
+    // longer projected. That combination overstated the projected balance by
+    // the full amount of every bill in flight.
+    //
+    // Two independent sources of truth close it, and neither one assumes:
+    //   - the BANK's own pending float (`current − available`), which is
+    //     exactly "money that has left but hasn't posted";
+    //   - the USER's per-occurrence marks (sent / paid externally).
+    //
+    // They overlap: a bill the user marked sent is usually the same money the
+    // bank is reporting as pending. Holding both would double-count it, so
+    // the marks ATTRIBUTE the float rather than adding to it:
+    //
+    //     totalHeld = max(bankPendingOutflow, attributed)
+    //
+    // Attributed cash rides its own bill occurrence (so the user can see what
+    // it is); only the unexplained remainder becomes an anonymous hold. When
+    // the bank reports no available balance the float is 0 and this degrades
+    // to purely the user's marks; when the user marks nothing it degrades to
+    // purely the bank's number.
+    const marks: BillPaymentMark[] = billPaymentMarks.map((m) => ({
+      billId: m.billId,
+      dueDate: m.dueDate,
+      state: m.state,
+      amountCents: m.amountCents,
+      markedDate: m.markedDate,
+    }));
+    heldOccurrences = findHeldOccurrences(reconcilableBills, paidOccurrencesByBill, marks, {
+      today,
+    });
+    for (const h of heldOccurrences) {
+      const list = heldByBill.get(h.billId) ?? [];
+      list.push(h);
+      heldByBill.set(h.billId, list);
+    }
+    for (const e of findExternallyPaidOccurrences(marks)) {
+      const list = externallyPaidByBill.get(e.billId) ?? [];
+      list.push({ date: e.dueDate, amountCents: e.amountCents });
+      externallyPaidByBill.set(e.billId, list);
+    }
+    const attributedCents = heldOccurrences.reduce((s, h) => s + h.amountCents, 0);
+    unattributedPendingCents = Math.max(
+      0,
+      (balanceSnapshot?.pendingOutflowCents ?? 0) - attributedCents,
+    );
+
+    // A mark must stay reversible: answering removes the occurrence from the
+    // alert, so the alert can't also be where you take the answer back.
+    const billNames = new Map(cashBills.map((b) => [b.id, b] as const));
+    answeredOccurrences = marks
+      .filter((m) => billNames.has(m.billId))
+      .map((m) => {
+        const bill = billNames.get(m.billId)!;
+        const planned =
+          (billOverridesByBill.get(m.billId) ?? []).find((o) => o.date === m.dueDate)?.amountCents ??
+          bill.amountCents;
+        return {
+          billId: m.billId,
+          billName: bill.name,
+          dueDate: m.dueDate,
+          state: m.state,
+          amountCents: m.amountCents ?? planned,
+        };
+      })
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.billName.localeCompare(b.billName));
+
     // The inverse of the paid markers: recently-due occurrences nothing paid.
+    // An occurrence the user already answered for is not an open question.
+    const answeredKeys = new Set(marks.map((m) => occurrenceKey(m.billId, m.dueDate)));
     unpaidRecentOccurrences = findUnpaidRecentOccurrences(
       reconcilableBills,
       paidOccurrencesByBill,
-      { today },
+      { today, answeredKeys },
     );
   }
   // Each draft on date D subtracts amountCents from the running balance
@@ -361,7 +480,18 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
         anchorDate: b.anchorDate,
         paymentOverrides: billOverridesByBill.get(b.id) ?? [],
         paidOccurrences: paidOccurrencesByBill.get(b.id) ?? [],
+        externallyPaidOccurrences: externallyPaidByBill.get(b.id) ?? [],
+        heldOccurrences: (heldByBill.get(b.id) ?? []).map((h) => ({
+          date: h.dueDate,
+          amountCents: h.amountCents,
+          reason: h.reason,
+          holdDate: h.holdDate,
+        })),
         settledBeforeDate: settleBefore,
+        // `autoPay` means the biller will pull it, not that the pull has
+        // landed — so it still only decides whether an already-settled
+        // occurrence RENDERS. Whether an occurrence settles at all is now
+        // decided by evidence (heldOccurrences), above.
         showSettledBeforeDate: lookback || (linked && b.autoPay),
       })),
       ...cardChargedBills.map((b) => ({
@@ -401,6 +531,23 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
         })),
       ...cardPayments.extras.filter((e) => onOrAfterStart(e.date)).map(decorateScheduledExtra),
       ...historicalExtras,
+      // Pending spend the bank is reporting that no bill occurrence explains —
+      // a card swipe, a transfer, anything that hasn't posted. Deliberately
+      // NOT passed through decorateScheduledExtra: it carries no
+      // settledBeforeDate at all, because the whole point is that this money
+      // is NOT yet inside the live balance the walk starts from, even though
+      // it rides today. It disappears on its own the moment the transaction
+      // posts and `current` catches up with `available`.
+      ...(unattributedPendingCents > 0
+        ? [
+            {
+              date: today,
+              description: "Pending at bank",
+              amountCents: unattributedPendingCents,
+              awaitingPost: true,
+            },
+          ]
+        : []),
     ],
   };
   const promoSummariesByCard: Record<string, PromoPaymentSummary[]> = {};
@@ -435,5 +582,14 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     billMatchesByDraftId,
     paidOccurrencesByBill: paidOccurrencesByBillOut,
     unpaidRecentOccurrences,
+    pendingPosting: {
+      bills: heldOccurrences,
+      answered: answeredOccurrences,
+      bankPendingOutflowCents: linked ? (balanceSnapshot?.pendingOutflowCents ?? 0) : 0,
+      attributedCents: heldOccurrences.reduce((s, h) => s + h.amountCents, 0),
+      unattributedCents: unattributedPendingCents,
+      totalHeldCents:
+        heldOccurrences.reduce((s, h) => s + h.amountCents, 0) + unattributedPendingCents,
+    },
   };
 }

@@ -31,6 +31,24 @@ export const billPaymentOverrideSchema = z.object({
   notes: z.string().max(500).nullable().optional(),
 });
 
+/**
+ * What the user asserts about one bill occurrence when no transaction has
+ * posted yet. `markedDate` is the day the money left the account — it decides
+ * where a `sent` hold lands, so it states a fact about the past. The route
+ * rejects a future one rather than silently clamping it.
+ */
+export const billPaymentStateSchema = z.object({
+  dueDate: isoDate,
+  state: z.enum(["sent", "paid_externally"]),
+  /** What actually left, when it differs from plan. Null = use the plan. */
+  amountCents: cents
+    .refine((n) => n >= 0, "Amount must be non-negative")
+    .nullable()
+    .optional(),
+  markedDate: isoDate,
+  notes: z.string().max(500).nullable().optional(),
+});
+
 export const variableBillCreateSchema = z.object({
   name: z.string().min(1).max(80),
   category: z.string().min(1).max(50),
@@ -526,6 +544,16 @@ const importBillOverrideSchema = z.object({
   notes: optionalNotes,
 });
 
+const importBillPaymentStateSchema = z.object({
+  id: id.optional(),
+  billId: id,
+  dueDate: isoDate,
+  state: z.enum(["sent", "paid_externally"]),
+  amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative").nullable().optional(),
+  markedDate: isoDate,
+  notes: optionalNotes,
+});
+
 const importVariableBillSchema = z.object({
   id,
   name: z.string().min(1).max(80),
@@ -657,6 +685,7 @@ export const backupImportSchema = z.object({
   settings: z.unknown().optional(),
   bills: z.array(importBillSchema).max(1000).optional(),
   billPaymentOverrides: z.array(importBillOverrideSchema).max(10000).optional(),
+  billPaymentStates: z.array(importBillPaymentStateSchema).max(10000).optional(),
   variableBills: z.array(importVariableBillSchema).max(1000).optional(),
   variableBillCards: z.array(importVariableBillCardSchema).max(10000).optional(),
   creditCardPaymentOverrides: z.array(importCreditCardPaymentOverrideSchema).max(10000).optional(),

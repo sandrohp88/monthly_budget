@@ -350,6 +350,8 @@ weird gets emitted before merging.
 - `0028_card_grace_period_days` — `credit_cards.grace_period_days` (per-card statement→due grace, default 14; feeds `dueDateFromStatement` everywhere instead of the old hardcoded floor).
 - `0029_paycheck_settled_by_draft` — `paychecks.settled_by_draft_id` + partial unique index (deposit-to-paycheck auto-reconciliation; a deposit draft settles at most one paycheck, ever — mirror of 0025).
 - `0034_credit_limits` — `credit_cards.credit_limit_cents` + `plaid_accounts.limit_cents` (utilization). Plaid's `balances.limit` fills the account column on every sync and SEEDS the card column only while it is NULL (`seedCreditLimitFromPlaid`) — manual wins after that, same rule as paid records and due-date overrides.
+- `0035_account_available_balance` — `plaid_accounts.available_balance_cents` (Plaid `balances.available`). `current − available` is the bank's own pending-outflow float. See §17b.
+- `0036_bill_payment_states` — `bill_payment_states` table, unique `(bill_id, due_date)`: the user's per-occurrence assertion (`sent` | `paid_externally`) for occurrences the transaction feed hasn't answered yet. See §17b.
 
 ---
 
@@ -648,7 +650,16 @@ These bit us before. Don't repeat:
     `plaid_transaction_drafts.account_id` is `ON DELETE CASCADE`, so it takes that account's whole
     transaction history with it (227 rows on the live DB as of 2026-07-24). Deactivating an item
     is the intended soft-delete; leave the rows alone.
-30. **Card due payments are never mandatory — don't reintroduce a hard block.**
+30. **A past due date is NOT evidence a bill was paid.** Until 2026-08-03 the
+    projection settled any bill occurrence older than the settle pivot into a
+    zero-cash `isPaid` marker, which released its cash on the strength of the
+    calendar alone. Plaid's live balance is `balances.current`, which excludes
+    pending debits — so an ACH pull that had left the bank but not posted was
+    counted twice in the user's favour (still inside the live balance, no
+    longer projected). Bill occurrences now settle on EVIDENCE only: a matched
+    posted transaction, or an explicit user mark. See §17b — and don't
+    "simplify" the held path back into the settle pivot.
+31. **Card due payments are never mandatory — don't reintroduce a hard block.**
     `cardPaymentMoveError` only rejects past dates; scheduling after the issuer due date is
     allowed everywhere (warn via `cardPaymentLateWarning`, record as `lateCoverCents` — a subset
     of `scheduledCoverCents`, which stays the TOTAL cover). Unpaid past-due statements become
@@ -804,6 +815,9 @@ future months' identically-worded transactions match automatically. The
 settle threshold (`SETTLE_MIN_FRACTION`) still applies to linked drafts — a
 tiny linked payment won't mark a large bill paid.
 
+An occurrence that reconciliation can't match does NOT get assumed paid once
+its date passes — its cash stays held. See §17b.
+
 ### Paycheck reconciliation (deposits → paychecks)
 The income-side analog. `lib/paycheck-reconciliation.ts` (pure) matches
 approved deposit drafts (negative `amountCents`) on starting-balance accounts
@@ -819,6 +833,78 @@ index from migration 0029. Un-marking received on `/paychecks` (or archiving
 the row) clears `settledByDraftId` so the deposit can re-settle — same
 release contract as the statements PATCH route. Auto-reconciled rows show an
 AUTO pill next to RECEIVED.
+
+---
+
+## 17b. Money in flight (paid, not yet posted)
+
+The gap between "the money left" and "the transaction posted" is 1–5 business
+days of ACH, and for that whole window neither side of the app can see the
+payment: `balances.current` still contains it, and once the due date passes the
+occurrence used to stop being projected. **Both errors point the same way** —
+the balance reads high — which is the worst direction for a cash-flow tool.
+
+Three layers close it. None of them assumes a bill was paid.
+
+**1. Evidence-based settling (`findHeldOccurrences`, lib/bill-reconciliation.ts).**
+An occurrence settles only when something confirms it. Precedence, strongest
+first: a matched posted transaction → `paid_externally` mark → `sent` mark →
+nothing (hold it). A held occurrence keeps debiting and rides forward to the
+projection start date if its own date is outside the window, so it can never
+silently vanish — the same rule as card OVERDUE markers. Bounded by
+`OVERDUE_LOOKBACK_DAYS` (12), shared with the unpaid alert so the cash hold and
+the nag always describe the same set. **No grace period**: the alert waits two
+days because a false alarm is annoying, but a hold has the opposite cost
+profile and the day a bill is due is the day its cash stops being spendable.
+
+**2. The bank's own pending float.** Plaid documents `balances.available` for a
+depository account as current less pending outflows plus pending inflows — so
+`current − available` IS "money that has left but hasn't posted", measured by
+the institution. Stored in `plaid_accounts.available_balance_cents` (migration
+0035) and summed by `getLinkedBalanceSnapshot`. Clamped at 0 per account
+(banks fold overdraft lines and pending deposits into `available`); 0 when the
+institution doesn't compute it, which degrades the feature gracefully rather
+than breaking it.
+
+**3. Per-occurrence marks (`bill_payment_states`, migration 0036).** `sent` =
+the money is out, keep holding it. `paid_externally` = paid from an account
+this app can't see, release it. Marks are CLAIMS, never the last word: a
+matched transaction outranks them at read time, so nothing has to remember to
+clear a mark — it just stops mattering. Reversible from the dashboard.
+
+### The non-double-counting invariant (read before touching layer 2 or 3)
+
+Layers 2 and 3 describe overlapping money — a bill marked `sent` is usually the
+same dollars the bank reports pending. Marks therefore **attribute** the float
+rather than adding to it:
+
+```
+totalHeld = attributed + max(0, bankPendingOutflow − attributed)
+          = max(bankPendingOutflow, attributed)
+```
+
+Attributed cash rides its own bill occurrence so the user can see what it is;
+only the unexplained remainder becomes an anonymous "Pending at bank" event on
+today. Once everything is attributed, the projection's today-close converges on
+the bank's own available balance — that's the tell that the wiring is right.
+
+### Don't
+
+- ❌ Don't write `available_balance_cents` from a different payload than
+  `balance_cents`. Their difference is the float; a fresh current against a
+  stale available invents one, and that fiction holds real cash out of the
+  projection. (This is why it is NOT coalesced in `upsertPlaidAccount` the way
+  `limit_cents` is.)
+- ❌ Don't add the marks to the bank float instead of attributing against it —
+  that double-counts a single payment.
+- ❌ Don't measure the dashboard's balance-vs-projection Delta without adding
+  `pendingPosting.totalHeldCents` back first. The hold is a deliberate gap;
+  comparing against it makes the alert fire permanently and blames "unexpected
+  income" for money on its way out.
+- ❌ Don't give holds a grace period to match the unpaid alert's. Different
+  cost profiles, deliberately different windows.
+
+---
 
 ### Adding Plaid features — recipe
 1. New repo function in `lib/repos.ts` (always user-scoped).

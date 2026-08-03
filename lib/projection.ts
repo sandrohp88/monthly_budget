@@ -63,6 +63,28 @@ export type Bill = {
    */
   paidOccurrences?: Array<{ date: string; paidAmountCents?: number }>;
   /**
+   * Occurrences the USER settled by hand — paid from an account this app
+   * can't see, so no transaction will ever reconcile them. Treated exactly
+   * like `paidOccurrences`: zero-cash paid marker.
+   */
+  externallyPaidOccurrences?: Array<{ date: string; amountCents?: number | null }>;
+  /**
+   * Occurrences whose cash is still HELD because nothing has confirmed the
+   * money leaving — either the user marked them sent-awaiting-post, or the
+   * due date arrived and no transaction matched. These keep debiting instead
+   * of settling to a zero-cash marker; see findHeldOccurrences in
+   * lib/bill-reconciliation.ts for the precedence rules.
+   *
+   * `holdDate` is where the debit lands (floored at the projection start, so
+   * an occurrence older than the window rides forward rather than vanishing).
+   */
+  heldOccurrences?: Array<{
+    date: string;
+    amountCents: number;
+    reason: "sent" | "unconfirmed";
+    holdDate: string;
+  }>;
+  /**
    * When the starting balance comes from a live bank account, cash movements
    * before today are already reflected in that balance. Past bill occurrences
    * before this date should not change the running projection again.
@@ -93,6 +115,9 @@ export type OneTimeExpense = {
   /** Per-cycle SKIP: an explicit $0 plan — zero cash, balance stays owed. */
   skipped?: boolean;
   isPaid?: boolean;
+  /** See ProjectionEvent.awaitingPost — money the bank has committed but not
+   *  yet posted (the unattributed remainder of the pending float). */
+  awaitingPost?: boolean;
   /** See ProjectionEvent.dueMarker — a zero-cash credit-card due-date marker. */
   dueMarker?: boolean;
   /** For a due marker: cash the user has scheduled toward this cycle's balance. */
@@ -148,6 +173,19 @@ export type ProjectionEvent = {
   /** Per-cycle SKIP: an explicit $0 plan — zero cash, balance stays owed. */
   skipped?: boolean;
   isPaid?: boolean;
+  /** Set on a paid marker the USER settled ("paid from an account you don't
+   *  see") rather than one a posted transaction reconciled. */
+  paidExternally?: boolean;
+  /**
+   * Cash still held for a bill occurrence nothing has confirmed as posted —
+   * the user marked it sent, or its due date passed with no matching
+   * transaction. A real debit, not a marker: the money is spoken for even
+   * though the bank hasn't moved it yet.
+   */
+  awaitingPost?: boolean;
+  /** For an awaitingPost debit riding a day later than its own due date
+   *  (older than the window, or paid ahead of schedule): the due date. */
+  heldSinceDate?: string;
   /** Set when the underlying bill/expense is charged to a credit card — the
    *  event is a zero-cash marker (the card's payment carries the cash). */
   chargedToCardName?: string;
@@ -373,6 +411,7 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
       paymentBalanceCents: e.paymentBalanceCents,
       skipped: e.skipped,
       isPaid: e.isPaid,
+      awaitingPost: e.awaitingPost,
       chargedToCardName: e.chargedToCardName,
       paydownTargetDate: e.paydownTargetDate,
       dueMarker: e.dueMarker,
@@ -398,6 +437,10 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
     const paidByDate = new Map(
       (b.paidOccurrences ?? []).map((p) => [p.date, p.paidAmountCents] as const),
     );
+    const externallyPaidByDate = new Map(
+      (b.externallyPaidOccurrences ?? []).map((p) => [p.date, p.amountCents] as const),
+    );
+    const heldByDate = new Map((b.heldOccurrences ?? []).map((h) => [h.date, h] as const));
     const anchorTs = parseIsoDate(b.anchorDate);
     const anchorObj = new Date(anchorTs);
     const anchorY = anchorObj.getUTCFullYear();
@@ -444,6 +487,46 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
           sourceType: "bill",
           originalAmountCents: paidByDate.get(date) ?? override ?? b.amountCents,
           isPaid: true,
+        });
+        continue;
+      }
+      // The user settled it by hand — paid from an account we can't see, so
+      // no transaction is ever coming. Same zero-cash marker as a matched
+      // payment, tagged so the UI can say who vouched for it.
+      if (externallyPaidByDate.has(date)) {
+        addEvent(date, {
+          kind: "bill",
+          label: b.name,
+          amountCents: 0,
+          sourceId: b.id,
+          sourceType: "bill",
+          originalAmountCents: externallyPaidByDate.get(date) ?? override ?? b.amountCents,
+          isPaid: true,
+          paidExternally: true,
+        });
+        continue;
+      }
+      // Nothing has confirmed this occurrence's money leaving, so its cash is
+      // still spoken for. This case is checked BEFORE settledBeforeDate on
+      // purpose: the settle pivot only knows that a date has passed, which is
+      // not evidence of payment, and treating it as evidence is what let a
+      // due-but-unposted bill quietly free its own cash.
+      const held = heldByDate.get(date);
+      if (held) {
+        // Floor at the projection start so an occurrence older than the
+        // rendered window rides forward to the first visible day instead of
+        // being clipped away by addEvent — the same "never let an unmet
+        // obligation vanish" rule the card OVERDUE markers follow.
+        const emitDate = held.holdDate < input.startDate ? input.startDate : held.holdDate;
+        addEvent(emitDate, {
+          kind: "bill",
+          label: b.name,
+          amountCents: held.amountCents,
+          sourceId: b.id,
+          sourceType: "bill",
+          originalAmountCents: override ?? b.amountCents,
+          awaitingPost: true,
+          ...(emitDate === date ? {} : { heldSinceDate: date }),
         });
         continue;
       }

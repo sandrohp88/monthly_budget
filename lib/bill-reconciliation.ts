@@ -329,6 +329,148 @@ export type UnpaidRecentOccurrence = {
 };
 
 /**
+ * A user's assertion about one occurrence, for occurrences the transaction
+ * feed hasn't answered yet. Mirrors a `bill_payment_states` row.
+ */
+export type BillPaymentMark = {
+  billId: string;
+  dueDate: string;
+  state: "sent" | "paid_externally";
+  /** What actually left the account; null falls back to the planned amount. */
+  amountCents: number | null;
+  /** ISO date the money left — where a `sent` hold is placed. */
+  markedDate: string;
+};
+
+/** `${billId}:${dueDate}` — the identity of a generated occurrence. */
+export function occurrenceKey(billId: string, dueDate: string): string {
+  return `${billId}:${dueDate}`;
+}
+
+export type HeldBillOccurrence = {
+  billId: string;
+  billName: string;
+  dueDate: string;
+  /** Cash still held for this occurrence. */
+  amountCents: number;
+  /**
+   * `sent` — the user said the money is out, waiting to post.
+   * `unconfirmed` — due date reached and nothing has confirmed it either way.
+   */
+  reason: "sent" | "unconfirmed";
+  /**
+   * The day the hold should debit: the date the money left for a `sent` mark,
+   * the due date otherwise. The projection floors this at its start date, so
+   * an occurrence older than the visible window rides forward to the first
+   * rendered day rather than silently disappearing.
+   */
+  holdDate: string;
+};
+
+/**
+ * Occurrences whose cash must STILL be held because nothing has shown it
+ * leaving the account.
+ *
+ * The rule this replaces was "a due date in the past means it was paid", which
+ * is an assumption, not evidence — and it fails in the most expensive
+ * direction: it releases cash the bank has not yet moved, so the projected
+ * balance reads high for exactly as long as the payment takes to post.
+ *
+ * Precedence, strongest evidence first:
+ *   1. a matched posted transaction (`paidOccurrences`) — real money moved,
+ *      the live balance already reflects it, hold nothing.
+ *   2. `paid_externally` — the user says it was paid from an account this app
+ *      can't see. No transaction will ever arrive; release the cash.
+ *   3. `sent` — the user says the money is out but unposted. Hold it on the
+ *      date they say it left.
+ *   4. nothing at all, due date reached — hold it. Conservative by design:
+ *      a false hold is visible and one click from being resolved, while a
+ *      false release silently overstates every downstream balance.
+ *
+ * Case 4 is bounded by `lookbackDays` (default OVERDUE_LOOKBACK_DAYS, the same
+ * window as the unpaid alert, so the cash hold and the nag always describe the
+ * same set of occurrences). Past that, an occurrence that never matched is
+ * assumed to have been paid outside the linked accounts and goes quiet.
+ *
+ * There is deliberately NO grace period here. `findUnpaidRecentOccurrences`
+ * waits a couple of days before nagging because a false alarm is annoying; a
+ * hold has the opposite cost profile, and the day a bill comes due is exactly
+ * when its cash stops being spendable.
+ */
+export function findHeldOccurrences(
+  bills: ReadonlyArray<ReconcilableBill>,
+  paidOccurrences: ReadonlyMap<string, ReadonlyArray<{ date: string }>>,
+  marks: ReadonlyArray<BillPaymentMark>,
+  opts: { today: string; lookbackDays?: number },
+): HeldBillOccurrence[] {
+  const lookback = Math.max(1, opts.lookbackDays ?? OVERDUE_LOOKBACK_DAYS);
+  const windowStart = addDays(opts.today, -lookback);
+  const marksByKey = new Map(marks.map((m) => [occurrenceKey(m.billId, m.dueDate), m] as const));
+
+  const out: HeldBillOccurrence[] = [];
+  for (const bill of bills) {
+    const paidDates = new Set((paidOccurrences.get(bill.id) ?? []).map((p) => p.date));
+    // `sent` marks can sit outside the unconfirmed window in both directions —
+    // a bill paid early (due date still ahead) or one marked a while ago that
+    // still hasn't posted — so enumerate wide enough to reach them.
+    const markDates = marks
+      .filter((m) => m.billId === bill.id && m.state === "sent")
+      .map((m) => m.dueDate);
+    const scanStart = markDates.reduce((a, d) => (d < a ? d : a), windowStart);
+    const scanEnd = markDates.reduce((a, d) => (d > a ? d : a), opts.today);
+
+    for (const occ of enumerateBillOccurrences(bill, scanStart, scanEnd)) {
+      if (paidDates.has(occ)) continue; // (1) reality beats every claim
+      const mark = marksByKey.get(occurrenceKey(bill.id, occ));
+      if (mark?.state === "paid_externally") continue; // (2) settled, not held
+      const planned = bill.overridesByDate?.get(occ) ?? bill.amountCents;
+
+      if (mark?.state === "sent") {
+        const amountCents = mark.amountCents ?? planned;
+        if (amountCents <= 0) continue;
+        out.push({
+          billId: bill.id,
+          billName: bill.name,
+          dueDate: occ,
+          amountCents,
+          reason: "sent",
+          // A mark can't claim money left in the future.
+          holdDate: mark.markedDate > opts.today ? opts.today : mark.markedDate,
+        });
+        continue;
+      }
+
+      // (4) unconfirmed — only for occurrences already due, inside the window.
+      if (occ > opts.today || occ < windowStart) continue;
+      if (planned <= 0) continue; // zero-planned occurrence has nothing to hold
+      out.push({
+        billId: bill.id,
+        billName: bill.name,
+        dueDate: occ,
+        amountCents: planned,
+        reason: "unconfirmed",
+        holdDate: occ,
+      });
+    }
+  }
+  out.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.billName.localeCompare(b.billName));
+  return out;
+}
+
+/**
+ * Occurrences the user has settled by hand (`paid_externally`) — paid from an
+ * account this app can't see, so no transaction will ever reconcile them.
+ * They render as paid markers exactly like a matched payment would.
+ */
+export function findExternallyPaidOccurrences(
+  marks: ReadonlyArray<BillPaymentMark>,
+): Array<{ billId: string; dueDate: string; amountCents: number | null }> {
+  return marks
+    .filter((m) => m.state === "paid_externally")
+    .map((m) => ({ billId: m.billId, dueDate: m.dueDate, amountCents: m.amountCents }));
+}
+
+/**
  * Recently-due bill occurrences with NO matched payment — the inverse of the
  * paid markers, for a "was this actually paid?" alert. Only meaningful in
  * linked mode (without transaction data every occurrence would flag).
@@ -336,11 +478,20 @@ export type UnpaidRecentOccurrence = {
  * The window is deliberately short: `graceDays` after the due date absorbs
  * ACH posting lag, and anything older than `lookbackDays` goes quiet instead
  * of nagging forever about bills paid outside the linked accounts.
+ *
+ * An occurrence the user has already answered for — `sent` or
+ * `paid_externally` — drops out via `answeredKeys`. They told us; the alert's
+ * whole question is settled even though no transaction posted.
  */
 export function findUnpaidRecentOccurrences(
   bills: ReadonlyArray<ReconcilableBill>,
   paidOccurrences: ReadonlyMap<string, ReadonlyArray<{ date: string }>>,
-  opts: { today: string; graceDays?: number; lookbackDays?: number },
+  opts: {
+    today: string;
+    graceDays?: number;
+    lookbackDays?: number;
+    answeredKeys?: ReadonlySet<string>;
+  },
 ): UnpaidRecentOccurrence[] {
   const grace = Math.max(0, opts.graceDays ?? OVERDUE_GRACE_DAYS);
   const lookback = Math.max(1, opts.lookbackDays ?? OVERDUE_LOOKBACK_DAYS);
@@ -353,6 +504,7 @@ export function findUnpaidRecentOccurrences(
     const paidDates = new Set((paidOccurrences.get(bill.id) ?? []).map((p) => p.date));
     for (const occ of enumerateBillOccurrences(bill, windowStart, windowEnd)) {
       if (paidDates.has(occ)) continue;
+      if (opts.answeredKeys?.has(occurrenceKey(bill.id, occ))) continue;
       const expected = bill.overridesByDate?.get(occ) ?? bill.amountCents;
       if (expected <= 0) continue; // zero-planned occurrence needs no payment
       out.push({ billId: bill.id, billName: bill.name, dueDate: occ, expectedCents: expected });

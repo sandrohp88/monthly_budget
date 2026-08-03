@@ -5,6 +5,7 @@ import {
   assets,
   bills,
   billPaymentOverrides,
+  billPaymentStates,
   categories,
   creditCards,
   creditCardPaymentOverrides,
@@ -24,6 +25,7 @@ import {
   type AssetRow,
   type BillRow,
   type BillPaymentOverrideRow,
+  type BillPaymentStateRow,
   type CategoryRow,
   type CreditCardPromoRow,
   type CreditCardPromoPaymentRow,
@@ -32,6 +34,7 @@ import {
   type CreditCardStatementRow,
   type NewBill,
   type NewBillPaymentOverride,
+  type NewBillPaymentState,
   type NewCategory,
   type NewCreditCard,
   type NewCreditCardPaymentOverride,
@@ -612,6 +615,94 @@ export async function deleteBillPaymentOverride(
         eq(billPaymentOverrides.userId, userId),
         eq(billPaymentOverrides.billId, billId),
         eq(billPaymentOverrides.dueDate, dueDate),
+      ),
+    )
+    .run();
+}
+
+// ── bill payment states (what the user asserts happened) ─────────────────────
+
+export async function listBillPaymentStatesForUser(
+  userId: string,
+): Promise<BillPaymentStateRow[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(billPaymentStates)
+    .where(eq(billPaymentStates.userId, userId))
+    .orderBy(asc(billPaymentStates.dueDate))
+    .all();
+}
+
+/**
+ * Record (or replace) the user's assertion about one occurrence. One row per
+ * `(bill, dueDate)` — re-marking an occurrence overwrites the previous claim
+ * rather than stacking, so "sent" → "paid externally" is just a re-save.
+ */
+export async function upsertBillPaymentState(
+  userId: string,
+  billId: string,
+  data: Omit<NewBillPaymentState, "id" | "userId" | "billId" | "createdAt" | "updatedAt">,
+): Promise<BillPaymentStateRow | undefined> {
+  const db = getDb();
+  const bill = await getBill(userId, billId);
+  if (!bill) return undefined;
+
+  const existing = await db
+    .select()
+    .from(billPaymentStates)
+    .where(
+      and(
+        eq(billPaymentStates.userId, userId),
+        eq(billPaymentStates.billId, billId),
+        eq(billPaymentStates.dueDate, data.dueDate),
+      ),
+    )
+    .get();
+
+  if (existing) {
+    await db
+      .update(billPaymentStates)
+      .set({
+        state: data.state,
+        amountCents: data.amountCents ?? null,
+        markedDate: data.markedDate,
+        notes: data.notes ?? null,
+        updatedAt: Date.now(),
+      })
+      .where(eq(billPaymentStates.id, existing.id))
+      .run();
+    return db.select().from(billPaymentStates).where(eq(billPaymentStates.id, existing.id)).get();
+  }
+
+  const id = newId();
+  await db
+    .insert(billPaymentStates)
+    .values({
+      id,
+      userId,
+      billId,
+      ...data,
+      amountCents: data.amountCents ?? null,
+      notes: data.notes ?? null,
+    })
+    .run();
+  return db.select().from(billPaymentStates).where(eq(billPaymentStates.id, id)).get();
+}
+
+export async function deleteBillPaymentState(
+  userId: string,
+  billId: string,
+  dueDate: string,
+): Promise<void> {
+  const db = getDb();
+  await db
+    .delete(billPaymentStates)
+    .where(
+      and(
+        eq(billPaymentStates.userId, userId),
+        eq(billPaymentStates.billId, billId),
+        eq(billPaymentStates.dueDate, dueDate),
       ),
     )
     .run();
@@ -1778,6 +1869,16 @@ export async function upsertPlaidAccount(data: NewPlaidAccount): Promise<void> {
         type: data.type,
         subtype: data.subtype,
         balanceCents: data.balanceCents,
+        // Deliberately NOT coalesced, unlike limitCents below.
+        // `availableBalanceCents` is only meaningful paired with the
+        // `balanceCents` written in this same statement — their difference is
+        // the pending float. Holding an older available while current moves
+        // forward would manufacture a float no bank ever reported, and that
+        // fiction holds real cash out of the projection. An explicit null
+        // (institution stopped computing it) must therefore clear it;
+        // `undefined` from a caller that doesn't deal in balances is dropped
+        // by drizzle and leaves the column alone.
+        availableBalanceCents: data.availableBalanceCents,
         // Never let a payload without a limit erase one we already know.
         // `/transactions/sync` account objects frequently carry no `limit`
         // even when `/accounts/get` does, and callers that don't deal in
@@ -2417,9 +2518,38 @@ export async function listBillLinkDescriptors(
  * being abandoned).
  */
 export async function getPrimaryLinkedBalance(userId: string): Promise<number | null> {
+  const snapshot = await getLinkedBalanceSnapshot(userId);
+  return snapshot?.balanceCents ?? null;
+}
+
+export type LinkedBalanceSnapshot = {
+  /** Σ Plaid `balances.current` across opted-in accounts. */
+  balanceCents: number;
+  /**
+   * Σ max(0, current − available) across opted-in accounts — the bank's own
+   * measure of money that has left but hasn't posted. Accounts whose
+   * institution doesn't compute an available balance contribute 0, so this is
+   * always a floor, never a guess. Clamped per account because `available`
+   * legitimately exceeds `current` when the bank folds an overdraft line or a
+   * pending deposit into it; we only ever count pending OUTflows.
+   */
+  pendingOutflowCents: number;
+};
+
+/**
+ * Both halves of the linked starting balance in one read. They must come from
+ * the same query: `pendingOutflowCents` is a difference, so computing it from
+ * a second, later read of the same rows could straddle a sync.
+ */
+export async function getLinkedBalanceSnapshot(
+  userId: string,
+): Promise<LinkedBalanceSnapshot | null> {
   const db = getDb();
   const rows = await db
-    .select({ balanceCents: plaidAccounts.balanceCents })
+    .select({
+      balanceCents: plaidAccounts.balanceCents,
+      availableBalanceCents: plaidAccounts.availableBalanceCents,
+    })
     .from(plaidAccounts)
     .where(
       and(
@@ -2429,7 +2559,16 @@ export async function getPrimaryLinkedBalance(userId: string): Promise<number | 
     )
     .all();
   if (rows.length === 0) return null;
-  return rows.reduce((sum, r) => sum + (r.balanceCents ?? 0), 0);
+  let balanceCents = 0;
+  let pendingOutflowCents = 0;
+  for (const r of rows) {
+    const current = r.balanceCents ?? 0;
+    balanceCents += current;
+    if (r.balanceCents != null && r.availableBalanceCents != null) {
+      pendingOutflowCents += Math.max(0, r.balanceCents - r.availableBalanceCents);
+    }
+  }
+  return { balanceCents, pendingOutflowCents };
 }
 
 // ── net worth ────────────────────────────────────────────────────────────────
@@ -2520,6 +2659,7 @@ export async function getNetWorthComponents(userId: string): Promise<NetWorthCom
  *   v4: + creditCardPromos, creditCardPromoPayments
  *   v5: + variableBills, variableBillCards
  *   v6: + categories.budgetAmountCents
+ *   v10: + billPaymentStates (per-occurrence sent / paid-externally marks)
  *
  * Plaid items / accounts / drafts are intentionally NOT exported — the
  * access tokens are encrypted with a per-deployment PLAID_ENCRYPTION_KEY,
@@ -2528,10 +2668,11 @@ export async function getNetWorthComponents(userId: string): Promise<NetWorthCom
  */
 export async function exportAll(userId: string) {
   const db = getDb();
-  const [s, b, bo, vb, vbc, cpo, p, e, c, cc, ccs, ccp, ccpp, a] = await Promise.all([
+  const [s, b, bo, bps, vb, vbc, cpo, p, e, c, cc, ccs, ccp, ccpp, a] = await Promise.all([
     getSettings(userId),
     db.select().from(bills).where(eq(bills.userId, userId)).all(),
     db.select().from(billPaymentOverrides).where(eq(billPaymentOverrides.userId, userId)).all(),
+    db.select().from(billPaymentStates).where(eq(billPaymentStates.userId, userId)).all(),
     db.select().from(variableBills).where(eq(variableBills.userId, userId)).all(),
     db.select().from(variableBillCards).where(eq(variableBillCards.userId, userId)).all(),
     db
@@ -2550,10 +2691,11 @@ export async function exportAll(userId: string) {
   ]);
   return {
     exportedAt: new Date().toISOString(),
-    schemaVersion: 9,
+    schemaVersion: 10,
     settings: s,
     bills: b,
     billPaymentOverrides: bo,
+    billPaymentStates: bps,
     variableBills: vb,
     variableBillCards: vbc,
     creditCardPaymentOverrides: cpo,
@@ -2634,6 +2776,7 @@ async function validateImportGraph(
     if (e.paidViaCardId) ensureCard(e.paidViaCardId, "extras.paidViaCardId");
   }
   for (const o of payload.billPaymentOverrides ?? []) ensureBill(o.billId, "billPaymentOverrides.billId");
+  for (const s of payload.billPaymentStates ?? []) ensureBill(s.billId, "billPaymentStates.billId");
   for (const o of payload.creditCardPaymentOverrides ?? []) {
     ensureCard(o.cardId, "creditCardPaymentOverrides.cardId");
   }
@@ -2706,6 +2849,7 @@ export async function importAll(userId: string, payload: BackupImportInput): Pro
     // deletes statements for the user's cards automatically. We rely on it.
     tx.delete(creditCards).where(eq(creditCards.userId, userId)).run();
     tx.delete(billPaymentOverrides).where(eq(billPaymentOverrides.userId, userId)).run();
+    tx.delete(billPaymentStates).where(eq(billPaymentStates.userId, userId)).run();
     tx.delete(bills).where(eq(bills.userId, userId)).run();
     tx.delete(paychecks).where(eq(paychecks.userId, userId)).run();
     tx.delete(oneTimeExpenses).where(eq(oneTimeExpenses.userId, userId)).run();
@@ -2874,6 +3018,18 @@ function importInsideTransaction(
       dueDate: o.dueDate,
       amountCents: o.amountCents,
       notes: o.notes ?? null,
+    }).run();
+  }
+  for (const s of payload.billPaymentStates ?? []) {
+    tx.insert(billPaymentStates).values({
+      id: s.id ?? newId(),
+      userId,
+      billId: s.billId,
+      dueDate: s.dueDate,
+      state: s.state,
+      amountCents: s.amountCents ?? null,
+      markedDate: s.markedDate,
+      notes: s.notes ?? null,
     }).run();
   }
   for (const o of payload.creditCardPaymentOverrides ?? []) {

@@ -169,6 +169,55 @@ export const billPaymentOverrides = sqliteTable(
 );
 
 /**
+ * What the USER asserts about one bill occurrence's payment, when the bank
+ * hasn't shown us the answer yet. Deliberately separate from
+ * `bill_payment_overrides`: that row says how much is PLANNED (and its
+ * `amount_cents` is NOT NULL and independently deletable), this one says what
+ * actually HAPPENED. A cycle can have either, both, or neither.
+ *
+ * `sent` — the money has left the account but no transaction has posted. The
+ * occurrence keeps holding its cash and stops nagging as unpaid. This is an
+ * assertion about the past, not a plan.
+ * `paid_externally` — paid from somewhere this app can't see (another bank,
+ * cash, someone else). Releases the cash and settles the occurrence; no
+ * transaction will ever arrive to reconcile it.
+ *
+ * A row here is a CLAIM, never the last word: once a real posted transaction
+ * matches the occurrence, reconciliation wins at read time (see
+ * resolveBillOccurrenceStates) and the claim becomes inert. That makes the
+ * marks self-healing — nothing has to remember to clear them.
+ */
+export const billPaymentStates = sqliteTable(
+  "bill_payment_states",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    billId: text("bill_id")
+      .notNull()
+      .references(() => bills.id, { onDelete: "cascade" }),
+    dueDate: text("due_date").notNull(),
+    state: text("state", { enum: ["sent", "paid_externally"] }).notNull(),
+    /** What actually left the account, when the user knows it differs from
+     *  the planned amount. Null = fall back to the planned amount. */
+    amountCents: integer("amount_cents"),
+    /** ISO date the money left the account — where a `sent` hold is placed. */
+    markedDate: text("marked_date").notNull(),
+    notes: text("notes"),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    userDate: index("bill_payment_states_user_date_idx").on(t.userId, t.dueDate),
+    billDateUnique: uniqueIndex("bill_payment_states_bill_date_unique_idx").on(
+      t.billId,
+      t.dueDate,
+    ),
+  }),
+);
+
+/**
  * Expected recurring spend with a variable real-world amount, such as
  * groceries or fuel. These are forecasts, not reconciled transactions. When
  * linked to credit cards, the projection lands the expected cash movement on
@@ -479,6 +528,8 @@ export type SettingsRow = typeof settings.$inferSelect;
 export type PaycheckRow = typeof paychecks.$inferSelect;
 export type BillRow = typeof bills.$inferSelect;
 export type BillPaymentOverrideRow = typeof billPaymentOverrides.$inferSelect;
+export type BillPaymentStateRow = typeof billPaymentStates.$inferSelect;
+export type BillPaymentStateValue = BillPaymentStateRow["state"];
 export type VariableBillRow = typeof variableBills.$inferSelect;
 export type VariableBillCardRow = typeof variableBillCards.$inferSelect;
 export type OneTimeExpenseRow = typeof oneTimeExpenses.$inferSelect;
@@ -494,6 +545,7 @@ export type NewSettings = typeof settings.$inferInsert;
 export type NewPaycheck = typeof paychecks.$inferInsert;
 export type NewBill = typeof bills.$inferInsert;
 export type NewBillPaymentOverride = typeof billPaymentOverrides.$inferInsert;
+export type NewBillPaymentState = typeof billPaymentStates.$inferInsert;
 export type NewVariableBill = typeof variableBills.$inferInsert;
 export type NewVariableBillCard = typeof variableBillCards.$inferInsert;
 export type NewOneTimeExpense = typeof oneTimeExpenses.$inferInsert;
@@ -560,6 +612,19 @@ export const plaidAccounts = sqliteTable(
     type: text("type").notNull(),
     subtype: text("subtype"),
     balanceCents: integer("balance_cents"),
+    /**
+     * Plaid `balances.available`. For a depository account this is the current
+     * balance LESS pending outflows plus pending inflows, so
+     * `balanceCents - availableBalanceCents` is the BANK's own measure of money
+     * that has left but hasn't posted yet — the evidence the projection uses
+     * instead of assuming a due bill was paid (see lib/pending-float.ts).
+     * Null whenever the institution doesn't compute it.
+     *
+     * ALWAYS write this from the same Plaid payload as `balanceCents`: a fresh
+     * current against a stale available produces a difference that is pure
+     * fiction, and that fiction would hold real cash out of the projection.
+     */
+    availableBalanceCents: integer("available_balance_cents"),
     /** Credit line as reported by Plaid (`balances.limit`). Null for most
      *  depository accounts and for issuers that don't expose it. Seeds
      *  `credit_cards.credit_limit_cents` on link/sync while that is still null. */
