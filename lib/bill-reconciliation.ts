@@ -59,7 +59,25 @@ export type ReconcilableDraft = {
    * exclusion only silences the heuristic.
    */
   billMatchExcluded?: boolean;
+  /**
+   * The user divided this transaction across the obligations it actually paid
+   * (see `draft_allocations`). Allocations are EXHAUSTIVE: a draft carrying
+   * any of them is removed from heuristic matching entirely, so the same
+   * dollars can't be credited twice. Any unallocated remainder stays
+   * unattributed rather than being quietly reassigned.
+   */
+  allocations?: ReadonlyArray<DraftAllocation>;
 };
+
+/** One portion of a transaction, aimed at one dated obligation. */
+export type DraftAllocation = {
+  targetKind: ObligationKind;
+  targetId: string;
+  targetDate: string;
+  amountCents: number;
+};
+
+export type ObligationKind = "bill" | "extra";
 
 export type ReconcilableBill = Pick<
   BillRow,
@@ -67,6 +85,19 @@ export type ReconcilableBill = Pick<
 > & {
   /** Per-occurrence planned amounts (payment overrides), keyed by due date. */
   overridesByDate?: ReadonlyMap<string, number>;
+};
+
+/**
+ * A one-time expense, as the matcher sees it. A recurring bill generates many
+ * dated amounts; a one-time expense IS one — so once both are reduced to
+ * "an obligation with a date and a planned amount" the same matcher settles
+ * either, and one-time expenses stop being invisible to reconciliation.
+ */
+export type ReconcilableExtra = {
+  id: string;
+  description: string;
+  date: string;
+  amountCents: number;
 };
 
 export type PaidBillOccurrence = {
@@ -78,6 +109,14 @@ export type PaidBillOccurrence = {
   /** Latest posting date among the contributing drafts. */
   paidDate: string;
   /** Sum of the contributing drafts — the real cash that left the account. */
+  paidAmountCents: number;
+};
+
+/** The settled one-time-expense analogue of PaidBillOccurrence. */
+export type PaidExtra = {
+  extraId: string;
+  draftIds: string[];
+  paidDate: string;
   paidAmountCents: number;
 };
 
@@ -163,9 +202,114 @@ export function draftMatchesAlias(
 }
 
 /**
+ * Resolve the user's EXPLICIT splits — one transaction divided across the
+ * obligations it actually paid.
+ *
+ * This exists because a single transfer routinely settles more than one
+ * thing (the case that prompted it: $4,000 covering a $2,000 recurring bill
+ * plus a $2,000 one-off), and every other path in this file can credit a
+ * draft to exactly one occurrence. Heuristics cannot recover a split — only
+ * the person who sent the money knows how it divides — so this is the one
+ * mechanism that takes the answer directly.
+ *
+ * Returns the settlements plus the draft ids and occurrence keys it consumed,
+ * so the heuristic pass can skip both and never double-credit the same money.
+ */
+export function matchAllocatedObligations(
+  bills: ReadonlyArray<ReconcilableBill>,
+  extras: ReadonlyArray<ReconcilableExtra>,
+  drafts: ReadonlyArray<ReconcilableDraft>,
+): {
+  bills: PaidBillOccurrence[];
+  extras: PaidExtra[];
+  allocatedDraftIds: Set<string>;
+  allocatedOccurrenceKeys: Set<string>;
+} {
+  const allocatedDraftIds = new Set<string>();
+  const allocatedOccurrenceKeys = new Set<string>();
+  const billById = new Map(bills.map((b) => [b.id, b] as const));
+  const extraById = new Map(extras.map((e) => [e.id, e] as const));
+
+  type Bucket = { draftIds: string[]; paidDate: string; amountCents: number };
+  const buckets = new Map<string, Bucket & { kind: ObligationKind; id: string; date: string }>();
+
+  for (const draft of drafts) {
+    const allocations = draft.allocations ?? [];
+    if (allocations.length === 0) continue;
+    // Exhaustive: this draft is now fully accounted for by the user's own
+    // breakdown and must not also be offered to the heuristic matcher.
+    allocatedDraftIds.add(draft.id);
+    for (const a of allocations) {
+      if (a.amountCents <= 0) continue;
+      const key = `${a.targetKind}:${a.targetId}:${a.targetDate}`;
+      const existing = buckets.get(key);
+      if (existing) {
+        existing.draftIds.push(draft.id);
+        existing.amountCents += a.amountCents;
+        if (draft.date > existing.paidDate) existing.paidDate = draft.date;
+      } else {
+        buckets.set(key, {
+          kind: a.targetKind,
+          id: a.targetId,
+          date: a.targetDate,
+          draftIds: [draft.id],
+          paidDate: draft.date,
+          amountCents: a.amountCents,
+        });
+      }
+    }
+  }
+
+  const paidBills: PaidBillOccurrence[] = [];
+  const paidExtras: PaidExtra[] = [];
+  for (const b of buckets.values()) {
+    // Same settle floor as a manual bill link: the user's word decides WHICH
+    // obligation the money went to, not whether a token amount clears it.
+    if (b.kind === "bill") {
+      const bill = billById.get(b.id);
+      if (!bill) continue;
+      const expected = bill.overridesByDate?.get(b.date) ?? bill.amountCents;
+      allocatedOccurrenceKeys.add(occurrenceKey(b.id, b.date));
+      if (expected > 0 && b.amountCents < Math.round(expected * SETTLE_MIN_FRACTION)) continue;
+      paidBills.push({
+        billId: b.id,
+        occurrenceDate: b.date,
+        draftIds: [...b.draftIds].sort(),
+        paidDate: b.paidDate,
+        paidAmountCents: b.amountCents,
+      });
+    } else {
+      const extra = extraById.get(b.id);
+      if (!extra) continue;
+      if (extra.amountCents > 0 && b.amountCents < Math.round(extra.amountCents * SETTLE_MIN_FRACTION)) {
+        continue;
+      }
+      paidExtras.push({
+        extraId: b.id,
+        draftIds: [...b.draftIds].sort(),
+        paidDate: b.paidDate,
+        paidAmountCents: b.amountCents,
+      });
+    }
+  }
+
+  paidBills.sort(
+    (a, b) => a.billId.localeCompare(b.billId) || a.occurrenceDate.localeCompare(b.occurrenceDate),
+  );
+  paidExtras.sort((a, b) => a.extraId.localeCompare(b.extraId));
+  return { bills: paidBills, extras: paidExtras, allocatedDraftIds, allocatedOccurrenceKeys };
+}
+
+/**
  * Find bill occurrences settled by posted drafts. `drafts` should already be
  * limited to real money-out rows on the accounts whose balance feeds the
  * projection (approved, positive amounts).
+ *
+ * One-time expenses are deliberately NOT matched here. A recurring bill posts
+ * the same wording every month, which is what makes name matching safe; a
+ * one-off purchase has no such history, so a heuristic guess would be far more
+ * likely to hide real cash than to help. Extras settle by explicit allocation
+ * only — see matchAllocatedObligations.
  */
 export function matchPaidBillOccurrences(
   bills: ReadonlyArray<ReconcilableBill>,
@@ -174,12 +318,21 @@ export function matchPaidBillOccurrences(
     windowDays?: number;
     /** Learned descriptor aliases per bill id (from past manual links). */
     aliasesByBill?: ReadonlyMap<string, ReadonlyArray<string>>;
+    /** Draft ids the user already split explicitly — see matchAllocatedObligations. */
+    excludeDraftIds?: ReadonlySet<string>;
+    /** `${billId}:${date}` keys an explicit allocation already spoke for. */
+    excludeOccurrenceKeys?: ReadonlySet<string>;
   } = {},
 ): PaidBillOccurrence[] {
   const windowDays = Math.max(1, opts.windowDays ?? MATCH_WINDOW_DAYS);
   if (bills.length === 0 || drafts.length === 0) return [];
 
-  const spendDrafts = drafts.filter((d) => d.amountCents > 0);
+  // A draft the user has split is spoken for in full; an occurrence an
+  // allocation names is likewise settled (or deliberately left short). Both
+  // drop out here so the heuristic can't credit the same money a second time.
+  const spendDrafts = drafts.filter(
+    (d) => d.amountCents > 0 && !opts.excludeDraftIds?.has(d.id),
+  );
   if (spendDrafts.length === 0) return [];
   const minDraft = spendDrafts.reduce((a, d) => (d.date < a ? d.date : a), spendDrafts[0]!.date);
   const maxDraft = spendDrafts.reduce((a, d) => (d.date > a ? d.date : a), spendDrafts[0]!.date);
@@ -196,6 +349,7 @@ export function matchPaidBillOccurrences(
     const occStart = addDays(minDraft, -windowDays);
     const occEnd = addDays(maxDraft, windowDays);
     for (const occ of enumerateBillOccurrences(bill, occStart, occEnd)) {
+      if (opts.excludeOccurrenceKeys?.has(occurrenceKey(bill.id, occ))) continue;
       const expected = bill.overridesByDate?.get(occ) ?? bill.amountCents;
       if (expected <= 0) continue; // zero-planned occurrence has nothing to settle
       occurrences.push({

@@ -6,6 +6,7 @@ import {
   listBillPaymentOverridesForUser,
   listBillPaymentStatesForUser,
   listBills,
+  listDraftAllocationsForUser,
   listCreditCardPaymentOverridesForUser,
   listCreditCards,
   listExtras,
@@ -31,11 +32,14 @@ import {
   billAliasList,
   findExternallyPaidOccurrences,
   findHeldOccurrences,
+  matchAllocatedObligations,
   findUnpaidRecentOccurrences,
   matchPaidBillOccurrences,
   occurrenceKey,
   type BillPaymentMark,
+  type DraftAllocation,
   type HeldBillOccurrence,
+  type PaidExtra,
   type UnpaidRecentOccurrence,
 } from "./bill-reconciliation";
 
@@ -248,17 +252,37 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   let heldOccurrences: HeldBillOccurrence[] = [];
   const heldByBill = new Map<string, HeldBillOccurrence[]>();
   const externallyPaidByBill = new Map<string, Array<{ date: string; amountCents: number | null }>>();
+  // One-time expenses settled by an explicit split, keyed by expense id.
+  const paidExtraById = new Map<string, PaidExtra>();
   let unattributedPendingCents = 0;
   let answeredOccurrences: ProjectionBundle["pendingPosting"]["answered"] = [];
   if (linked) {
-    const [recentDrafts, linkDescriptors] = await Promise.all([
+    const [rawDrafts, linkDescriptors, allocationRows] = await Promise.all([
       listStartingBalanceDraftsInRange(
         userId,
         addDaysIso(today, -RECONCILE_LOOKBACK_DAYS),
         today,
       ),
       listBillLinkDescriptors(userId),
+      listDraftAllocationsForUser(userId),
     ]);
+    // Attach each draft's explicit split (if any). Fetched separately rather
+    // than joined so a draft with three allocations stays one draft.
+    const allocationsByDraft = new Map<string, DraftAllocation[]>();
+    for (const a of allocationRows) {
+      const list = allocationsByDraft.get(a.draftId) ?? [];
+      list.push({
+        targetKind: a.targetKind,
+        targetId: a.targetId,
+        targetDate: a.targetDate,
+        amountCents: a.amountCents,
+      });
+      allocationsByDraft.set(a.draftId, list);
+    }
+    const recentDrafts = rawDrafts.map((d) => ({
+      ...d,
+      allocations: allocationsByDraft.get(d.id),
+    }));
     // Every descriptor the user ever manually linked to a bill becomes an
     // alias: banks repeat the same wording each month, so one link teaches
     // all future cycles. The bill's own match_alias column (user-entered
@@ -287,7 +311,34 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
         (billOverridesByBill.get(b.id) ?? []).map((o) => [o.date, o.amountCents] as const),
       ),
     }));
-    const matches = matchPaidBillOccurrences(reconcilableBills, recentDrafts, { aliasesByBill });
+    // The user's own splits first — they are statements of fact, and a
+    // heuristic must never overrule (or re-credit) money already assigned.
+    // One-time expenses are only reconcilable through this path.
+    const reconcilableExtras = extras
+      .filter((e) => e.paidViaCardId == null || !activeCardIds.has(e.paidViaCardId))
+      .map((e) => ({
+        id: e.id,
+        description: e.description,
+        date: e.date,
+        amountCents: e.amountCents,
+      }));
+    const allocated = matchAllocatedObligations(
+      reconcilableBills,
+      reconcilableExtras,
+      recentDrafts,
+    );
+    for (const p of allocated.extras) paidExtraById.set(p.extraId, p);
+
+    const matches = [
+      ...allocated.bills,
+      ...matchPaidBillOccurrences(reconcilableBills, recentDrafts, {
+        aliasesByBill,
+        excludeDraftIds: allocated.allocatedDraftIds,
+        excludeOccurrenceKeys: allocated.allocatedOccurrenceKeys,
+      }),
+    ].sort(
+      (a, b) => a.billId.localeCompare(b.billId) || a.occurrenceDate.localeCompare(b.occurrenceDate),
+    );
     const billNameById = new Map(cashBills.map((b) => [b.id, b.name] as const));
     for (const m of matches) {
       const list = paidOccurrencesByBill.get(m.billId) ?? [];
@@ -508,16 +559,31 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
       ...extras
         .filter((e) => onOrAfterStart(e.date))
         .filter((e) => e.paidViaCardId == null || !activeCardIds.has(e.paidViaCardId))
-        .map((e) =>
-          decorateScheduledExtra({
+        .map((e) => {
+          // A one-time expense the user allocated part of a real transaction
+          // to is settled by evidence, not by its date passing: zero cash,
+          // showing what actually posted. This is the only way an extra ever
+          // gets reconciled — see matchPaidBillOccurrences' note on why
+          // heuristic name matching is unsafe for one-offs.
+          const paid = paidExtraById.get(e.id);
+          if (paid) {
+            return {
+              date: e.date,
+              description: e.description,
+              amountCents: 0,
+              originalAmountCents: paid.paidAmountCents,
+              isPaid: true,
+            };
+          }
+          return decorateScheduledExtra({
             date: e.date,
             description: e.description,
             amountCents: e.amountCents,
             settledBeforeDate: settleBefore,
             showSettledBeforeDate: lookback,
             userScheduled: true,
-          }),
-        ),
+          });
+        }),
       // Card-charged one-time expenses: zero-cash markers (see cardChargedBills).
       ...extras
         .filter((e) => onOrAfterStart(e.date))

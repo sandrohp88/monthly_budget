@@ -529,6 +529,8 @@ export type PaycheckRow = typeof paychecks.$inferSelect;
 export type BillRow = typeof bills.$inferSelect;
 export type BillPaymentOverrideRow = typeof billPaymentOverrides.$inferSelect;
 export type BillPaymentStateRow = typeof billPaymentStates.$inferSelect;
+export type DraftAllocationRow = typeof draftAllocations.$inferSelect;
+export type DraftAllocationTargetKind = DraftAllocationRow["targetKind"];
 export type BillPaymentStateValue = BillPaymentStateRow["state"];
 export type VariableBillRow = typeof variableBills.$inferSelect;
 export type VariableBillCardRow = typeof variableBillCards.$inferSelect;
@@ -546,6 +548,7 @@ export type NewPaycheck = typeof paychecks.$inferInsert;
 export type NewBill = typeof bills.$inferInsert;
 export type NewBillPaymentOverride = typeof billPaymentOverrides.$inferInsert;
 export type NewBillPaymentState = typeof billPaymentStates.$inferInsert;
+export type NewDraftAllocation = typeof draftAllocations.$inferInsert;
 export type NewVariableBill = typeof variableBills.$inferInsert;
 export type NewVariableBillCard = typeof variableBillCards.$inferInsert;
 export type NewOneTimeExpense = typeof oneTimeExpenses.$inferInsert;
@@ -702,6 +705,57 @@ export const plaidTransactionDrafts = sqliteTable(
   (t) => ({
     userStatus: index("plaid_drafts_user_status_idx").on(t.userId, t.status),
     accountIdx: index("plaid_drafts_account_idx").on(t.accountId),
+  }),
+);
+
+/**
+ * How ONE posted transaction is divided across the obligations it paid.
+ *
+ * `plaid_transaction_drafts.linked_bill_id` says "this whole transaction pays
+ * that bill, work out which occurrence" — right for the common case, useless
+ * for a single transfer that covers two different things (the real case: a
+ * $4,000 transfer paying a $2,000 recurring bill plus a $2,000 one-off, which
+ * the matcher could only ever credit to one of them).
+ *
+ * A row here is the user stating a portion explicitly. Semantics:
+ *
+ * - `target_kind` is `bill` (with `target_date` = the generated occurrence
+ *   date) or `extra` (a one-time expense; `target_date` is its own date).
+ *   Deliberately polymorphic and FK-less on `target_id`: an obligation is
+ *   just "a dated amount", and the matcher ignores targets it isn't given.
+ * - **Allocations are exhaustive for their draft.** A draft with any
+ *   allocation stops participating in heuristic matching entirely, so the
+ *   same dollars can never be credited twice. Any unallocated remainder is
+ *   simply unattributed — visible in the UI, never silently reassigned.
+ * - The settle threshold still applies per target, same as manual bill links:
+ *   an explicit $5 allocation does not mark a $2,000 bill paid.
+ */
+export const draftAllocations = sqliteTable(
+  "draft_allocations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    draftId: text("draft_id")
+      .notNull()
+      .references(() => plaidTransactionDrafts.id, { onDelete: "cascade" }),
+    targetKind: text("target_kind", { enum: ["bill", "extra"] }).notNull(),
+    targetId: text("target_id").notNull(),
+    /** Occurrence date for a bill; the expense's own date for an extra. */
+    targetDate: text("target_date").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    uniqueTarget: uniqueIndex("draft_allocations_unique_target_idx").on(
+      t.draftId,
+      t.targetKind,
+      t.targetId,
+      t.targetDate,
+    ),
+    userDraft: index("draft_allocations_user_draft_idx").on(t.userId, t.draftId),
   }),
 );
 

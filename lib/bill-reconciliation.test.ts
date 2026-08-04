@@ -6,6 +6,7 @@ import {
   findExternallyPaidOccurrences,
   findHeldOccurrences,
   findUnpaidRecentOccurrences,
+  matchAllocatedObligations,
   matchPaidBillOccurrences,
   occurrenceKey,
   type BillPaymentMark,
@@ -371,6 +372,159 @@ describe("findUnpaidRecentOccurrences", () => {
     expect(
       findUnpaidRecentOccurrences([bill], new Map(), { today: "2026-07-09", answeredKeys }),
     ).toEqual([]);
+  });
+});
+
+describe("matchAllocatedObligations", () => {
+  // The case this exists for: a single $4,000 transfer covering a $2,000
+  // recurring bill plus a $2,000 one-off. No heuristic can recover that split —
+  // only the person who sent the money knows how it divides.
+  const wife = {
+    id: "bill-wife",
+    name: "Wife",
+    amountCents: 2000_00,
+    intervalMonths: 1,
+    anchorDate: "2026-07-01",
+  };
+  const oneOff = {
+    id: "extra-1",
+    description: "Extra to wife",
+    date: "2026-07-01",
+    amountCents: 2000_00,
+  };
+  const split = {
+    id: "txn-4000",
+    date: "2026-06-27",
+    description: "ACH ORIG DEBIT Lisette Izada",
+    merchantName: null,
+    amountCents: 4000_00,
+    allocations: [
+      {
+        targetKind: "bill" as const,
+        targetId: "bill-wife",
+        targetDate: "2026-07-01",
+        amountCents: 2000_00,
+      },
+      {
+        targetKind: "extra" as const,
+        targetId: "extra-1",
+        targetDate: "2026-07-01",
+        amountCents: 2000_00,
+      },
+    ],
+  };
+
+  it("settles both obligations from one transaction", () => {
+    const out = matchAllocatedObligations([wife], [oneOff], [split]);
+    expect(out.bills).toEqual([
+      {
+        billId: "bill-wife",
+        occurrenceDate: "2026-07-01",
+        draftIds: ["txn-4000"],
+        paidDate: "2026-06-27",
+        paidAmountCents: 2000_00,
+      },
+    ]);
+    expect(out.extras).toEqual([
+      {
+        extraId: "extra-1",
+        draftIds: ["txn-4000"],
+        paidDate: "2026-06-27",
+        paidAmountCents: 2000_00,
+      },
+    ]);
+  });
+
+  it("removes a split draft from heuristic matching entirely", () => {
+    // Otherwise the same $4,000 could settle the bill twice: once by the
+    // user's allocation, once by the name heuristic.
+    const out = matchAllocatedObligations([wife], [oneOff], [split]);
+    expect(out.allocatedDraftIds.has("txn-4000")).toBe(true);
+    expect(out.allocatedOccurrenceKeys.has(occurrenceKey("bill-wife", "2026-07-01"))).toBe(true);
+
+    const heuristic = matchPaidBillOccurrences([wife], [split], {
+      aliasesByBill: new Map([["bill-wife", ["Lisette Izada"]]]),
+      excludeDraftIds: out.allocatedDraftIds,
+      excludeOccurrenceKeys: out.allocatedOccurrenceKeys,
+    });
+    expect(heuristic).toEqual([]);
+  });
+
+  it("leaves an unsplit draft to the heuristic", () => {
+    const plain = { ...split, id: "txn-plain", allocations: undefined };
+    const out = matchAllocatedObligations([wife], [oneOff], [plain]);
+    expect(out.bills).toEqual([]);
+    expect(out.allocatedDraftIds.size).toBe(0);
+    expect(
+      matchPaidBillOccurrences([wife], [plain], {
+        aliasesByBill: new Map([["bill-wife", ["Lisette Izada"]]]),
+        excludeDraftIds: out.allocatedDraftIds,
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("honours the settle floor on an explicit portion", () => {
+    // The user's word decides WHICH obligation the money went to, not whether
+    // a token amount clears it — same rule as a manual bill link.
+    const tiny = {
+      ...split,
+      allocations: [
+        {
+          targetKind: "bill" as const,
+          targetId: "bill-wife",
+          targetDate: "2026-07-01",
+          amountCents: 50_00,
+        },
+      ],
+    };
+    const out = matchAllocatedObligations([wife], [oneOff], [tiny]);
+    expect(out.bills).toEqual([]);
+    // ...but the occurrence is still spoken for, so the heuristic stays out.
+    expect(out.allocatedOccurrenceKeys.has(occurrenceKey("bill-wife", "2026-07-01"))).toBe(true);
+  });
+
+  it("sums two transactions allocated to the same obligation", () => {
+    const half = (id: string, date: string) => ({
+      id,
+      date,
+      description: "TRANSFER",
+      merchantName: null,
+      amountCents: 1000_00,
+      allocations: [
+        {
+          targetKind: "bill" as const,
+          targetId: "bill-wife",
+          targetDate: "2026-07-01",
+          amountCents: 1000_00,
+        },
+      ],
+    });
+    const out = matchAllocatedObligations(
+      [wife],
+      [],
+      [half("txn-a", "2026-06-28"), half("txn-b", "2026-06-30")],
+    );
+    expect(out.bills[0]).toMatchObject({
+      paidAmountCents: 2000_00,
+      draftIds: ["txn-a", "txn-b"],
+      paidDate: "2026-06-30", // latest contributing post
+    });
+  });
+
+  it("ignores an allocation whose target no longer exists", () => {
+    const orphan = {
+      ...split,
+      allocations: [
+        {
+          targetKind: "extra" as const,
+          targetId: "deleted-extra",
+          targetDate: "2026-07-01",
+          amountCents: 2000_00,
+        },
+      ],
+    };
+    const out = matchAllocatedObligations([wife], [], [orphan]);
+    expect(out.extras).toEqual([]);
   });
 });
 
