@@ -352,6 +352,7 @@ weird gets emitted before merging.
 - `0034_credit_limits` — `credit_cards.credit_limit_cents` + `plaid_accounts.limit_cents` (utilization). Plaid's `balances.limit` fills the account column on every sync and SEEDS the card column only while it is NULL (`seedCreditLimitFromPlaid`) — manual wins after that, same rule as paid records and due-date overrides.
 - `0035_account_available_balance` — `plaid_accounts.available_balance_cents` (Plaid `balances.available`). `current − available` is the bank's own pending-outflow float. See §17b.
 - `0036_bill_payment_states` — `bill_payment_states` table, unique `(bill_id, due_date)`: the user's per-occurrence assertion (`sent` | `paid_externally`) for occurrences the transaction feed hasn't answered yet. See §17b.
+- `0037_draft_allocations` — `draft_allocations` table: how ONE posted transaction divides across the obligations it paid (bill occurrences and/or one-time expenses). Allocations are exhaustive for their draft. See §17 "Splitting one transaction".
 
 ---
 
@@ -817,6 +818,37 @@ tiny linked payment won't mark a large bill paid.
 
 An occurrence that reconciliation can't match does NOT get assumed paid once
 its date passes — its cash stays held. See §17b.
+
+### Splitting one transaction across several obligations
+
+A transaction pays exactly one thing — until it doesn't. The case that forced
+this: a $4,000 transfer covering a $2,000 recurring bill **plus** a $2,000
+one-time expense, which the matcher could only ever credit to one of them.
+No heuristic can recover a split; only the sender knows how it divides.
+
+`draft_allocations` (migration 0037) records the answer: `(draft, target_kind,
+target_id, target_date, amount_cents)`, where a target is a bill occurrence or
+a one-time expense. Rules that matter:
+
+- **Allocations are EXHAUSTIVE for their draft.** A split draft leaves
+  heuristic matching entirely (`excludeDraftIds`), and the occurrences it
+  names are skipped too (`excludeOccurrenceKeys`), so the same dollars can
+  never be credited twice. An unallocated remainder stays unattributed and
+  visible — never silently reassigned.
+- **The settle floor still applies per target.** The user's word decides
+  WHICH obligation the money went to, not whether a token amount clears it.
+- **A split teaches the alias**, exactly like a whole-transaction link —
+  `listBillLinkDescriptors` unions both sources. Losing that would make
+  splitting quietly worse than linking.
+- **One-time expenses are reconcilable ONLY through an allocation.** A
+  recurring bill posts the same wording monthly, which is what makes name
+  matching safe; a one-off has no such history, so a heuristic guess would be
+  far likelier to hide real cash than to help. Matched extras settle by
+  evidence (zero cash, showing what posted); unmatched ones keep settling on
+  the date pivot as before.
+- Both `linked_bill_id` and allocations coexist by design: the link is the
+  one-click path for the common case, the split is the power path. No data
+  migration — the link's occurrence is still chosen by the matcher.
 
 ### Paycheck reconciliation (deposits → paychecks)
 The income-side analog. `lib/paycheck-reconciliation.ts` (pure) matches

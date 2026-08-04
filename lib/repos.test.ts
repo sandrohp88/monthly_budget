@@ -19,6 +19,9 @@ import {
   // settings
   getSettings,
   createBill,
+  replaceDraftAllocations,
+  listDraftAllocations,
+  listBillLinkDescriptors,
   listBillPaymentOverridesForUser,
   upsertBillPaymentOverride,
   deleteBillPaymentOverride,
@@ -829,6 +832,105 @@ describe("repos / deactivatePlaidItem", () => {
     });
     await deactivatePlaidItem(userA.id, item.id);
     expect((await getCreditCard(userB.id, cardB.id))?.plaidAccountId).toBe("some_other_acct");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// draft allocations — one transaction, several obligations
+// ────────────────────────────────────────────────────────────────────────────
+describe("repos / draft allocations", () => {
+  async function seedSplittableDraft(email: string, draftId: string) {
+    const user = await makeUser(email);
+    const bill = await createBill(user.id, {
+      name: "Wife",
+      category: "Housing",
+      amountCents: 2000_00,
+      intervalMonths: 1,
+      anchorDate: "2026-07-01",
+      autoPay: false,
+      paidViaCardId: null,
+      notes: null,
+      isActive: true,
+    });
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins",
+      institutionName: "T",
+      accessTokenEnc: "00",
+      accessTokenIv: "00",
+      accessTokenTag: "00",
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: `acct-${draftId}`,
+      itemId: item.id,
+      userId: user.id,
+      name: "Checking",
+      mask: "1",
+      type: "depository",
+      subtype: "checking",
+      balanceCents: 100_00,
+      updatedAt: Date.now(),
+    });
+    await upsertPlaidDraft({
+      id: draftId,
+      userId: user.id,
+      accountId: `acct-${draftId}`,
+      date: "2026-06-27",
+      description: "ACH ORIG DEBIT Lisette Izada",
+      originalDescription: null,
+      amountCents: 4000_00,
+      plaidCategory: null,
+      merchantName: null,
+      pending: false,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+    return { user, billId: bill!.id };
+  }
+
+  it("learns the wording from a SPLIT, not just a whole-transaction link", async () => {
+    // Pointing a transaction at a bill is how the app learns the bank's
+    // wording. A user who splits a $4,000 transfer has named the bill just as
+    // explicitly as one who linked it, and must get the same automatic
+    // matching next month — otherwise splitting silently costs them the alias.
+    const { user, billId } = await seedSplittableDraft("split-alias@example.com", "txn-split");
+
+    expect(await listBillLinkDescriptors(user.id)).toEqual([]);
+
+    await replaceDraftAllocations(user.id, "txn-split", [
+      { targetKind: "bill", targetId: billId, targetDate: "2026-07-01", amountCents: 2000_00 },
+    ]);
+
+    expect(await listBillLinkDescriptors(user.id)).toEqual([
+      { billId, description: "ACH ORIG DEBIT Lisette Izada", merchantName: null },
+    ]);
+  });
+
+  it("replaces the whole split rather than merging into it", async () => {
+    // A split is one statement about one transaction; merging would leave a
+    // stale target still claiming money.
+    const { user, billId } = await seedSplittableDraft("split-replace@example.com", "txn-replace");
+
+    await replaceDraftAllocations(user.id, "txn-replace", [
+      { targetKind: "bill", targetId: billId, targetDate: "2026-07-01", amountCents: 2000_00 },
+      { targetKind: "extra", targetId: "extra-1", targetDate: "2026-07-01", amountCents: 2000_00 },
+    ]);
+    expect(await listDraftAllocations(user.id, "txn-replace")).toHaveLength(2);
+
+    await replaceDraftAllocations(user.id, "txn-replace", [
+      { targetKind: "bill", targetId: billId, targetDate: "2026-07-01", amountCents: 4000_00 },
+    ]);
+    const after = await listDraftAllocations(user.id, "txn-replace");
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ targetKind: "bill", amountCents: 4000_00 });
+
+    // Clearing returns the transaction to automatic matching.
+    await replaceDraftAllocations(user.id, "txn-replace", []);
+    expect(await listDraftAllocations(user.id, "txn-replace")).toEqual([]);
   });
 });
 

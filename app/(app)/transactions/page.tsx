@@ -5,6 +5,7 @@ import {
   listBills,
   listCategories,
   listCreditCards,
+  listExtras,
   listPlaidAccounts,
   listPlaidDrafts,
 } from "@/lib/repos";
@@ -20,12 +21,13 @@ export default async function TransactionsPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [drafts, accounts, cards, categories, bills, projection] = await Promise.all([
+  const [drafts, accounts, cards, categories, bills, extras, projection] = await Promise.all([
     listPlaidDrafts(userId, "approved"),
     listPlaidAccounts(userId),
     listCreditCards(userId, false),
     listCategories(userId),
     listBills(userId, false),
+    listExtras(userId),
     // Cached per request (the layout already builds it) — reused here for the
     // bill-reconciliation matches so the rows can show "this paid bill X".
     buildProjection(userId),
@@ -76,7 +78,21 @@ export default async function TransactionsPage() {
       initialTransactions={transactions}
       categoryNames={categories.filter((c) => c.kind === "expense").map((c) => c.name)}
       billMatches={projection?.billMatchesByDraftId ?? {}}
-      bills={bills.map((b) => ({ id: b.id, name: b.name }))}
+      // The split dialog enumerates each bill's occurrences client-side, so it
+      // needs the recurrence shape — not just a name.
+      bills={bills.map((b) => ({
+        id: b.id,
+        name: b.name,
+        amountCents: b.amountCents,
+        intervalMonths: b.intervalMonths,
+        anchorDate: b.anchorDate,
+      }))}
+      extras={extras.map((e) => ({
+        id: e.id,
+        description: e.description,
+        date: e.date,
+        amountCents: e.amountCents,
+      }))}
     />
   );
 }

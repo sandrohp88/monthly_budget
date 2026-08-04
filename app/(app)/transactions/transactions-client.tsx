@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Check, Link2, Pencil, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
+import { Check, Link2, Pencil, RefreshCw, Search, Sparkles, Split, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -15,6 +15,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { CardSubTag, PageHead } from "@/components/ui/page-head";
+import {
+  TransactionSplitDialog,
+  type Allocation,
+  type SplitExtraOption,
+} from "@/components/transaction-split-dialog";
 import {
   Dialog,
   DialogContent,
@@ -40,7 +45,13 @@ type FilterKey = "all" | "debits" | "credits" | "bills" | "card_payments" | "pro
 /** A posted transaction the projection matched to a generated bill occurrence. */
 export type BillMatch = { billId: string; billName: string; occurrenceDate: string };
 
-export type BillOption = { id: string; name: string };
+export type BillOption = {
+  id: string;
+  name: string;
+  amountCents: number;
+  intervalMonths: number;
+  anchorDate: string;
+};
 
 function addMonthsIso(iso: string, months: number): string {
   const parts = iso.split("-").map(Number);
@@ -68,19 +79,36 @@ export function TransactionsClient({
   categoryNames,
   billMatches,
   bills = [],
+  extras = [],
 }: {
   initialTransactions: DraftWithAccount[];
   categoryNames: string[];
   billMatches: Record<string, BillMatch>;
   bills?: BillOption[];
+  extras?: SplitExtraOption[];
 }) {
   const [transactions, setTransactions] = React.useState(initialTransactions);
+  const [splittingTxn, setSplittingTxn] = React.useState<DraftWithAccount | null>(null);
+  const [splitAllocations, setSplitAllocations] = React.useState<Allocation[]>([]);
   const [query, setQuery] = React.useState("");
   const [filter, setFilter] = React.useState<FilterKey>("all");
   const [syncing, setSyncing] = React.useState(false);
   const [editing, setEditing] = React.useState<DraftWithAccount | null>(null);
   const [promoTxn, setPromoTxn] = React.useState<DraftWithAccount | null>(null);
   const [linkingTxn, setLinkingTxn] = React.useState<DraftWithAccount | null>(null);
+
+  const openSplit = React.useCallback(async (txn: DraftWithAccount) => {
+    // Load what's already allocated so reopening edits the split instead of
+    // silently starting over.
+    try {
+      const res = await fetch(`/api/plaid/drafts/${txn.id}/allocations`);
+      const json = (await res.json()) as { allocations?: Allocation[]; error?: string };
+      setSplitAllocations(res.ok ? (json.allocations ?? []) : []);
+    } catch {
+      setSplitAllocations([]);
+    }
+    setSplittingTxn(txn);
+  }, []);
   // Heuristic matches the user rejected this session — the server recomputes
   // billMatches on the next render, so this only bridges until then.
   const [rejectedMatchIds, setRejectedMatchIds] = React.useState<ReadonlySet<string>>(new Set());
@@ -366,6 +394,17 @@ export function TransactionsClient({
                         <Link2 className={cn("h-3.5 w-3.5", txn.linkedBillId && "text-[var(--mint)]")} />
                       </Button>
                     ) : null}
+                    {txn.amountCents > 0 && txn.kind !== "card_payment" ? (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label="Split across obligations"
+                        title="Split this across several bills / one-time expenses"
+                        onClick={() => openSplit(txn)}
+                      >
+                        <Split className="h-3.5 w-3.5" />
+                      </Button>
+                    ) : null}
                     <Button size="icon" variant="ghost" aria-label="Edit" onClick={() => setEditing(txn)}>
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
@@ -400,6 +439,19 @@ export function TransactionsClient({
             setTransactions((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
             setPromoTxn(null);
           }}
+        />
+      ) : null}
+
+      {splittingTxn ? (
+        <TransactionSplitDialog
+          transactionId={splittingTxn.id}
+          transactionDate={splittingTxn.date}
+          transactionLabel={displayName(splittingTxn)}
+          transactionAmountCents={Math.abs(splittingTxn.amountCents)}
+          initialAllocations={splitAllocations}
+          bills={bills}
+          extras={extras}
+          onClose={() => setSplittingTxn(null)}
         />
       ) : null}
 

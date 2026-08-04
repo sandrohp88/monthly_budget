@@ -6,6 +6,7 @@ import {
   bills,
   billPaymentOverrides,
   billPaymentStates,
+  draftAllocations,
   categories,
   creditCards,
   creditCardPaymentOverrides,
@@ -26,6 +27,8 @@ import {
   type BillRow,
   type BillPaymentOverrideRow,
   type BillPaymentStateRow,
+  type DraftAllocationRow,
+  type DraftAllocationTargetKind,
   type CategoryRow,
   type CreditCardPromoRow,
   type CreditCardPromoPaymentRow,
@@ -2482,15 +2485,20 @@ export async function setPlaidDraftBillMatchExcluded(
 }
 
 /**
- * Descriptors of every draft the user manually linked to a bill — the
- * reconciliation's learned-alias source. Small by construction (one row per
- * manual link ever made), so no pagination.
+ * Descriptors of every draft the user pointed at a bill — the reconciliation's
+ * learned-alias source. Small by construction (one row per manual assignment
+ * ever made), so no pagination.
+ *
+ * Covers BOTH ways of assigning: a whole-transaction `linked_bill_id`, and a
+ * split allocation naming a bill. Teaching the wording is the point of either
+ * gesture, so a user who splits a transfer gets the same automatic matching
+ * next month as one who links it.
  */
 export async function listBillLinkDescriptors(
   userId: string,
 ): Promise<Array<{ billId: string; description: string; merchantName: string | null }>> {
   const db = getDb();
-  const rows = await db
+  const linked = await db
     .select({
       billId: plaidTransactionDrafts.linkedBillId,
       description: plaidTransactionDrafts.description,
@@ -2504,7 +2512,84 @@ export async function listBillLinkDescriptors(
       ),
     )
     .all();
-  return rows.filter((r): r is typeof r & { billId: string } => r.billId != null);
+  const allocated = await db
+    .select({
+      billId: draftAllocations.targetId,
+      description: plaidTransactionDrafts.description,
+      merchantName: plaidTransactionDrafts.merchantName,
+    })
+    .from(draftAllocations)
+    .innerJoin(plaidTransactionDrafts, eq(plaidTransactionDrafts.id, draftAllocations.draftId))
+    .where(
+      and(eq(draftAllocations.userId, userId), eq(draftAllocations.targetKind, "bill")),
+    )
+    .all();
+  return [...linked, ...allocated].filter(
+    (r): r is typeof r & { billId: string } => r.billId != null,
+  );
+}
+
+// ── draft allocations (one transaction, several obligations) ─────────────────
+
+export async function listDraftAllocationsForUser(
+  userId: string,
+): Promise<DraftAllocationRow[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(draftAllocations)
+    .where(eq(draftAllocations.userId, userId))
+    .all();
+}
+
+export async function listDraftAllocations(
+  userId: string,
+  draftId: string,
+): Promise<DraftAllocationRow[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(draftAllocations)
+    .where(and(eq(draftAllocations.userId, userId), eq(draftAllocations.draftId, draftId)))
+    .all();
+}
+
+/**
+ * Replace a draft's whole split in one shot. Replace rather than merge: the
+ * split is a single statement about one transaction, and a partial update
+ * would leave a stale target silently claiming money. An empty list clears it,
+ * returning the draft to heuristic matching.
+ */
+export async function replaceDraftAllocations(
+  userId: string,
+  draftId: string,
+  allocations: ReadonlyArray<{
+    targetKind: DraftAllocationTargetKind;
+    targetId: string;
+    targetDate: string;
+    amountCents: number;
+  }>,
+): Promise<DraftAllocationRow[]> {
+  const db = getDb();
+  db.transaction((tx) => {
+    tx.delete(draftAllocations)
+      .where(and(eq(draftAllocations.userId, userId), eq(draftAllocations.draftId, draftId)))
+      .run();
+    for (const a of allocations) {
+      tx.insert(draftAllocations)
+        .values({
+          id: newId(),
+          userId,
+          draftId,
+          targetKind: a.targetKind,
+          targetId: a.targetId,
+          targetDate: a.targetDate,
+          amountCents: a.amountCents,
+        })
+        .run();
+    }
+  });
+  return listDraftAllocations(userId, draftId);
 }
 
 /**

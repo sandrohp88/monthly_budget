@@ -37,6 +37,24 @@ export const billPaymentOverrideSchema = z.object({
  * where a `sent` hold lands, so it states a fact about the past. The route
  * rejects a future one rather than silently clamping it.
  */
+/**
+ * How one transaction divides across the obligations it paid. Replaces the
+ * draft's whole split; an empty list clears it. Amounts are positive portions
+ * of a debit — the route checks they don't exceed the transaction.
+ */
+export const draftAllocationsSchema = z.object({
+  allocations: z
+    .array(
+      z.object({
+        targetKind: z.enum(["bill", "extra"]),
+        targetId: z.string().min(1),
+        targetDate: isoDate,
+        amountCents: cents.refine((n) => n > 0, "Each portion must be more than zero"),
+      }),
+    )
+    .max(50),
+});
+
 export const billPaymentStateSchema = z.object({
   dueDate: isoDate,
   state: z.enum(["sent", "paid_externally"]),
