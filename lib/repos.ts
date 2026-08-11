@@ -1805,6 +1805,17 @@ export async function updatePlaidItemCursor(
     .run();
 }
 
+/**
+ * Stamp the live-balance throttle for an item (migration 0038). Called on
+ * every completed `/accounts/balance/get` ATTEMPT — success or failure — so a
+ * persistently erroring institution backs off instead of being retried on
+ * every sync. See `refreshLiveBalancesForItem`.
+ */
+export async function markItemBalanceRefreshed(id: string, at: number): Promise<void> {
+  const db = getDb();
+  await db.update(plaidItems).set({ balanceRefreshedAt: at }).where(eq(plaidItems.id, id)).run();
+}
+
 export async function deactivatePlaidItem(userId: string, id: string): Promise<void> {
   const db = getDb();
   // SQLite ALTER TABLE can't add an FK with ON DELETE SET NULL, so we

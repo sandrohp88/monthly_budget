@@ -23,6 +23,7 @@ const __plaidMock = {
   transactionsSync: vi.fn(),
   liabilitiesGet: vi.fn(),
   accountsGet: vi.fn(),
+  accountsBalanceGet: vi.fn(),
 };
 vi.mock("./plaid-client", () => ({
   getPlaidClient: () => __plaidMock,
@@ -52,7 +53,12 @@ import {
   listPlaidAccounts,
 } from "./repos";
 import { encryptToken } from "./plaid-crypto";
-import { syncCreditCardLiabilitiesForItem, syncPlaidTransactions } from "./plaid-sync";
+import {
+  BALANCE_REFRESH_MIN_INTERVAL_MS,
+  refreshLiveBalancesForItem,
+  syncCreditCardLiabilitiesForItem,
+  syncPlaidTransactions,
+} from "./plaid-sync";
 import { addDaysIso, DEFAULT_TIMEZONE, todayIso } from "./dates";
 import { addMonthsClampedIso } from "./paypal-special-financing";
 
@@ -72,9 +78,13 @@ beforeEach(() => {
   __plaidMock.liabilitiesGet.mockReset();
   __plaidMock.transactionsSync.mockReset();
   __plaidMock.accountsGet.mockReset();
+  __plaidMock.accountsBalanceGet.mockReset();
   // Default: the account refresh finds nothing to update. Tests that care
   // about balances or credit lines override this.
   __plaidMock.accountsGet.mockResolvedValue({ data: { accounts: [] } });
+  // Default: no live balance payload. The call is only made for depository
+  // accounts flagged useAsStartingBalance, which most fixtures don't have.
+  __plaidMock.accountsBalanceGet.mockResolvedValue({ data: { accounts: [] } });
 });
 
 afterEach(() => {
@@ -1899,5 +1909,237 @@ describe("credit-line refresh (the migration-0034 regression)", () => {
     await expect(syncPlaidTransactions(user.id)).resolves.toBeTruthy();
     const after = await getCreditCard(user.id, card.id);
     expect(after?.creditLimitCents).toBeNull();
+  });
+});
+
+describe("live balance refresh (the stale-cache regression)", () => {
+  /**
+   * Shipped bug, measured on Alliant Credit Union 2026-08-11: both
+   * /transactions/sync's `data.accounts` and /accounts/get return Plaid's
+   * CACHED balance. Alliant's cache ran ~a day behind, so the account
+   * anchoring the whole projection read $667.79 against a live $400.05 — a
+   * $267 error in the overdraft direction, with no pending float to explain it
+   * (Alliant reports available == current and no pending transactions).
+   * /accounts/balance/get is the only endpoint that pulls live.
+   */
+  async function seedCheckingItem(
+    userId: string,
+    opts: { useAsStartingBalance?: boolean; type?: string; cachedCents?: number } = {},
+  ) {
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins_116282",
+      institutionName: "Alliant Credit Union",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_chk",
+      itemId: item.id,
+      userId,
+      name: "Checking",
+      mask: "2677",
+      type: opts.type ?? "depository",
+      subtype: "checking",
+      balanceCents: opts.cachedCents ?? 667_79,
+      availableBalanceCents: opts.cachedCents ?? 667_79,
+      useAsStartingBalance: opts.useAsStartingBalance ?? true,
+      updatedAt: Date.now(),
+    });
+    return item;
+  }
+
+  function syncReturningNoAccounts() {
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: { added: [], modified: [], removed: [], next_cursor: "c1", has_more: false },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+  }
+
+  /** The cached path reports the STALE figure, exactly like Alliant did. */
+  function accountsGetReturningStale(cents = 667.79) {
+    __plaidMock.accountsGet.mockResolvedValue({
+      data: {
+        accounts: [
+          {
+            account_id: "acct_chk",
+            name: "Checking",
+            mask: "2677",
+            type: "depository",
+            subtype: "checking",
+            balances: { current: cents, available: cents, limit: null },
+          },
+        ],
+      },
+    });
+  }
+
+  function balanceGetReturning(current: number | null, available: number | null = current) {
+    __plaidMock.accountsBalanceGet.mockResolvedValue({
+      data: {
+        accounts: [
+          {
+            account_id: "acct_chk",
+            name: "Checking",
+            mask: "2677",
+            type: "depository",
+            subtype: "checking",
+            balances: { current, available, limit: null },
+          },
+        ],
+      },
+    });
+  }
+
+  async function storedBalance(userId: string) {
+    const accounts = await listPlaidAccounts(userId);
+    return accounts.find((a) => a.id === "acct_chk");
+  }
+
+  it("overwrites the cached balance with the live one", async () => {
+    const user = await makeUser();
+    await seedCheckingItem(user.id);
+    syncReturningNoAccounts();
+    accountsGetReturningStale();
+    balanceGetReturning(400.05);
+
+    const res = await syncPlaidTransactions(user.id);
+
+    // The live figure must win — it runs strictly after the cached refresh.
+    expect((await storedBalance(user.id))?.balanceCents).toBe(400_05);
+    expect(res.liveBalancesRefreshed).toBe(1);
+  });
+
+  it("scopes the paid call to the anchored accounts only", async () => {
+    const user = await makeUser();
+    await seedCheckingItem(user.id);
+    syncReturningNoAccounts();
+    accountsGetReturningStale();
+    balanceGetReturning(400.05);
+
+    await syncPlaidTransactions(user.id);
+
+    expect(__plaidMock.accountsBalanceGet).toHaveBeenCalledTimes(1);
+    expect(__plaidMock.accountsBalanceGet).toHaveBeenCalledWith(
+      expect.objectContaining({ options: { account_ids: ["acct_chk"] } }),
+    );
+  });
+
+  it("never calls the paid endpoint when no account anchors the projection", async () => {
+    const user = await makeUser();
+    await seedCheckingItem(user.id, { useAsStartingBalance: false });
+    syncReturningNoAccounts();
+    accountsGetReturningStale();
+
+    await syncPlaidTransactions(user.id);
+
+    expect(__plaidMock.accountsBalanceGet).not.toHaveBeenCalled();
+  });
+
+  it("never calls the paid endpoint for a credit account", async () => {
+    const user = await makeUser();
+    // A credit balance is a debt figure, never a starting balance — even if
+    // something flagged it, it must not justify a billed call. No accountsGet
+    // payload here on purpose: Plaid is authoritative for account type, so a
+    // depository payload would (correctly) overwrite the seeded type.
+    await seedCheckingItem(user.id, { type: "credit" });
+    syncReturningNoAccounts();
+
+    await syncPlaidTransactions(user.id);
+
+    expect(__plaidMock.accountsBalanceGet).not.toHaveBeenCalled();
+  });
+
+  it("throttles repeat pulls inside the interval", async () => {
+    const user = await makeUser();
+    const item = await seedCheckingItem(user.id);
+    balanceGetReturning(400.05);
+    const now = 1_800_000_000_000;
+
+    const res = await refreshLiveBalancesForItem(
+      user.id,
+      item.id,
+      "access-token",
+      now - (BALANCE_REFRESH_MIN_INTERVAL_MS - 1),
+      now,
+    );
+
+    expect(res.skipped).toBe("throttled");
+    expect(__plaidMock.accountsBalanceGet).not.toHaveBeenCalled();
+  });
+
+  it("pulls again once the interval has elapsed", async () => {
+    const user = await makeUser();
+    const item = await seedCheckingItem(user.id);
+    balanceGetReturning(400.05);
+    const now = 1_800_000_000_000;
+
+    const res = await refreshLiveBalancesForItem(
+      user.id,
+      item.id,
+      "access-token",
+      now - BALANCE_REFRESH_MIN_INTERVAL_MS,
+      now,
+    );
+
+    expect(res.skipped).toBeNull();
+    expect(res.accountsRefreshed).toBe(1);
+    expect((await storedBalance(user.id))?.balanceCents).toBe(400_05);
+  });
+
+  it("keeps the cached balance when the live pull is rate limited, and backs off", async () => {
+    const user = await makeUser();
+    const item = await seedCheckingItem(user.id);
+    // Plaid throws axios errors; the code lives in the response body.
+    __plaidMock.accountsBalanceGet.mockRejectedValue({
+      response: { data: { error_code: "BALANCE_LIMIT" } },
+      message: "Request failed with status code 429",
+    });
+    const now = 1_800_000_000_000;
+
+    const res = await refreshLiveBalancesForItem(user.id, item.id, "access-token", null, now);
+
+    expect(res.accountsRefreshed).toBe(0);
+    expect((await storedBalance(user.id))?.balanceCents).toBe(667_79);
+    // Stamped despite the failure, so a rate-limited item isn't retried on
+    // every sync — the next attempt is throttled.
+    const after = await refreshLiveBalancesForItem(
+      user.id,
+      item.id,
+      "access-token",
+      now,
+      now + 1_000,
+    );
+    expect(after.skipped).toBe("throttled");
+  });
+
+  it("keeps the cached balance when the live payload reports no current", async () => {
+    const user = await makeUser();
+    const item = await seedCheckingItem(user.id);
+    balanceGetReturning(null, null);
+
+    const res = await refreshLiveBalancesForItem(user.id, item.id, "access-token", null, 1);
+
+    expect(res.accountsRefreshed).toBe(0);
+    // Writing the null would have erased a balance we already had.
+    expect((await storedBalance(user.id))?.balanceCents).toBe(667_79);
+  });
+
+  it("writes current and available from the same live payload", async () => {
+    const user = await makeUser();
+    const item = await seedCheckingItem(user.id);
+    balanceGetReturning(400.05, 350.0);
+
+    await refreshLiveBalancesForItem(user.id, item.id, "access-token", null, 1);
+
+    // Both halves live as of the same instant — the float is real, not an
+    // artifact of a fresh current against a stale available.
+    const acct = await storedBalance(user.id);
+    expect(acct?.balanceCents).toBe(400_05);
+    expect(acct?.availableBalanceCents).toBe(350_00);
   });
 });

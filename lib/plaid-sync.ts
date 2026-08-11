@@ -13,6 +13,7 @@ import {
   upsertPlaidDraft,
   getPlaidDraft,
   updatePlaidItemCursor,
+  markItemBalanceRefreshed,
   getCreditCardByPlaidAccountId,
   createPromo,
   updatePlaidDraftStatus,
@@ -57,7 +58,7 @@ import { inferLinkedCardCycle } from "./linked-card-cycle";
 // when imported from tests. Re-exported here for callers that already import
 // them from this module.
 export { toCents, looksLikePaid } from "./plaid-helpers";
-import { toCents, looksLikePaid } from "./plaid-helpers";
+import { toCents, looksLikePaid, plaidErrorCode } from "./plaid-helpers";
 
 const PLAID_TRANSACTION_HISTORY_DAYS = 730;
 
@@ -71,6 +72,12 @@ export interface SyncResult {
   statementsReconciled: number;
   /** Scheduled paychecks auto-marked received from a matching deposit draft. */
   paychecksReconciled: number;
+  /**
+   * Starting-balance accounts refreshed from a LIVE `/accounts/balance/get`
+   * rather than Plaid's cache. Zero is normal — the call is throttled per item
+   * and only fires for depository accounts the projection anchors on.
+   */
+  liveBalancesRefreshed: number;
 }
 
 type PlaidTransactionWithOriginalDescription = {
@@ -454,6 +461,7 @@ export async function syncPlaidTransactions(
   let totalCardsUpdated = 0;
   let totalStatementsCreated = 0;
   let totalStatementsReconciled = 0;
+  let totalLiveBalances = 0;
 
   const plaid = getPlaidClient();
 
@@ -723,6 +731,17 @@ export async function syncPlaidTransactions(
       // transactions/sync returned any accounts at all.
       await refreshAccountsFromPlaid(userId, item.id, accessToken);
 
+      // ...then overwrite the CACHED balance with a live one for the accounts
+      // the projection actually anchors on. Strictly after the call above,
+      // which would otherwise clobber it. See refreshLiveBalancesForItem.
+      const live = await refreshLiveBalancesForItem(
+        userId,
+        item.id,
+        accessToken,
+        item.balanceRefreshedAt ?? null,
+      );
+      totalLiveBalances += live.accountsRefreshed;
+
       // Refresh credit-card cycle data + most recent statement from Liabilities.
       const liab = await syncCreditCardLiabilitiesForItem(userId, item.id, accessToken);
       totalCardsUpdated += liab.cardsUpdated;
@@ -749,6 +768,7 @@ export async function syncPlaidTransactions(
     statementsCreated: totalStatementsCreated,
     statementsReconciled: totalStatementsReconciled,
     paychecksReconciled,
+    liveBalancesRefreshed: totalLiveBalances,
   };
 }
 
@@ -861,6 +881,128 @@ export async function refreshAccountsFromPlaid(
   }
 
   return { accountsUpdated, limitsSeeded };
+}
+
+/**
+ * Minimum gap between live balance pulls for one item. Plaid caps
+ * `/accounts/balance/get` at 5/min and 30/hour PER ITEM (`BALANCE_LIMIT`), and
+ * bills a flat fee per successful call — so this is a cost control as much as
+ * a rate-limit one. Five minutes leaves a ceiling of 12 calls/hour/item, well
+ * inside the cap, while still meaning any sync more than five minutes after
+ * the last one gets a genuinely live number.
+ */
+export const BALANCE_REFRESH_MIN_INTERVAL_MS = 5 * 60_000;
+
+export type LiveBalanceRefreshResult = {
+  accountsRefreshed: number;
+  /** Why no call was made, or null when one was attempted. */
+  skipped: "no-anchor" | "throttled" | null;
+};
+
+/**
+ * Pull a LIVE balance for the accounts this item anchors the projection on.
+ *
+ * Why this exists on top of `refreshAccountsFromPlaid`: `/accounts/get` and the
+ * `data.accounts` payload on `/transactions/sync` both return Plaid's CACHED
+ * balance — whatever it last scraped from the institution. When that cache
+ * lags, the number can be badly stale while our row looks perfectly fresh,
+ * because we stamp `updatedAt` at write time. Measured on 2026-08-11: Alliant
+ * Credit Union's cached balance read $667.79 against a live $400.05 on the one
+ * account anchoring a user's whole projection — a $267 error in the overdraft
+ * direction, on an account with no pending float to blame (Alliant reports
+ * `available == current` and returns no pending transactions at all).
+ *
+ * `/accounts/balance/get` is the only Plaid endpoint that forces a real-time
+ * pull from the bank. It is also PAID per call and rate-limited per item, so
+ * this is deliberately narrow: only depository accounts flagged
+ * `useAsStartingBalance` — the ones whose balance actually becomes the
+ * projection's starting point — and never more often than
+ * BALANCE_REFRESH_MIN_INTERVAL_MS.
+ *
+ * MUST run AFTER `refreshAccountsFromPlaid`: that writes the cached balance and
+ * would otherwise clobber the live one we just paid for.
+ *
+ * Non-fatal, like the other post-transaction refreshes — a bank that errors
+ * here leaves the cached balance in place rather than failing the sync.
+ */
+export async function refreshLiveBalancesForItem(
+  userId: string,
+  itemId: string,
+  accessToken: string,
+  lastRefreshedAt: number | null,
+  now: number = Date.now(),
+): Promise<LiveBalanceRefreshResult> {
+  const known = await listPlaidAccountsByItem(itemId);
+  // Only what the projection actually anchors on. A credit account's balance
+  // is a debt figure, never a starting balance, so it never justifies the call.
+  const anchors = known.filter((a) => a.useAsStartingBalance && a.type === "depository");
+  if (anchors.length === 0) return { accountsRefreshed: 0, skipped: "no-anchor" };
+
+  if (lastRefreshedAt != null && now - lastRefreshedAt < BALANCE_REFRESH_MIN_INTERVAL_MS) {
+    return { accountsRefreshed: 0, skipped: "throttled" };
+  }
+
+  const plaid = getPlaidClient();
+  const anchorIds = new Set(anchors.map((a) => a.id));
+  let accountsRefreshed = 0;
+
+  try {
+    const res = await plaid.accountsBalanceGet({
+      access_token: accessToken,
+      // Scope the call to the anchors — we pay for it, and a balance we don't
+      // use is a balance we shouldn't fetch.
+      options: { account_ids: anchors.map((a) => a.id) },
+    });
+    for (const acct of res.data.accounts) {
+      if (!anchorIds.has(acct.account_id)) continue;
+      const balance = acct.balances.current ?? null;
+      // A payload with no `current` tells us nothing; writing it would erase a
+      // balance we already have. Leave the cached row alone.
+      if (balance === null) {
+        log.warn(
+          `plaid-balance: ${acct.account_id} returned no current balance — keeping cached value`,
+        );
+        continue;
+      }
+      await upsertPlaidAccount({
+        id: acct.account_id,
+        itemId,
+        userId,
+        name: acct.name,
+        mask: acct.mask ?? null,
+        type: acct.type,
+        subtype: acct.subtype ?? null,
+        balanceCents: toCents(balance),
+        // Same payload as balanceCents, which is the whole point — see the
+        // column doc in schema.ts. This call makes that pairing STRONGER than
+        // the cached path: both halves are now live as of the same instant.
+        availableBalanceCents:
+          acct.balances.available != null ? toCents(acct.balances.available) : null,
+        limitCents: acct.balances.limit != null ? toCents(acct.balances.limit) : null,
+        updatedAt: now,
+      });
+      accountsRefreshed += 1;
+    }
+    if (accountsRefreshed > 0) {
+      log.info(`plaid-balance: refreshed ${accountsRefreshed} live balance(s) for item ${itemId}`);
+    }
+  } catch (err) {
+    const code = plaidErrorCode(err);
+    if (code === "BALANCE_LIMIT" || code === "ACCOUNTS_BALANCE_GET_LIMIT") {
+      // Expected under bursty webhooks; the throttle stamp below backs us off.
+      log.warn(`plaid-balance: rate limited (${code}) for item ${itemId} — using cached balance`);
+    } else {
+      log.warn(
+        `plaid-balance: live refresh skipped for item ${itemId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  // Stamped on failure too — see markItemBalanceRefreshed. A bank that is down
+  // or rate-limiting us must not be retried on every single sync.
+  await markItemBalanceRefreshed(itemId, now);
+
+  return { accountsRefreshed, skipped: null };
 }
 
 /**

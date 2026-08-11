@@ -267,6 +267,13 @@
       "when": 1784001600007,
       "tag": "0037_draft_allocations",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1784001600008,
+      "tag": "0038_live_balance_refresh",
+      "breakpoints": true
     }
   ]
 }
