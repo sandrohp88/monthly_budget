@@ -597,6 +597,14 @@ export const plaidItems = sqliteTable(
      * fee per successful call.
      */
     balanceRefreshedAt: integer("balance_refreshed_at"),
+    /**
+     * Last time we ATTEMPTED a `/transactions/refresh` for this item
+     * (migration 0039). Same throttle-not-freshness contract as
+     * `balanceRefreshedAt`, kept separate because the two calls sit at
+     * different points in the sync and have different Plaid limits
+     * (2/min + 120/hour per item here). See `refreshItemTransactions`.
+     */
+    transactionsRefreshedAt: integer("transactions_refreshed_at"),
   },
   (t) => ({
     userActive: index("plaid_items_user_active_idx").on(t.userId, t.isActive),

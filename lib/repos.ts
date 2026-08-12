@@ -1816,6 +1816,21 @@ export async function markItemBalanceRefreshed(id: string, at: number): Promise<
   await db.update(plaidItems).set({ balanceRefreshedAt: at }).where(eq(plaidItems.id, id)).run();
 }
 
+/**
+ * Stamp the transactions-refresh throttle for an item (migration 0039). Same
+ * attempt-not-success contract as `markItemBalanceRefreshed`: an institution
+ * that doesn't support on-demand refresh, or is down, must back off rather than
+ * be retried on every sync.
+ */
+export async function markItemTransactionsRefreshed(id: string, at: number): Promise<void> {
+  const db = getDb();
+  await db
+    .update(plaidItems)
+    .set({ transactionsRefreshedAt: at })
+    .where(eq(plaidItems.id, id))
+    .run();
+}
+
 export async function deactivatePlaidItem(userId: string, id: string): Promise<void> {
   const db = getDb();
   // SQLite ALTER TABLE can't add an FK with ON DELETE SET NULL, so we

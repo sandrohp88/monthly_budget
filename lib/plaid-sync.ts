@@ -14,6 +14,7 @@ import {
   getPlaidDraft,
   updatePlaidItemCursor,
   markItemBalanceRefreshed,
+  markItemTransactionsRefreshed,
   getCreditCardByPlaidAccountId,
   createPromo,
   updatePlaidDraftStatus,
@@ -78,6 +79,12 @@ export interface SyncResult {
    * and only fires for depository accounts the projection anchors on.
    */
   liveBalancesRefreshed: number;
+  /**
+   * Items for which Plaid was forced to re-pull transactions from the bank
+   * (`/transactions/refresh`). Zero is normal — throttled per item and only
+   * for items anchoring a projection.
+   */
+  transactionsRefreshed: number;
 }
 
 type PlaidTransactionWithOriginalDescription = {
@@ -484,6 +491,7 @@ export async function syncPlaidTransactions(
   let totalStatementsCreated = 0;
   let totalStatementsReconciled = 0;
   let totalLiveBalances = 0;
+  let totalTransactionRefreshes = 0;
 
   const plaid = getPlaidClient();
 
@@ -494,6 +502,25 @@ export async function syncPlaidTransactions(
         item.accessTokenIv,
         item.accessTokenTag,
       );
+
+      // Whether anything under this item feeds a projection's starting
+      // balance. Gates both live refreshes — the paid balance pull below and
+      // the on-demand transaction pull here.
+      const anchorsProjection = (await listPlaidAccountsByItem(item.id)).some(
+        (a) => a.useAsStartingBalance && a.type === "depository",
+      );
+
+      // BEFORE the cursor read: make Plaid go get this item's transactions from
+      // the bank, so the sync below picks them up in the same pass. The ledger
+      // has to be as fresh as the balance or §17b holds cash for payments that
+      // have already posted — see refreshItemTransactions.
+      const txnRefresh = await refreshItemTransactions(
+        item.id,
+        accessToken,
+        anchorsProjection,
+        item.transactionsRefreshedAt ?? null,
+      );
+      if (txnRefresh.refreshed) totalTransactionRefreshes++;
 
       let cursor = item.cursor ?? undefined;
       let hasMore = true;
@@ -807,6 +834,7 @@ export async function syncPlaidTransactions(
     statementsReconciled: totalStatementsReconciled,
     paychecksReconciled,
     liveBalancesRefreshed: totalLiveBalances,
+    transactionsRefreshed: totalTransactionRefreshes,
   };
 }
 
@@ -919,6 +947,87 @@ export async function refreshAccountsFromPlaid(
   }
 
   return { accountsUpdated, limitsSeeded };
+}
+
+/**
+ * Minimum gap between on-demand transaction refreshes for one item. Plaid caps
+ * `/transactions/refresh` at 2/min and 120/hour per item
+ * (`TRANSACTIONS_REFRESH_LIMIT`) — far looser than the balance endpoint, but
+ * each call makes Plaid go out to the bank, so this stays deliberately modest.
+ */
+export const TRANSACTIONS_REFRESH_MIN_INTERVAL_MS = 5 * 60_000;
+
+export type TransactionsRefreshResult = {
+  refreshed: boolean;
+  /** Why no call was made, or null when one was attempted. */
+  skipped: "no-anchor" | "throttled" | null;
+};
+
+/**
+ * Force Plaid to go pull this item's transactions from the bank NOW.
+ *
+ * Why this is necessary and not just nice: Plaid polls an institution only
+ * **one to four times a day**, and `/transactions/sync` returns whatever it
+ * last collected. That is the entire "Alliant is a day behind" report — the
+ * ledger, not just the balance, runs on a cache.
+ *
+ * A stale ledger is not a cosmetic problem, because §17b settles bill
+ * occurrences on EVIDENCE: an occurrence with no matching posted transaction
+ * keeps its cash held. Once `refreshLiveBalancesForItem` made the balance live,
+ * a payment that had already posted at the bank — and was therefore already out
+ * of that balance — was still being held, because its transaction hadn't been
+ * delivered yet. The same $180 came out twice.
+ *
+ * Measured 2026-08-11: a $180 HOA payment had posted at Alliant (live balance
+ * $400.05) with no corresponding draft, so the projection held $180 against a
+ * balance that had already lost it and showed ~$220. Before the live balance
+ * landed, the stale figure still contained that $180 and the two errors
+ * cancelled; making one side fresh is what exposed the other.
+ *
+ * So: balance freshness and ledger freshness have to move together. Same narrow
+ * gating as the balance pull — items anchoring a projection, throttled, non
+ * fatal — and it runs BEFORE the sync loop so the cursor read picks up whatever
+ * lands. If the institution's extraction is slower than this call, nothing is
+ * lost: Plaid fires SYNC_UPDATES_AVAILABLE and the webhook drives another sync.
+ */
+export async function refreshItemTransactions(
+  itemId: string,
+  accessToken: string,
+  anchorsProjection: boolean,
+  lastRefreshedAt: number | null,
+  now: number = Date.now(),
+): Promise<TransactionsRefreshResult> {
+  // Only items whose accounts actually feed a starting balance. Everywhere
+  // else a day-old ledger costs accuracy, not correctness — no held cash to
+  // wrongly keep holding — and this call is neither free nor unlimited.
+  if (!anchorsProjection) return { refreshed: false, skipped: "no-anchor" };
+  if (lastRefreshedAt != null && now - lastRefreshedAt < TRANSACTIONS_REFRESH_MIN_INTERVAL_MS) {
+    return { refreshed: false, skipped: "throttled" };
+  }
+
+  const plaid = getPlaidClient();
+  let refreshed = false;
+  try {
+    await plaid.transactionsRefresh({ access_token: accessToken });
+    refreshed = true;
+    log.info(`plaid-txn-refresh: forced an extraction for item ${itemId}`);
+  } catch (err) {
+    const code = plaidErrorCode(err);
+    if (code === "TRANSACTIONS_REFRESH_LIMIT") {
+      log.warn(`plaid-txn-refresh: rate limited for item ${itemId} — syncing cached transactions`);
+    } else {
+      // Plenty of institutions and plans simply don't offer on-demand refresh
+      // (PRODUCT_NOT_READY, PRODUCTS_NOT_SUPPORTED). Degrade to the cached
+      // ledger rather than failing the sync.
+      log.warn(
+        `plaid-txn-refresh: skipped for item ${itemId}: ${code ?? (err as Error).message}`,
+      );
+    }
+  }
+
+  // Stamped on failure too — see markItemTransactionsRefreshed.
+  await markItemTransactionsRefreshed(itemId, now);
+  return { refreshed, skipped: null };
 }
 
 /**

@@ -24,6 +24,7 @@ const __plaidMock = {
   liabilitiesGet: vi.fn(),
   accountsGet: vi.fn(),
   accountsBalanceGet: vi.fn(),
+  transactionsRefresh: vi.fn(),
 };
 vi.mock("./plaid-client", () => ({
   getPlaidClient: () => __plaidMock,
@@ -55,6 +56,8 @@ import {
 import { encryptToken } from "./plaid-crypto";
 import {
   BALANCE_REFRESH_MIN_INTERVAL_MS,
+  TRANSACTIONS_REFRESH_MIN_INTERVAL_MS,
+  refreshItemTransactions,
   refreshLiveBalancesForItem,
   syncCreditCardLiabilitiesForItem,
   syncPlaidTransactions,
@@ -79,6 +82,8 @@ beforeEach(() => {
   __plaidMock.transactionsSync.mockReset();
   __plaidMock.accountsGet.mockReset();
   __plaidMock.accountsBalanceGet.mockReset();
+  __plaidMock.transactionsRefresh.mockReset();
+  __plaidMock.transactionsRefresh.mockResolvedValue({ data: { request_id: "req_1" } });
   // Default: the account refresh finds nothing to update. Tests that care
   // about balances or credit lines override this.
   __plaidMock.accountsGet.mockResolvedValue({ data: { accounts: [] } });
@@ -2062,6 +2067,138 @@ describe("pending transaction ingest", () => {
 
     const after = await listStatements(card.id);
     expect(after.find((s) => s.id === stmt.id)?.paidAmountCents).toBeNull();
+  });
+});
+
+describe("on-demand transaction refresh", () => {
+  /**
+   * Plaid polls an institution only 1–4x/day, so `/transactions/sync` reads a
+   * cached ledger. That is only cosmetic until the BALANCE goes live: §17b
+   * settles occurrences on evidence, so a payment that had posted at the bank
+   * (already out of the live balance) but hadn't been delivered as a
+   * transaction was still having its cash held — the same $180 out twice.
+   * Measured 2026-08-11 on a $180 HOA payment at Alliant.
+   */
+  async function seedAnchoredItem(userId: string, useAsStartingBalance = true) {
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins",
+      institutionName: "Test Bank",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_chk",
+      itemId: item.id,
+      userId,
+      name: "Checking",
+      mask: "0001",
+      type: "depository",
+      subtype: "checking",
+      balanceCents: 400_05,
+      availableBalanceCents: 400_05,
+      useAsStartingBalance,
+      updatedAt: Date.now(),
+    });
+    return item;
+  }
+
+  function syncReturningNothing() {
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: { added: [], modified: [], removed: [], next_cursor: "c1", has_more: false, accounts: [] },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+  }
+
+  it("forces a refresh BEFORE reading the cursor, or the fresh data lands a sync late", async () => {
+    const user = await makeUser();
+    await seedAnchoredItem(user.id);
+    syncReturningNothing();
+    const order: string[] = [];
+    __plaidMock.transactionsRefresh.mockImplementation(async () => {
+      order.push("refresh");
+      return { data: {} };
+    });
+    __plaidMock.transactionsSync.mockImplementation(async () => {
+      order.push("sync");
+      return {
+        data: { added: [], modified: [], removed: [], next_cursor: "c1", has_more: false, accounts: [] },
+      };
+    });
+
+    const res = await syncPlaidTransactions(user.id);
+
+    expect(order).toEqual(["refresh", "sync"]);
+    expect(res.transactionsRefreshed).toBe(1);
+  });
+
+  it("does not refresh items that anchor no projection", async () => {
+    const user = await makeUser();
+    await seedAnchoredItem(user.id, false);
+    syncReturningNothing();
+
+    await syncPlaidTransactions(user.id);
+
+    expect(__plaidMock.transactionsRefresh).not.toHaveBeenCalled();
+  });
+
+  it("throttles repeat refreshes, then allows one once the interval elapses", async () => {
+    const user = await makeUser();
+    const item = await seedAnchoredItem(user.id);
+    const now = 1_800_000_000_000;
+
+    const throttled = await refreshItemTransactions(
+      item.id,
+      "access-token",
+      true,
+      now - (TRANSACTIONS_REFRESH_MIN_INTERVAL_MS - 1),
+      now,
+    );
+    expect(throttled.skipped).toBe("throttled");
+    expect(__plaidMock.transactionsRefresh).not.toHaveBeenCalled();
+
+    const allowed = await refreshItemTransactions(
+      item.id,
+      "access-token",
+      true,
+      now - TRANSACTIONS_REFRESH_MIN_INTERVAL_MS,
+      now,
+    );
+    expect(allowed.refreshed).toBe(true);
+  });
+
+  it("syncs the cached ledger anyway when the institution can't refresh", async () => {
+    const user = await makeUser();
+    await seedAnchoredItem(user.id);
+    syncReturningNothing();
+    __plaidMock.transactionsRefresh.mockRejectedValue({
+      response: { data: { error_code: "PRODUCTS_NOT_SUPPORTED" } },
+      message: "Request failed with status code 400",
+    });
+
+    const res = await syncPlaidTransactions(user.id);
+
+    expect(res.transactionsRefreshed).toBe(0);
+    expect(__plaidMock.transactionsSync).toHaveBeenCalled();
+  });
+
+  it("backs off after a rate limit instead of retrying every sync", async () => {
+    const user = await makeUser();
+    const item = await seedAnchoredItem(user.id);
+    __plaidMock.transactionsRefresh.mockRejectedValue({
+      response: { data: { error_code: "TRANSACTIONS_REFRESH_LIMIT" } },
+      message: "Request failed with status code 429",
+    });
+    const now = 1_800_000_000_000;
+
+    await refreshItemTransactions(item.id, "access-token", true, null, now);
+    const next = await refreshItemTransactions(item.id, "access-token", true, now, now + 1_000);
+
+    expect(next.skipped).toBe("throttled");
   });
 });
 

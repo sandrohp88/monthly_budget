@@ -354,6 +354,7 @@ weird gets emitted before merging.
 - `0036_bill_payment_states` — `bill_payment_states` table, unique `(bill_id, due_date)`: the user's per-occurrence assertion (`sent` | `paid_externally`) for occurrences the transaction feed hasn't answered yet. See §17b.
 - `0037_draft_allocations` — `draft_allocations` table: how ONE posted transaction divides across the obligations it paid (bill occurrences and/or one-time expenses). Allocations are exhaustive for their draft. See §17 "Splitting one transaction".
 - `0038_live_balance_refresh` — `plaid_items.balance_refreshed_at`: throttle state for the live `/accounts/balance/get` pull (a PAID, per-item rate-limited call), stamped on every attempt including failures. NOT a freshness signal. See §17 "Cached vs live balances".
+- `0039_transactions_refresh` — `plaid_items.transactions_refreshed_at`: same throttle contract for `/transactions/refresh`. Separate column because the two calls sit at different points in the sync and have different Plaid limits. See §17 "The ledger must be as fresh as the balance".
 
 ---
 
@@ -787,6 +788,44 @@ because the endpoint is **billed per call** (~$0.05–$0.15) and capped at
 - ❌ Don't treat `balances.last_updated_datetime` as a freshness signal — Plaid
   returns it **only for Capital One** (`ins_128026`). It was null for Alliant,
   which is why the staleness was undetectable from the payload.
+
+### The ledger must be as fresh as the balance (read this before touching either)
+
+**A live balance with a stale ledger double-subtracts.** This is the trap that
+caught us on 2026-08-11, hours after the live-balance fix shipped.
+
+Plaid polls an institution only **one to four times a day**, and
+`/transactions/sync` returns whatever it last collected — so the ledger runs on
+a cache exactly like the balance did. That was harmless while both were stale
+together. It stopped being harmless the moment the balance went live, because
+§17b settles bill occurrences on **evidence**: an occurrence with no matching
+posted transaction keeps its cash held.
+
+A $180 HOA payment had posted at Alliant — so the live balance ($400.05) had
+already lost it — but the transaction hadn't been delivered, so the projection
+held $180 against a balance that no longer contained it and showed ~$220. Two
+errors that used to cancel:
+
+| | Balance | Hold | Shown | Truth |
+|---|---|---|---|---|
+| Stale balance | $667.79 (still contained the $180) | −$180 | $487.79 | $400.05 |
+| Live balance, stale ledger | $400.05 | −$180 | **$220.05** | $400.05 |
+
+`refreshItemTransactions` closes it with `/transactions/refresh`, which forces
+an on-demand extraction. Limits are loose (**2/min, 120/hour, 2,880/day per
+item**, `TRANSACTIONS_REFRESH_LIMIT`) but each call sends Plaid out to the bank,
+so it carries the same 5-minute per-item throttle and the same
+stamp-on-failure backoff as the balance pull.
+
+- ❌ Don't call it AFTER the cursor read. It must run **before** `transactions/sync`
+  in the same pass or the fresh data arrives a whole sync late. There's a test
+  pinning the call order for exactly this reason.
+- ❌ Don't make one side fresh without the other. Balance freshness and ledger
+  freshness are a matched pair now; changing one alone re-opens this bug in
+  whichever direction you left stale.
+- ❌ Don't assume the refresh is synchronous enough to guarantee data. If the
+  extraction outruns the call, Plaid fires `SYNC_UPDATES_AVAILABLE` and the
+  webhook drives another sync — the design tolerates both.
 - Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
 
 ### Credit card linkage (Plaid → `credit_cards`)
