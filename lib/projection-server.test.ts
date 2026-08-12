@@ -952,6 +952,117 @@ describe("buildProjection pending posting (money out, not yet posted)", () => {
     expect(projection?.rows.find((r) => r.date === "2026-05-04")?.balanceCents).toBe(7_500_00);
   });
 
+  /**
+   * The blind spot this closes: Alliant and Navy Federal both report
+   * `available == current` on checking, so `current − available` is $0 no
+   * matter how much is actually in flight. Plaid's own pending transaction
+   * rows are the second, independent measure.
+   */
+  async function seedPendingDraft(
+    userId: string,
+    id: string,
+    amountCents: number,
+    pending = true,
+  ) {
+    await upsertPlaidDraft({
+      id,
+      userId,
+      accountId: "checking",
+      date: "2026-05-03",
+      description: "Pending card swipe",
+      originalDescription: null,
+      amountCents,
+      plaidCategory: null,
+      merchantName: null,
+      pending,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+  }
+
+  it("holds pending transactions when the bank reports no float at all", async () => {
+    // available == current, exactly like Alliant and Navy Federal.
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00, 10_000_00);
+    await seedPendingDraft(user.id, "pend_1", 300_00);
+
+    const projection = await buildProjection(user.id);
+
+    expect(projection?.pendingPosting.bankPendingOutflowCents).toBe(300_00);
+    expect(projection?.pendingPosting.totalHeldCents).toBe(300_00);
+    expect(projection?.rows.find((r) => r.date === "2026-05-04")?.balanceCents).toBe(9_700_00);
+  });
+
+  it("takes the larger of the two float measures, never their sum", async () => {
+    // The bank says $750 pending and Plaid lists a $300 pending row. Those are
+    // two views of the same pending set — holding $1,050 would double-count.
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00, 9_250_00);
+    await seedPendingDraft(user.id, "pend_1", 300_00);
+
+    const projection = await buildProjection(user.id);
+
+    expect(projection?.pendingPosting.bankPendingOutflowCents).toBe(750_00);
+    expect(projection?.rows.find((r) => r.date === "2026-05-04")?.balanceCents).toBe(9_250_00);
+  });
+
+  it("ignores pending deposits — inflows must never release cash", async () => {
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00, 10_000_00);
+    // Negative = credit in Plaid's sign convention.
+    await seedPendingDraft(user.id, "pend_in", -500_00);
+
+    const projection = await buildProjection(user.id);
+
+    expect(projection?.pendingPosting.totalHeldCents).toBe(0);
+    expect(projection?.rows.find((r) => r.date === "2026-05-04")?.balanceCents).toBe(10_000_00);
+  });
+
+  it("stops holding a pending row once it posts", async () => {
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00, 10_000_00);
+    await seedPendingDraft(user.id, "pend_1", 300_00, false);
+
+    const projection = await buildProjection(user.id);
+
+    expect(projection?.pendingPosting.totalHeldCents).toBe(0);
+  });
+
+  it("never lets a pending transaction settle a bill and release its cash", async () => {
+    // The dangerous direction: if a pending row could match the rent
+    // occurrence, it would free $2,000 of held cash on the strength of a
+    // transaction that can still change amount or vanish outright.
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00, 10_000_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-04-25" });
+    await seedBill(user.id);
+    await upsertPlaidDraft({
+      id: "pend_rent",
+      userId: user.id,
+      accountId: "checking",
+      date: "2026-05-01",
+      description: "Household Rent",
+      originalDescription: null,
+      amountCents: 2000_00,
+      plaidCategory: null,
+      merchantName: null,
+      pending: true,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+
+    const projection = await buildProjection(user.id);
+
+    // Still held as an unposted occurrence, NOT settled into a zero-cash marker.
+    expect(projection?.pendingPosting.attributedCents).toBe(2000_00);
+    expect(projection?.pendingPosting.totalHeldCents).toBe(2000_00);
+    expect(projection?.rows.find((r) => r.date === "2026-05-04")?.balanceCents).toBe(8_000_00);
+  });
+
   it("settles an occurrence paid outside the linked accounts and frees its cash", async () => {
     const user = await makeUser();
     await seedLinked(user.id, 10_000_00);

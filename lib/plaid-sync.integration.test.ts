@@ -1912,6 +1912,159 @@ describe("credit-line refresh (the migration-0034 regression)", () => {
   });
 });
 
+describe("pending transaction ingest", () => {
+  /**
+   * Until 2026-08-11 the sync did `if (txn.pending) continue`, so pending
+   * transactions were dropped at ingest for every institution — zero pending
+   * rows existed in production across 25 accounts. That removed the only float
+   * signal available at a bank whose `available` equals its `current`, which
+   * is exactly what both credit unions anchoring this app's projections do.
+   */
+  async function seedCheckingItem(userId: string) {
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins",
+      institutionName: "Test Bank",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_chk",
+      itemId: item.id,
+      userId,
+      name: "Checking",
+      mask: "0001",
+      type: "depository",
+      subtype: "checking",
+      balanceCents: 1000_00,
+      availableBalanceCents: 1000_00,
+      updatedAt: Date.now(),
+    });
+    return item;
+  }
+
+  function syncReturning(added: unknown[], modified: unknown[] = []) {
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: { added, modified, removed: [], next_cursor: "c1", has_more: false, accounts: [] },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+  }
+
+  const swipe = (over: Record<string, unknown> = {}) => ({
+    transaction_id: "txn_pending",
+    account_id: "acct_chk",
+    pending: true,
+    date: TODAY,
+    name: "Corner Store",
+    original_description: "Corner Store",
+    amount: 42.5,
+    personal_finance_category: { primary: "GENERAL_MERCHANDISE" },
+    merchant_name: "Corner Store",
+    ...over,
+  });
+
+  it("stores a pending transaction instead of dropping it", async () => {
+    const user = await makeUser();
+    await seedCheckingItem(user.id);
+    syncReturning([swipe()]);
+
+    await syncPlaidTransactions(user.id);
+
+    const draft = await getPlaidDraft(user.id, "txn_pending");
+    expect(draft?.pending).toBe(true);
+    expect(draft?.amountCents).toBe(42_50);
+  });
+
+  it("supersedes the pending row when its posted successor arrives", async () => {
+    // Plaid issues a NEW transaction_id on post and links back via
+    // pending_transaction_id — measured on 5/5 Citi rows. Leave the
+    // predecessor and the same charge is held AND posted.
+    const user = await makeUser();
+    await seedCheckingItem(user.id);
+    syncReturning([swipe()]);
+    await syncPlaidTransactions(user.id);
+
+    syncReturning([
+      swipe({
+        transaction_id: "txn_posted",
+        pending: false,
+        pending_transaction_id: "txn_pending",
+        amount: 44.0, // settled higher, as a tip would
+      }),
+    ]);
+    await syncPlaidTransactions(user.id);
+
+    expect((await getPlaidDraft(user.id, "txn_pending"))?.status).toBe("dismissed");
+    const posted = await getPlaidDraft(user.id, "txn_posted");
+    expect(posted?.pending).toBe(false);
+    expect(posted?.amountCents).toBe(44_00);
+  });
+
+  it("flips a pending row in place when the same id posts via modified", async () => {
+    const user = await makeUser();
+    await seedCheckingItem(user.id);
+    syncReturning([swipe()]);
+    await syncPlaidTransactions(user.id);
+
+    syncReturning([], [swipe({ pending: false })]);
+    await syncPlaidTransactions(user.id);
+
+    expect((await getPlaidDraft(user.id, "txn_pending"))?.pending).toBe(false);
+  });
+
+  it("does not let a pending card payment settle a statement", async () => {
+    const user = await makeUser();
+    const item = await seedCheckingItem(user.id);
+    await upsertPlaidAccount({
+      id: "acct_cc",
+      itemId: item.id,
+      userId: user.id,
+      name: "Card",
+      mask: "1234",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 500_00,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "My Card",
+      statementDay: 1,
+      dueDay: 21,
+      autoPay: false,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_cc");
+    const stmt = await createStatement(card.id, {
+      statementDate: addDaysIso(TODAY, -10),
+      dueDate: addDaysIso(TODAY, 11),
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+
+    syncReturning([
+      swipe({
+        transaction_id: "txn_pay",
+        account_id: "acct_cc",
+        pending: true,
+        amount: 300.0,
+        name: "Payment Thank You",
+        personal_finance_category: { primary: "LOAN_PAYMENTS" },
+      }),
+    ]);
+    await syncPlaidTransactions(user.id);
+
+    const after = await listStatements(card.id);
+    expect(after.find((s) => s.id === stmt.id)?.paidAmountCents).toBeNull();
+  });
+});
+
 describe("live balance refresh (the stale-cache regression)", () => {
   /**
    * Shipped bug, measured on Alliant Credit Union 2026-08-11: both

@@ -629,8 +629,13 @@ export const plaidAccounts = sqliteTable(
      * balance LESS pending outflows plus pending inflows, so
      * `balanceCents - availableBalanceCents` is the BANK's own measure of money
      * that has left but hasn't posted yet — the evidence the projection uses
-     * instead of assuming a due bill was paid (see lib/pending-float.ts).
-     * Null whenever the institution doesn't compute it.
+     * instead of assuming a due bill was paid (see the pending-float block in
+     * lib/projection-server.ts and CLAUDE.md §17b).
+     * Null whenever the institution doesn't compute it — and equal to
+     * `balanceCents` at institutions that report an `available` without
+     * netting pending debits out of it, which is why Plaid's own pending
+     * transaction rows are summed as a second measure
+     * (`getPendingDraftOutflow`).
      *
      * ALWAYS write this from the same Plaid payload as `balanceCents`: a fresh
      * current against a stale available produces a difference that is pure

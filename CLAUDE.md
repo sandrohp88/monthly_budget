@@ -353,6 +353,7 @@ weird gets emitted before merging.
 - `0035_account_available_balance` — `plaid_accounts.available_balance_cents` (Plaid `balances.available`). `current − available` is the bank's own pending-outflow float. See §17b.
 - `0036_bill_payment_states` — `bill_payment_states` table, unique `(bill_id, due_date)`: the user's per-occurrence assertion (`sent` | `paid_externally`) for occurrences the transaction feed hasn't answered yet. See §17b.
 - `0037_draft_allocations` — `draft_allocations` table: how ONE posted transaction divides across the obligations it paid (bill occurrences and/or one-time expenses). Allocations are exhaustive for their draft. See §17 "Splitting one transaction".
+- `0038_live_balance_refresh` — `plaid_items.balance_refreshed_at`: throttle state for the live `/accounts/balance/get` pull (a PAID, per-item rate-limited call), stamped on every attempt including failures. NOT a freshness signal. See §17 "Cached vs live balances".
 
 ---
 
@@ -746,8 +747,46 @@ All encrypt/decrypt happens through `lib/plaid-crypto.ts`.
 
 ### Sync semantics (`lib/plaid-sync.ts`)
 - Uses Plaid's `transactions/sync` cursor API — paginates until `has_more = false`, then persists the cursor.
-- **Pending transactions are skipped on add** (we re-pick them up when they post). Modified ones are upserted (preserve idempotency).
-- Account balances are refreshed on every sync from the same response.
+- **Pending transactions are STORED** (`pending = 1`) so their cash can be held — see §17b layer 2b. They are deliberately inert: a pending row never settles a statement, seeds a promo, reconciles a bill, or counts toward cycle spend. It is a *claim* that money is moving, not evidence that it moved.
+- **A posted transaction supersedes its pending predecessor by id.** Plaid does NOT reuse the `transaction_id` when a pending transaction posts — it issues a new one and points back via `pending_transaction_id`. `supersedePendingPredecessor` dismisses the predecessor; skip it and the same charge is counted twice (once held, once posted). Measured 2026-08-11: 5 of 5 Citi and 2 of 6 Navy Federal posted rows carried that field, so this is the normal path, not an edge case.
+- Account balances are refreshed on every sync from the same response — but that response carries Plaid's **cached** balance. See "Cached vs live balances" below.
+- Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
+
+### Cached vs live balances (read before touching balance code)
+`/transactions/sync`'s `data.accounts` and `/accounts/get` both return the
+balance **Plaid last scraped**, not the bank's current one. When an
+institution's cache lags, that figure is stale while our row looks perfectly
+fresh — because `updatedAt` is stamped at *write* time, not at the time the
+institution computed the balance. Nothing in the app can tell the difference.
+
+Measured 2026-08-11 on Alliant Credit Union: cached `$667.79` against a live
+`$400.05` on the single account anchoring a user's whole projection. A $267
+error in the **overdraft direction**, and NOT a money-in-flight case — Alliant
+reports `available == current` and returns no pending transactions at all, so
+all three §17b layers correctly computed a $0 float. There was nothing to
+detect.
+
+`/accounts/balance/get` is the only endpoint that forces a real-time pull from
+the bank. `refreshLiveBalancesForItem` calls it, and it is deliberately narrow
+because the endpoint is **billed per call** (~$0.05–$0.15) and capped at
+**5/min + 30/hour per item** (`BALANCE_LIMIT`):
+
+- only **depository** accounts flagged `useAsStartingBalance` — a credit
+  balance is a debt figure, never a starting balance, so it never justifies a
+  paid call
+- `options.account_ids` scopes the request to exactly those accounts
+- a 5-minute per-item throttle (`plaid_items.balance_refreshed_at`, migration
+  0038) caps us at 12 calls/hour/item
+- the throttle is stamped on **failure too**, so a bank that is down or rate
+  limiting isn't retried every sync
+
+- ❌ Don't call it from inside the pagination loop, or for every account — both
+  turn a bounded cost into an unbounded one.
+- ❌ Don't run it BEFORE `refreshAccountsFromPlaid`. That writes the cached
+  balance and would clobber the live one you just paid for.
+- ❌ Don't treat `balances.last_updated_datetime` as a freshness signal — Plaid
+  returns it **only for Capital One** (`ins_128026`). It was null for Alliant,
+  which is why the staleness was undetectable from the payload.
 - Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
 
 ### Credit card linkage (Plaid → `credit_cards`)
@@ -898,21 +937,38 @@ the institution. Stored in `plaid_accounts.available_balance_cents` (migration
 institution doesn't compute it, which degrades the feature gracefully rather
 than breaking it.
 
+**2b. Plaid's own pending transaction rows (`getPendingDraftOutflow`).** Layer 2
+is $0 at any institution that reports an `available` without netting pending
+debits out of it — and **both** credit unions anchoring this app's projections
+do exactly that: Alliant (`ins_116282`) and Navy Federal each report
+`available == current` on checking. That left the cash float structurally blind
+on the only two accounts that feed a starting balance. Summing Plaid's pending
+transaction rows on those accounts is a second, independent measure that works
+wherever the institution reports pending rows at all. Outflows only — a pending
+deposit is money *arriving*, and counting it would release cash instead of
+holding it.
+
+Not a silver bullet: an institution can report neither. Alliant is that case
+(no pending rows, no float in `available`), which is why the live-balance pull
+above — not this layer — is what fixed it there.
+
 **3. Per-occurrence marks (`bill_payment_states`, migration 0036).** `sent` =
 the money is out, keep holding it. `paid_externally` = paid from an account
 this app can't see, release it. Marks are CLAIMS, never the last word: a
 matched transaction outranks them at read time, so nothing has to remember to
 clear a mark — it just stops mattering. Reversible from the dashboard.
 
-### The non-double-counting invariant (read before touching layer 2 or 3)
+### The non-double-counting invariant (read before touching layer 2, 2b or 3)
 
-Layers 2 and 3 describe overlapping money — a bill marked `sent` is usually the
-same dollars the bank reports pending. Marks therefore **attribute** the float
-rather than adding to it:
+Every layer describes overlapping money — a bill marked `sent` is usually the
+same dollars the bank reports pending, and layers 2 and 2b are two *views of
+the same pending set*, never two pools. So they combine with `max`, never a
+sum. Marks then **attribute** that float rather than adding to it:
 
 ```
-totalHeld = attributed + max(0, bankPendingOutflow − attributed)
-          = max(bankPendingOutflow, attributed)
+observedFloat = max(bankPendingOutflow, pendingDraftOutflow)   ← 2 vs 2b
+totalHeld     = attributed + max(0, observedFloat − attributed)
+              = max(observedFloat, attributed)
 ```
 
 Attributed cash rides its own bill occurrence so the user can see what it is;
@@ -956,6 +1012,13 @@ drawing it to the horizon.
   income" for money on its way out.
 - ❌ Don't give holds a grace period to match the unpaid alert's. Different
   cost profiles, deliberately different windows.
+- ❌ Don't let a **pending** draft reach bill reconciliation or cycle spend.
+  `listStartingBalanceDraftsInRange` and `listCardTransactionsInRange` both
+  filter `pending = false` on purpose. A pending row settling an occurrence
+  would RELEASE its held cash on the strength of a transaction that can still
+  change amount or disappear — the double-count-in-the-user's-favour this whole
+  section exists to prevent. Layer 2b holds that cash; it must never free it.
+- ❌ Don't sum layers 2 and 2b. Same pending set seen twice — `max`, always.
 
 ---
 

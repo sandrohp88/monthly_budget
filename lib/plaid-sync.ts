@@ -448,6 +448,28 @@ async function reconcilePaycheckDeposits(userId: string, today: string): Promise
  * Upserts drafts and advances each item's cursor.
  * This is polling-only — no webhook required.
  */
+/**
+ * Retire the pending draft that a now-posted transaction replaces.
+ *
+ * Plaid does NOT reuse the transaction_id when a pending transaction posts: it
+ * issues a new one and points back at the old row via `pending_transaction_id`.
+ * Leave the predecessor in place and the same charge is counted twice — once as
+ * held pending cash and once as posted. Measured 2026-08-11: 5 of 5 Citi and 2
+ * of 6 Navy Federal posted rows carried this field, so this is the normal path,
+ * not an edge case.
+ *
+ * Dismisses rather than hard-deletes, matching how `data.removed` is handled —
+ * dismissed rows drop out of every total but stay auditable.
+ */
+async function supersedePendingPredecessor(
+  userId: string,
+  txn: { pending_transaction_id?: string | null },
+): Promise<void> {
+  const predecessorId = txn.pending_transaction_id;
+  if (!predecessorId) return;
+  await deletePlaidDraft(userId, predecessorId);
+}
+
 export async function syncPlaidTransactions(
   userId: string,
   filterItemId?: string,
@@ -539,8 +561,6 @@ export async function syncPlaidTransactions(
         // Added transactions -> approved ledger rows.
         for (const txn of data.added) {
           if (!accountIds.has(txn.account_id)) continue;
-          // Skip pending transactions — we'll pick them up when they post.
-          if (txn.pending) continue;
           const originalDescription = originalDescriptionOf(txn);
           const amountCents = toCents(txn.amount);
           const account = accountById.get(txn.account_id);
@@ -563,50 +583,61 @@ export async function syncPlaidTransactions(
             amountCents,
             plaidCategory: txn.personal_finance_category?.primary ?? null,
             merchantName: txn.merchant_name ?? null,
-            pending: false,
+            pending: txn.pending,
             status: "approved",
             kind,
             linkedExpenseId: null,
             linkedPromoId: null,
           });
-          await autoCreatePromoFromTransaction({
-            userId,
-            transactionId: txn.transaction_id,
-            accountId: txn.account_id,
-            date: txn.date,
-            description: txn.name,
-            originalDescription,
-            merchantName: txn.merchant_name ?? null,
-            amountCents,
-            kind,
-            promoTexts: plaidTransactionPromoTexts(txn),
-          });
 
-          // Auto-reconcile a posted card payment against the open statement it
-          // settled — marks that statement paid (promo balances untouched).
-          if (
-            await reconcileCardPaymentDraft({
+          // A pending transaction is a CLAIM that money is moving, not evidence
+          // that it moved. It holds cash (see getPendingDraftOutflow) but must
+          // never drive anything that treats a transaction as settled —
+          // settling a statement or seeding a promo off a charge that can still
+          // change amount, or vanish outright, is the double-count §17b exists
+          // to prevent. Those all re-run when it posts for real.
+          if (!txn.pending) {
+            await autoCreatePromoFromTransaction({
               userId,
               transactionId: txn.transaction_id,
               accountId: txn.account_id,
-              amountCents,
               date: txn.date,
-              kind,
               description: txn.name,
               originalDescription,
-            })
-          ) {
-            totalStatementsReconciled++;
-          } else if (kind === "card_payment") {
-            // A new payment that settled nothing is worth one log line: the
-            // $1 match tolerance deliberately leaves partial/adjusted payments
-            // unmatched, and this is the only signal that it happened.
-            log.info(
-              `plaid-sync: card_payment ${txn.transaction_id} ` +
-                `($${(Math.abs(amountCents) / 100).toFixed(2)} on ${txn.date}) ` +
-                `did not match any open statement — leaving unreconciled`,
-            );
+              merchantName: txn.merchant_name ?? null,
+              amountCents,
+              kind,
+              promoTexts: plaidTransactionPromoTexts(txn),
+            });
+
+            // Auto-reconcile a posted card payment against the open statement it
+            // settled — marks that statement paid (promo balances untouched).
+            if (
+              await reconcileCardPaymentDraft({
+                userId,
+                transactionId: txn.transaction_id,
+                accountId: txn.account_id,
+                amountCents,
+                date: txn.date,
+                kind,
+                description: txn.name,
+                originalDescription,
+              })
+            ) {
+              totalStatementsReconciled++;
+            } else if (kind === "card_payment") {
+              // A new payment that settled nothing is worth one log line: the
+              // $1 match tolerance deliberately leaves partial/adjusted payments
+              // unmatched, and this is the only signal that it happened.
+              log.info(
+                `plaid-sync: card_payment ${txn.transaction_id} ` +
+                  `($${(Math.abs(amountCents) / 100).toFixed(2)} on ${txn.date}) ` +
+                  `did not match any open statement — leaving unreconciled`,
+              );
+            }
           }
+
+          await supersedePendingPredecessor(userId, txn);
 
           added++;
         }
@@ -641,18 +672,24 @@ export async function syncPlaidTransactions(
             linkedExpenseId: null,
             linkedPromoId: null,
           });
-          await autoCreatePromoFromTransaction({
-            userId,
-            transactionId: txn.transaction_id,
-            accountId: txn.account_id,
-            date: txn.date,
-            description: txn.name,
-            originalDescription,
-            merchantName: txn.merchant_name ?? null,
-            amountCents,
-            kind,
-            promoTexts: plaidTransactionPromoTexts(txn),
-          });
+          // Same rule as the added loop: a still-pending row is a claim, not
+          // evidence. A pending charge can arrive here repeatedly as its amount
+          // firms up, and seeding a promo off one would bake in a figure the
+          // issuer hasn't committed to.
+          if (!txn.pending) {
+            await autoCreatePromoFromTransaction({
+              userId,
+              transactionId: txn.transaction_id,
+              accountId: txn.account_id,
+              date: txn.date,
+              description: txn.name,
+              originalDescription,
+              merchantName: txn.merchant_name ?? null,
+              amountCents,
+              kind,
+              promoTexts: plaidTransactionPromoTexts(txn),
+            });
+          }
           // A payment that first posted as pending can arrive here (modified)
           // once it clears; reconcile it too. Idempotent — a settled statement
           // won't re-match.
@@ -671,6 +708,7 @@ export async function syncPlaidTransactions(
           ) {
             totalStatementsReconciled++;
           }
+          await supersedePendingPredecessor(userId, txn);
           modified++;
         }
 

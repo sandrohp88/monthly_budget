@@ -360,6 +360,11 @@ export function TransactionsClient({
                           </button>
                         </StatusPill>
                       ) : null}
+                      {/* A pending row is a claim, not a settled fact: its
+                          amount can still change and it can vanish outright.
+                          Saying so is the difference between "you spent this"
+                          and "this is on its way". */}
+                      {txn.pending ? <StatusPill variant="off">Pending</StatusPill> : null}
                       {txn.kind === "card_payment" ? <StatusPill>Card payment</StatusPill> : null}
                       {txn.promoPayoffDate ? (
                         <StatusPill variant="amber">Payoff <DateLabel iso={txn.promoPayoffDate} format="short" /></StatusPill>
