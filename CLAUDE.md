@@ -753,6 +753,16 @@ All encrypt/decrypt happens through `lib/plaid-crypto.ts`.
 - Account balances are refreshed on every sync from the same response — but that response carries Plaid's **cached** balance. See "Cached vs live balances" below.
 - Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
 
+### Client cache invalidation after manual sync
+Both manual sync entry points (`/accounts` and `/transactions`) must call
+`router.refresh()` after updating their own local rows. A Plaid sync also
+changes server-rendered balances, projections, statements, reconciliation,
+calendar events, and reports. Refreshing only the current component leaves
+Next's client route cache holding pre-sync payloads for pages the user already
+visited or prefetched, which makes those pages look stale until a browser
+reload. In Next 15, `router.refresh()` clears that whole route cache while
+preserving client and browser state.
+
 ### Cached vs live balances (read before touching balance code)
 `/transactions/sync`'s `data.accounts` and `/accounts/get` both return the
 balance **Plaid last scraped**, not the bank's current one. When an

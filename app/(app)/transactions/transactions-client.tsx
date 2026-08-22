@@ -87,6 +87,7 @@ export function TransactionsClient({
   bills?: BillOption[];
   extras?: SplitExtraOption[];
 }) {
+  const router = useRouter();
   const [transactions, setTransactions] = React.useState(initialTransactions);
   const [splittingTxn, setSplittingTxn] = React.useState<DraftWithAccount | null>(null);
   const [splitAllocations, setSplitAllocations] = React.useState<Allocation[]>([]);
@@ -169,6 +170,10 @@ export function TransactionsClient({
       if (!res.ok) throw new Error(json.error ?? "Sync failed");
       toast.success(`Sync complete - ${json.added ?? 0} new, ${json.modified ?? 0} updated`);
       await refresh();
+      // The sync also changes projections, balances, statements, and reports.
+      // Refreshing here invalidates Next's full client route cache, not just
+      // the transaction rows maintained in local state.
+      router.refresh();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
