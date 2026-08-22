@@ -27,6 +27,22 @@ export function toCents(plaidAmount: number): number {
 }
 
 /**
+ * Pull Plaid's `error_code` out of a thrown SDK error.
+ *
+ * The Plaid node SDK throws axios errors, so the useful code is buried at
+ * `err.response.data.error_code` while `err.message` is just the HTTP status
+ * ("Request failed with status code 429") — useless for telling a rate limit
+ * apart from a dead institution. Fully defensive: any shape that isn't a Plaid
+ * error body returns null rather than throwing inside a catch block.
+ */
+export function plaidErrorCode(err: unknown): string | null {
+  const data = (err as { response?: { data?: unknown } } | null)?.response?.data;
+  if (typeof data !== "object" || data === null) return null;
+  const code = (data as { error_code?: unknown }).error_code;
+  return typeof code === "string" ? code : null;
+}
+
+/**
  * Decide whether the Plaid liabilities snapshot indicates the current
  * statement was paid in full on time. Mirrors the manual `paidWithoutInterest`
  * helper in lib/credit-cards.ts but works against Plaid's "last payment"

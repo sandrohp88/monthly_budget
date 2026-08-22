@@ -19,6 +19,7 @@ import {
   listStatementsForUser,
   listVariableBills,
   getLinkedBalanceSnapshot,
+  getPendingDraftOutflow,
 } from "./repos";
 import {
   computeProjection,
@@ -122,7 +123,12 @@ export type ProjectionBundle = {
       state: "sent" | "paid_externally";
       amountCents: number;
     }>;
-    /** Σ max(0, current − available) reported by the bank, 0 when unknown. */
+    /**
+     * The bank's own pending float: max(bank's `current − available`, Σ Plaid's
+     * pending transaction rows). Two views of the SAME pending set, so this is
+     * a max and never a sum — see the pending-float block in _buildProjection.
+     * 0 when the institution reports neither.
+     */
     bankPendingOutflowCents: number;
     /** Σ of the held bill occurrences above. */
     attributedCents: number;
@@ -158,6 +164,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     promoPayments,
     variableBills,
     billPaymentMarks,
+    pendingDraftOutflowCents,
   ] =
     await Promise.all([
       listBills(userId, false),
@@ -173,7 +180,20 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
       listAllPromoPayments(userId),
       listVariableBills(userId, false),
       listBillPaymentStatesForUser(userId),
+      getPendingDraftOutflow(userId),
     ]);
+  /**
+   * The observed float: the bank's `current − available` and Plaid's pending
+   * transaction rows are two measures of the SAME money, so take the larger and
+   * never the sum. Either can be 0 while the other is right — Alliant and Navy
+   * Federal both report `available == current` on checking (no bank float at
+   * all), while an institution that reports no pending rows leaves only the
+   * balance difference. Whichever sees more of the pending set wins.
+   */
+  const observedFloatCents = Math.max(
+    balanceSnapshot?.pendingOutflowCents ?? 0,
+    pendingDraftOutflowCents,
+  );
   const linkedBalance = balanceSnapshot?.balanceCents ?? null;
   const activeCardIds = new Set(activeCards.map((c) => c.id));
   const billOverridesByBill = new Map<string, Array<{ date: string; amountCents: number }>>();
@@ -405,10 +425,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
       externallyPaidByBill.set(e.billId, list);
     }
     const attributedCents = heldOccurrences.reduce((s, h) => s + h.amountCents, 0);
-    unattributedPendingCents = Math.max(
-      0,
-      (balanceSnapshot?.pendingOutflowCents ?? 0) - attributedCents,
-    );
+    unattributedPendingCents = Math.max(0, observedFloatCents - attributedCents);
 
     // A mark must stay reversible: answering removes the occurrence from the
     // alert, so the alert can't also be where you take the answer back.
@@ -651,7 +668,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     pendingPosting: {
       bills: heldOccurrences,
       answered: answeredOccurrences,
-      bankPendingOutflowCents: linked ? (balanceSnapshot?.pendingOutflowCents ?? 0) : 0,
+      bankPendingOutflowCents: linked ? observedFloatCents : 0,
       attributedCents: heldOccurrences.reduce((s, h) => s + h.amountCents, 0),
       unattributedCents: unattributedPendingCents,
       totalHeldCents:

@@ -87,6 +87,7 @@ export function TransactionsClient({
   bills?: BillOption[];
   extras?: SplitExtraOption[];
 }) {
+  const router = useRouter();
   const [transactions, setTransactions] = React.useState(initialTransactions);
   const [splittingTxn, setSplittingTxn] = React.useState<DraftWithAccount | null>(null);
   const [splitAllocations, setSplitAllocations] = React.useState<Allocation[]>([]);
@@ -169,6 +170,10 @@ export function TransactionsClient({
       if (!res.ok) throw new Error(json.error ?? "Sync failed");
       toast.success(`Sync complete - ${json.added ?? 0} new, ${json.modified ?? 0} updated`);
       await refresh();
+      // The sync also changes projections, balances, statements, and reports.
+      // Refreshing here invalidates Next's full client route cache, not just
+      // the transaction rows maintained in local state.
+      router.refresh();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -360,6 +365,11 @@ export function TransactionsClient({
                           </button>
                         </StatusPill>
                       ) : null}
+                      {/* A pending row is a claim, not a settled fact: its
+                          amount can still change and it can vanish outright.
+                          Saying so is the difference between "you spent this"
+                          and "this is on its way". */}
+                      {txn.pending ? <StatusPill variant="off">Pending</StatusPill> : null}
                       {txn.kind === "card_payment" ? <StatusPill>Card payment</StatusPill> : null}
                       {txn.promoPayoffDate ? (
                         <StatusPill variant="amber">Payoff <DateLabel iso={txn.promoPayoffDate} format="short" /></StatusPill>

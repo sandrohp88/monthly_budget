@@ -588,6 +588,23 @@ export const plaidItems = sqliteTable(
     // items linked before migration 0032 are backfilled lazily (via /item/get)
     // the first time a webhook arrives for them.
     plaidItemId: text("plaid_item_id"),
+    /**
+     * Last time we ATTEMPTED a live `/accounts/balance/get` for this item
+     * (migration 0038). Throttle state, NOT a freshness signal — see
+     * `refreshLiveBalancesForItem`. Written on success and failure alike so a
+     * persistently erroring item can't be retried once per sync forever:
+     * Plaid caps that endpoint at 5/min and 30/hour per item and bills a flat
+     * fee per successful call.
+     */
+    balanceRefreshedAt: integer("balance_refreshed_at"),
+    /**
+     * Last time we ATTEMPTED a `/transactions/refresh` for this item
+     * (migration 0039). Same throttle-not-freshness contract as
+     * `balanceRefreshedAt`, kept separate because the two calls sit at
+     * different points in the sync and have different Plaid limits
+     * (2/min + 120/hour per item here). See `refreshItemTransactions`.
+     */
+    transactionsRefreshedAt: integer("transactions_refreshed_at"),
   },
   (t) => ({
     userActive: index("plaid_items_user_active_idx").on(t.userId, t.isActive),
@@ -620,8 +637,13 @@ export const plaidAccounts = sqliteTable(
      * balance LESS pending outflows plus pending inflows, so
      * `balanceCents - availableBalanceCents` is the BANK's own measure of money
      * that has left but hasn't posted yet — the evidence the projection uses
-     * instead of assuming a due bill was paid (see lib/pending-float.ts).
-     * Null whenever the institution doesn't compute it.
+     * instead of assuming a due bill was paid (see the pending-float block in
+     * lib/projection-server.ts and CLAUDE.md §17b).
+     * Null whenever the institution doesn't compute it — and equal to
+     * `balanceCents` at institutions that report an `available` without
+     * netting pending debits out of it, which is why Plaid's own pending
+     * transaction rows are summed as a second measure
+     * (`getPendingDraftOutflow`).
      *
      * ALWAYS write this from the same Plaid payload as `balanceCents`: a fresh
      * current against a stale available produces a difference that is pure

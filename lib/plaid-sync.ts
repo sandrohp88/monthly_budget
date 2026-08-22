@@ -13,6 +13,8 @@ import {
   upsertPlaidDraft,
   getPlaidDraft,
   updatePlaidItemCursor,
+  markItemBalanceRefreshed,
+  markItemTransactionsRefreshed,
   getCreditCardByPlaidAccountId,
   createPromo,
   updatePlaidDraftStatus,
@@ -57,7 +59,7 @@ import { inferLinkedCardCycle } from "./linked-card-cycle";
 // when imported from tests. Re-exported here for callers that already import
 // them from this module.
 export { toCents, looksLikePaid } from "./plaid-helpers";
-import { toCents, looksLikePaid } from "./plaid-helpers";
+import { toCents, looksLikePaid, plaidErrorCode } from "./plaid-helpers";
 
 const PLAID_TRANSACTION_HISTORY_DAYS = 730;
 
@@ -71,6 +73,18 @@ export interface SyncResult {
   statementsReconciled: number;
   /** Scheduled paychecks auto-marked received from a matching deposit draft. */
   paychecksReconciled: number;
+  /**
+   * Starting-balance accounts refreshed from a LIVE `/accounts/balance/get`
+   * rather than Plaid's cache. Zero is normal — the call is throttled per item
+   * and only fires for depository accounts the projection anchors on.
+   */
+  liveBalancesRefreshed: number;
+  /**
+   * Items for which Plaid was forced to re-pull transactions from the bank
+   * (`/transactions/refresh`). Zero is normal — throttled per item and only
+   * for items anchoring a projection.
+   */
+  transactionsRefreshed: number;
 }
 
 type PlaidTransactionWithOriginalDescription = {
@@ -441,6 +455,28 @@ async function reconcilePaycheckDeposits(userId: string, today: string): Promise
  * Upserts drafts and advances each item's cursor.
  * This is polling-only — no webhook required.
  */
+/**
+ * Retire the pending draft that a now-posted transaction replaces.
+ *
+ * Plaid does NOT reuse the transaction_id when a pending transaction posts: it
+ * issues a new one and points back at the old row via `pending_transaction_id`.
+ * Leave the predecessor in place and the same charge is counted twice — once as
+ * held pending cash and once as posted. Measured 2026-08-11: 5 of 5 Citi and 2
+ * of 6 Navy Federal posted rows carried this field, so this is the normal path,
+ * not an edge case.
+ *
+ * Dismisses rather than hard-deletes, matching how `data.removed` is handled —
+ * dismissed rows drop out of every total but stay auditable.
+ */
+async function supersedePendingPredecessor(
+  userId: string,
+  txn: { pending_transaction_id?: string | null },
+): Promise<void> {
+  const predecessorId = txn.pending_transaction_id;
+  if (!predecessorId) return;
+  await deletePlaidDraft(userId, predecessorId);
+}
+
 export async function syncPlaidTransactions(
   userId: string,
   filterItemId?: string,
@@ -454,6 +490,8 @@ export async function syncPlaidTransactions(
   let totalCardsUpdated = 0;
   let totalStatementsCreated = 0;
   let totalStatementsReconciled = 0;
+  let totalLiveBalances = 0;
+  let totalTransactionRefreshes = 0;
 
   const plaid = getPlaidClient();
 
@@ -464,6 +502,25 @@ export async function syncPlaidTransactions(
         item.accessTokenIv,
         item.accessTokenTag,
       );
+
+      // Whether anything under this item feeds a projection's starting
+      // balance. Gates both live refreshes — the paid balance pull below and
+      // the on-demand transaction pull here.
+      const anchorsProjection = (await listPlaidAccountsByItem(item.id)).some(
+        (a) => a.useAsStartingBalance && a.type === "depository",
+      );
+
+      // BEFORE the cursor read: make Plaid go get this item's transactions from
+      // the bank, so the sync below picks them up in the same pass. The ledger
+      // has to be as fresh as the balance or §17b holds cash for payments that
+      // have already posted — see refreshItemTransactions.
+      const txnRefresh = await refreshItemTransactions(
+        item.id,
+        accessToken,
+        anchorsProjection,
+        item.transactionsRefreshedAt ?? null,
+      );
+      if (txnRefresh.refreshed) totalTransactionRefreshes++;
 
       let cursor = item.cursor ?? undefined;
       let hasMore = true;
@@ -531,8 +588,6 @@ export async function syncPlaidTransactions(
         // Added transactions -> approved ledger rows.
         for (const txn of data.added) {
           if (!accountIds.has(txn.account_id)) continue;
-          // Skip pending transactions — we'll pick them up when they post.
-          if (txn.pending) continue;
           const originalDescription = originalDescriptionOf(txn);
           const amountCents = toCents(txn.amount);
           const account = accountById.get(txn.account_id);
@@ -555,50 +610,61 @@ export async function syncPlaidTransactions(
             amountCents,
             plaidCategory: txn.personal_finance_category?.primary ?? null,
             merchantName: txn.merchant_name ?? null,
-            pending: false,
+            pending: txn.pending,
             status: "approved",
             kind,
             linkedExpenseId: null,
             linkedPromoId: null,
           });
-          await autoCreatePromoFromTransaction({
-            userId,
-            transactionId: txn.transaction_id,
-            accountId: txn.account_id,
-            date: txn.date,
-            description: txn.name,
-            originalDescription,
-            merchantName: txn.merchant_name ?? null,
-            amountCents,
-            kind,
-            promoTexts: plaidTransactionPromoTexts(txn),
-          });
 
-          // Auto-reconcile a posted card payment against the open statement it
-          // settled — marks that statement paid (promo balances untouched).
-          if (
-            await reconcileCardPaymentDraft({
+          // A pending transaction is a CLAIM that money is moving, not evidence
+          // that it moved. It holds cash (see getPendingDraftOutflow) but must
+          // never drive anything that treats a transaction as settled —
+          // settling a statement or seeding a promo off a charge that can still
+          // change amount, or vanish outright, is the double-count §17b exists
+          // to prevent. Those all re-run when it posts for real.
+          if (!txn.pending) {
+            await autoCreatePromoFromTransaction({
               userId,
               transactionId: txn.transaction_id,
               accountId: txn.account_id,
-              amountCents,
               date: txn.date,
-              kind,
               description: txn.name,
               originalDescription,
-            })
-          ) {
-            totalStatementsReconciled++;
-          } else if (kind === "card_payment") {
-            // A new payment that settled nothing is worth one log line: the
-            // $1 match tolerance deliberately leaves partial/adjusted payments
-            // unmatched, and this is the only signal that it happened.
-            log.info(
-              `plaid-sync: card_payment ${txn.transaction_id} ` +
-                `($${(Math.abs(amountCents) / 100).toFixed(2)} on ${txn.date}) ` +
-                `did not match any open statement — leaving unreconciled`,
-            );
+              merchantName: txn.merchant_name ?? null,
+              amountCents,
+              kind,
+              promoTexts: plaidTransactionPromoTexts(txn),
+            });
+
+            // Auto-reconcile a posted card payment against the open statement it
+            // settled — marks that statement paid (promo balances untouched).
+            if (
+              await reconcileCardPaymentDraft({
+                userId,
+                transactionId: txn.transaction_id,
+                accountId: txn.account_id,
+                amountCents,
+                date: txn.date,
+                kind,
+                description: txn.name,
+                originalDescription,
+              })
+            ) {
+              totalStatementsReconciled++;
+            } else if (kind === "card_payment") {
+              // A new payment that settled nothing is worth one log line: the
+              // $1 match tolerance deliberately leaves partial/adjusted payments
+              // unmatched, and this is the only signal that it happened.
+              log.info(
+                `plaid-sync: card_payment ${txn.transaction_id} ` +
+                  `($${(Math.abs(amountCents) / 100).toFixed(2)} on ${txn.date}) ` +
+                  `did not match any open statement — leaving unreconciled`,
+              );
+            }
           }
+
+          await supersedePendingPredecessor(userId, txn);
 
           added++;
         }
@@ -633,18 +699,24 @@ export async function syncPlaidTransactions(
             linkedExpenseId: null,
             linkedPromoId: null,
           });
-          await autoCreatePromoFromTransaction({
-            userId,
-            transactionId: txn.transaction_id,
-            accountId: txn.account_id,
-            date: txn.date,
-            description: txn.name,
-            originalDescription,
-            merchantName: txn.merchant_name ?? null,
-            amountCents,
-            kind,
-            promoTexts: plaidTransactionPromoTexts(txn),
-          });
+          // Same rule as the added loop: a still-pending row is a claim, not
+          // evidence. A pending charge can arrive here repeatedly as its amount
+          // firms up, and seeding a promo off one would bake in a figure the
+          // issuer hasn't committed to.
+          if (!txn.pending) {
+            await autoCreatePromoFromTransaction({
+              userId,
+              transactionId: txn.transaction_id,
+              accountId: txn.account_id,
+              date: txn.date,
+              description: txn.name,
+              originalDescription,
+              merchantName: txn.merchant_name ?? null,
+              amountCents,
+              kind,
+              promoTexts: plaidTransactionPromoTexts(txn),
+            });
+          }
           // A payment that first posted as pending can arrive here (modified)
           // once it clears; reconcile it too. Idempotent — a settled statement
           // won't re-match.
@@ -663,6 +735,7 @@ export async function syncPlaidTransactions(
           ) {
             totalStatementsReconciled++;
           }
+          await supersedePendingPredecessor(userId, txn);
           modified++;
         }
 
@@ -723,6 +796,17 @@ export async function syncPlaidTransactions(
       // transactions/sync returned any accounts at all.
       await refreshAccountsFromPlaid(userId, item.id, accessToken);
 
+      // ...then overwrite the CACHED balance with a live one for the accounts
+      // the projection actually anchors on. Strictly after the call above,
+      // which would otherwise clobber it. See refreshLiveBalancesForItem.
+      const live = await refreshLiveBalancesForItem(
+        userId,
+        item.id,
+        accessToken,
+        item.balanceRefreshedAt ?? null,
+      );
+      totalLiveBalances += live.accountsRefreshed;
+
       // Refresh credit-card cycle data + most recent statement from Liabilities.
       const liab = await syncCreditCardLiabilitiesForItem(userId, item.id, accessToken);
       totalCardsUpdated += liab.cardsUpdated;
@@ -749,6 +833,8 @@ export async function syncPlaidTransactions(
     statementsCreated: totalStatementsCreated,
     statementsReconciled: totalStatementsReconciled,
     paychecksReconciled,
+    liveBalancesRefreshed: totalLiveBalances,
+    transactionsRefreshed: totalTransactionRefreshes,
   };
 }
 
@@ -861,6 +947,209 @@ export async function refreshAccountsFromPlaid(
   }
 
   return { accountsUpdated, limitsSeeded };
+}
+
+/**
+ * Minimum gap between on-demand transaction refreshes for one item. Plaid caps
+ * `/transactions/refresh` at 2/min and 120/hour per item
+ * (`TRANSACTIONS_REFRESH_LIMIT`) — far looser than the balance endpoint, but
+ * each call makes Plaid go out to the bank, so this stays deliberately modest.
+ */
+export const TRANSACTIONS_REFRESH_MIN_INTERVAL_MS = 5 * 60_000;
+
+export type TransactionsRefreshResult = {
+  refreshed: boolean;
+  /** Why no call was made, or null when one was attempted. */
+  skipped: "no-anchor" | "throttled" | null;
+};
+
+/**
+ * Force Plaid to go pull this item's transactions from the bank NOW.
+ *
+ * Why this is necessary and not just nice: Plaid polls an institution only
+ * **one to four times a day**, and `/transactions/sync` returns whatever it
+ * last collected. That is the entire "Alliant is a day behind" report — the
+ * ledger, not just the balance, runs on a cache.
+ *
+ * A stale ledger is not a cosmetic problem, because §17b settles bill
+ * occurrences on EVIDENCE: an occurrence with no matching posted transaction
+ * keeps its cash held. Once `refreshLiveBalancesForItem` made the balance live,
+ * a payment that had already posted at the bank — and was therefore already out
+ * of that balance — was still being held, because its transaction hadn't been
+ * delivered yet. The same $180 came out twice.
+ *
+ * Measured 2026-08-11: a $180 HOA payment had posted at Alliant (live balance
+ * $400.05) with no corresponding draft, so the projection held $180 against a
+ * balance that had already lost it and showed ~$220. Before the live balance
+ * landed, the stale figure still contained that $180 and the two errors
+ * cancelled; making one side fresh is what exposed the other.
+ *
+ * So: balance freshness and ledger freshness have to move together. Same narrow
+ * gating as the balance pull — items anchoring a projection, throttled, non
+ * fatal — and it runs BEFORE the sync loop so the cursor read picks up whatever
+ * lands. If the institution's extraction is slower than this call, nothing is
+ * lost: Plaid fires SYNC_UPDATES_AVAILABLE and the webhook drives another sync.
+ */
+export async function refreshItemTransactions(
+  itemId: string,
+  accessToken: string,
+  anchorsProjection: boolean,
+  lastRefreshedAt: number | null,
+  now: number = Date.now(),
+): Promise<TransactionsRefreshResult> {
+  // Only items whose accounts actually feed a starting balance. Everywhere
+  // else a day-old ledger costs accuracy, not correctness — no held cash to
+  // wrongly keep holding — and this call is neither free nor unlimited.
+  if (!anchorsProjection) return { refreshed: false, skipped: "no-anchor" };
+  if (lastRefreshedAt != null && now - lastRefreshedAt < TRANSACTIONS_REFRESH_MIN_INTERVAL_MS) {
+    return { refreshed: false, skipped: "throttled" };
+  }
+
+  const plaid = getPlaidClient();
+  let refreshed = false;
+  try {
+    await plaid.transactionsRefresh({ access_token: accessToken });
+    refreshed = true;
+    log.info(`plaid-txn-refresh: forced an extraction for item ${itemId}`);
+  } catch (err) {
+    const code = plaidErrorCode(err);
+    if (code === "TRANSACTIONS_REFRESH_LIMIT") {
+      log.warn(`plaid-txn-refresh: rate limited for item ${itemId} — syncing cached transactions`);
+    } else {
+      // Plenty of institutions and plans simply don't offer on-demand refresh
+      // (PRODUCT_NOT_READY, PRODUCTS_NOT_SUPPORTED). Degrade to the cached
+      // ledger rather than failing the sync.
+      log.warn(
+        `plaid-txn-refresh: skipped for item ${itemId}: ${code ?? (err as Error).message}`,
+      );
+    }
+  }
+
+  // Stamped on failure too — see markItemTransactionsRefreshed.
+  await markItemTransactionsRefreshed(itemId, now);
+  return { refreshed, skipped: null };
+}
+
+/**
+ * Minimum gap between live balance pulls for one item. Plaid caps
+ * `/accounts/balance/get` at 5/min and 30/hour PER ITEM (`BALANCE_LIMIT`), and
+ * bills a flat fee per successful call — so this is a cost control as much as
+ * a rate-limit one. Five minutes leaves a ceiling of 12 calls/hour/item, well
+ * inside the cap, while still meaning any sync more than five minutes after
+ * the last one gets a genuinely live number.
+ */
+export const BALANCE_REFRESH_MIN_INTERVAL_MS = 5 * 60_000;
+
+export type LiveBalanceRefreshResult = {
+  accountsRefreshed: number;
+  /** Why no call was made, or null when one was attempted. */
+  skipped: "no-anchor" | "throttled" | null;
+};
+
+/**
+ * Pull a LIVE balance for the accounts this item anchors the projection on.
+ *
+ * Why this exists on top of `refreshAccountsFromPlaid`: `/accounts/get` and the
+ * `data.accounts` payload on `/transactions/sync` both return Plaid's CACHED
+ * balance — whatever it last scraped from the institution. When that cache
+ * lags, the number can be badly stale while our row looks perfectly fresh,
+ * because we stamp `updatedAt` at write time. Measured on 2026-08-11: Alliant
+ * Credit Union's cached balance read $667.79 against a live $400.05 on the one
+ * account anchoring a user's whole projection — a $267 error in the overdraft
+ * direction, on an account with no pending float to blame (Alliant reports
+ * `available == current` and returns no pending transactions at all).
+ *
+ * `/accounts/balance/get` is the only Plaid endpoint that forces a real-time
+ * pull from the bank. It is also PAID per call and rate-limited per item, so
+ * this is deliberately narrow: only depository accounts flagged
+ * `useAsStartingBalance` — the ones whose balance actually becomes the
+ * projection's starting point — and never more often than
+ * BALANCE_REFRESH_MIN_INTERVAL_MS.
+ *
+ * MUST run AFTER `refreshAccountsFromPlaid`: that writes the cached balance and
+ * would otherwise clobber the live one we just paid for.
+ *
+ * Non-fatal, like the other post-transaction refreshes — a bank that errors
+ * here leaves the cached balance in place rather than failing the sync.
+ */
+export async function refreshLiveBalancesForItem(
+  userId: string,
+  itemId: string,
+  accessToken: string,
+  lastRefreshedAt: number | null,
+  now: number = Date.now(),
+): Promise<LiveBalanceRefreshResult> {
+  const known = await listPlaidAccountsByItem(itemId);
+  // Only what the projection actually anchors on. A credit account's balance
+  // is a debt figure, never a starting balance, so it never justifies the call.
+  const anchors = known.filter((a) => a.useAsStartingBalance && a.type === "depository");
+  if (anchors.length === 0) return { accountsRefreshed: 0, skipped: "no-anchor" };
+
+  if (lastRefreshedAt != null && now - lastRefreshedAt < BALANCE_REFRESH_MIN_INTERVAL_MS) {
+    return { accountsRefreshed: 0, skipped: "throttled" };
+  }
+
+  const plaid = getPlaidClient();
+  const anchorIds = new Set(anchors.map((a) => a.id));
+  let accountsRefreshed = 0;
+
+  try {
+    const res = await plaid.accountsBalanceGet({
+      access_token: accessToken,
+      // Scope the call to the anchors — we pay for it, and a balance we don't
+      // use is a balance we shouldn't fetch.
+      options: { account_ids: anchors.map((a) => a.id) },
+    });
+    for (const acct of res.data.accounts) {
+      if (!anchorIds.has(acct.account_id)) continue;
+      const balance = acct.balances.current ?? null;
+      // A payload with no `current` tells us nothing; writing it would erase a
+      // balance we already have. Leave the cached row alone.
+      if (balance === null) {
+        log.warn(
+          `plaid-balance: ${acct.account_id} returned no current balance — keeping cached value`,
+        );
+        continue;
+      }
+      await upsertPlaidAccount({
+        id: acct.account_id,
+        itemId,
+        userId,
+        name: acct.name,
+        mask: acct.mask ?? null,
+        type: acct.type,
+        subtype: acct.subtype ?? null,
+        balanceCents: toCents(balance),
+        // Same payload as balanceCents, which is the whole point — see the
+        // column doc in schema.ts. This call makes that pairing STRONGER than
+        // the cached path: both halves are now live as of the same instant.
+        availableBalanceCents:
+          acct.balances.available != null ? toCents(acct.balances.available) : null,
+        limitCents: acct.balances.limit != null ? toCents(acct.balances.limit) : null,
+        updatedAt: now,
+      });
+      accountsRefreshed += 1;
+    }
+    if (accountsRefreshed > 0) {
+      log.info(`plaid-balance: refreshed ${accountsRefreshed} live balance(s) for item ${itemId}`);
+    }
+  } catch (err) {
+    const code = plaidErrorCode(err);
+    if (code === "BALANCE_LIMIT" || code === "ACCOUNTS_BALANCE_GET_LIMIT") {
+      // Expected under bursty webhooks; the throttle stamp below backs us off.
+      log.warn(`plaid-balance: rate limited (${code}) for item ${itemId} — using cached balance`);
+    } else {
+      log.warn(
+        `plaid-balance: live refresh skipped for item ${itemId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  // Stamped on failure too — see markItemBalanceRefreshed. A bank that is down
+  // or rate-limiting us must not be retried on every single sync.
+  await markItemBalanceRefreshed(itemId, now);
+
+  return { accountsRefreshed, skipped: null };
 }
 
 /**

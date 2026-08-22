@@ -1805,6 +1805,32 @@ export async function updatePlaidItemCursor(
     .run();
 }
 
+/**
+ * Stamp the live-balance throttle for an item (migration 0038). Called on
+ * every completed `/accounts/balance/get` ATTEMPT — success or failure — so a
+ * persistently erroring institution backs off instead of being retried on
+ * every sync. See `refreshLiveBalancesForItem`.
+ */
+export async function markItemBalanceRefreshed(id: string, at: number): Promise<void> {
+  const db = getDb();
+  await db.update(plaidItems).set({ balanceRefreshedAt: at }).where(eq(plaidItems.id, id)).run();
+}
+
+/**
+ * Stamp the transactions-refresh throttle for an item (migration 0039). Same
+ * attempt-not-success contract as `markItemBalanceRefreshed`: an institution
+ * that doesn't support on-demand refresh, or is down, must back off rather than
+ * be retried on every sync.
+ */
+export async function markItemTransactionsRefreshed(id: string, at: number): Promise<void> {
+  const db = getDb();
+  await db
+    .update(plaidItems)
+    .set({ transactionsRefreshedAt: at })
+    .where(eq(plaidItems.id, id))
+    .run();
+}
+
 export async function deactivatePlaidItem(userId: string, id: string): Promise<void> {
   const db = getDb();
   // SQLite ALTER TABLE can't add an FK with ON DELETE SET NULL, so we
@@ -2370,6 +2396,13 @@ export async function listStartingBalanceDraftsInRange(
       and(
         eq(plaidTransactionDrafts.userId, userId),
         eq(plaidTransactionDrafts.status, "approved" as const),
+        // POSTED only. A pending draft is a claim that money is moving, and
+        // letting one settle a bill occurrence would RELEASE that occurrence's
+        // held cash on the strength of a transaction that can still change or
+        // disappear — the exact double-count-in-the-user's-favour that §17b
+        // exists to prevent. Pending cash is held via getPendingDraftOutflow
+        // instead, which is the opposite direction.
+        eq(plaidTransactionDrafts.pending, false),
         inArray(plaidTransactionDrafts.accountId, accountIds),
         gte(plaidTransactionDrafts.date, startIso),
         lte(plaidTransactionDrafts.date, endIso),
@@ -2400,6 +2433,11 @@ export type CardTransaction = {
  *    convention), so a returned purchase correctly reduces cycle spend.
  *  - Dismissed drafts are excluded, matching every other consumer of this
  *    table — dismissing is the user saying "don't count this".
+ *  - Pending drafts are excluded, keeping the "posted charges" contract in the
+ *    first line of this doc literally true. A pending charge's amount is not
+ *    final (tips, holds, and fuel pre-auths all settle at a different figure),
+ *    so counting one would make cycle spend wrong in an unpredictable
+ *    direction rather than merely conservative.
  */
 export async function listCardTransactionsInRange(
   userId: string,
@@ -2425,6 +2463,7 @@ export async function listCardTransactionsInRange(
         eq(plaidTransactionDrafts.userId, userId),
         eq(plaidTransactionDrafts.kind, "expense" as const),
         ne(plaidTransactionDrafts.status, "dismissed" as const),
+        eq(plaidTransactionDrafts.pending, false),
         inArray(plaidTransactionDrafts.accountId, accountIds),
         gte(plaidTransactionDrafts.date, startIso),
         lte(plaidTransactionDrafts.date, endIso),
@@ -2654,6 +2693,44 @@ export async function getLinkedBalanceSnapshot(
     }
   }
   return { balanceCents, pendingOutflowCents };
+}
+
+/**
+ * Σ pending OUTflows across starting-balance accounts, from Plaid's own pending
+ * transaction rows — the second, independent measure of "money that has left
+ * but hasn't posted".
+ *
+ * Why this exists alongside `getLinkedBalanceSnapshot.pendingOutflowCents`:
+ * that one is `current − available`, which is $0 at any institution that
+ * doesn't net pending debits out of `available`. Both credit unions anchoring
+ * this app's projections do exactly that (Alliant and Navy Federal each report
+ * `available == current` on checking), so the bank-float layer is structurally
+ * blind there while Plaid may still be reporting the individual pending rows.
+ *
+ * Outflows only (`amountCents > 0`, Plaid's sign convention): a pending deposit
+ * is money arriving, and counting it here would release cash rather than hold
+ * it. Dismissed drafts are excluded, which is also what retires a pending row
+ * once its posted successor supersedes it.
+ *
+ * These dollars OVERLAP the bank float — they are two views of the same
+ * pending set, never two pools. Callers must combine with max(), never a sum.
+ */
+export async function getPendingDraftOutflow(userId: string): Promise<number> {
+  const db = getDb();
+  const rows = await db
+    .select({ amountCents: plaidTransactionDrafts.amountCents })
+    .from(plaidTransactionDrafts)
+    .innerJoin(plaidAccounts, eq(plaidTransactionDrafts.accountId, plaidAccounts.id))
+    .where(
+      and(
+        eq(plaidTransactionDrafts.userId, userId),
+        eq(plaidTransactionDrafts.pending, true),
+        ne(plaidTransactionDrafts.status, "dismissed" as const),
+        eq(plaidAccounts.useAsStartingBalance, true),
+      ),
+    )
+    .all();
+  return rows.reduce((sum, r) => sum + Math.max(0, r.amountCents), 0);
 }
 
 // ── net worth ────────────────────────────────────────────────────────────────
