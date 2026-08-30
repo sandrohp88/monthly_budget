@@ -41,6 +41,7 @@ import {
   summarizeStatementBalances,
 } from "@/lib/credit-cards";
 import { todayIso } from "@/lib/dates";
+import { formatCents } from "@/lib/money";
 import { cn } from "@/lib/cn";
 import type {
   CreditCardPromoRow,
@@ -113,7 +114,28 @@ export function CardDetailClient({
 
   const archiveCard = async () => {
     if (!(await confirmDialog({ title: "Archive this card?", description: "Statement history is kept.", confirmText: "Archive" }))) return;
-    const res = await fetch(`/api/credit-cards/${card.id}`, { method: "DELETE" });
+    let res = await fetch(`/api/credit-cards/${card.id}`, { method: "DELETE" });
+    // 409: the card still owes money. Archiving takes it out of the wallet AND
+    // out of the projection, so name the amount and ask again rather than
+    // letting the balance quietly stop being tracked.
+    if (res.status === 409) {
+      const { openObligation } = (await res.json()) as {
+        openObligation: { cents: number; count: number; earliestDueDate: string | null };
+      };
+      const owed = formatCents(openObligation.cents);
+      const which =
+        openObligation.count === 1
+          ? `a statement due ${openObligation.earliestDueDate}`
+          : `${openObligation.count} statements, the soonest due ${openObligation.earliestDueDate}`;
+      const proceed = await confirmDialog({
+        title: `Archive anyway — ${owed} still owed?`,
+        description: `This card has ${owed} outstanding across ${which}. Archived cards are dropped from the projection, so that balance will stop showing up as due. Record the payment first if it's already been paid.`,
+        confirmText: "Archive anyway",
+        tone: "danger",
+      });
+      if (!proceed) return;
+      res = await fetch(`/api/credit-cards/${card.id}?force=1`, { method: "DELETE" });
+    }
     if (!res.ok) {
       toast.error("Archive failed");
       return;

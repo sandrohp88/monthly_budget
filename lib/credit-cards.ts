@@ -204,6 +204,46 @@ export function interestSavingCashDueCents(
   return Math.min(base, Math.max(s.minimumPaymentCents ?? 0, isb, 0));
 }
 
+/** What archiving a card would drop out of the projection. */
+export type OpenStatementObligation = {
+  /** Interest-saving cash still owed across the card's unsettled statements. */
+  cents: number;
+  /** How many statements carry some of it. */
+  count: number;
+  /** Soonest due date among them, for the confirmation copy. */
+  earliestDueDate: string | null;
+};
+
+/**
+ * The card's unsettled statement obligation, using the same arithmetic the
+ * projection's due markers do (`interestSavingCashDueCents` minus whatever is
+ * recorded paid) — so a PARTIALLY paid statement still counts for its residual,
+ * which `isStatementOpen` cannot express.
+ *
+ * This exists because `projectCardPayments` raises due markers for ACTIVE cards
+ * only: the moment a card leaves the wallet, anything it still owes stops being
+ * projected. Archiving stays the user's call — but it's confirmed against this
+ * total rather than done silently.
+ */
+export function openStatementObligation(
+  statements: ReadonlyArray<CreditCardStatementRow>,
+  promos: ReadonlyArray<
+    Pick<CreditCardPromoRow, "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive">
+  >,
+): OpenStatementObligation {
+  let cents = 0;
+  let count = 0;
+  let earliestDueDate: string | null = null;
+  for (const s of statements) {
+    const owed = Math.max(0, interestSavingCashDueCents(s, promos) - (s.paidAmountCents ?? 0));
+    if (owed <= 0) continue;
+    cents += owed;
+    count += 1;
+    if (earliestDueDate == null || s.dueDate < earliestDueDate) earliestDueDate = s.dueDate;
+  }
+  return { cents, count, earliestDueDate };
+}
+
 /**
  * Did the user pay enough, on time, to avoid interest? With the card's promos
  * the threshold is the Interest Saving Balance; without them (or omitted) it's

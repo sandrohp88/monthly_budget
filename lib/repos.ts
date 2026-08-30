@@ -1,6 +1,11 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
-import { interestSavingCashDueCents, statementCashDueCents } from "./credit-cards";
+import {
+  interestSavingCashDueCents,
+  openStatementObligation,
+  statementCashDueCents,
+  type OpenStatementObligation,
+} from "./credit-cards";
 import {
   assets,
   bills,
@@ -1321,6 +1326,27 @@ export async function updateCreditCard(
 
 export async function archiveCreditCard(userId: string, id: string): Promise<void> {
   await updateCreditCard(userId, id, { isActive: false });
+}
+
+/**
+ * What this card still owes across its recorded statements — the number the
+ * archive confirmation quotes.
+ *
+ * Archiving is not blocked by it. The projection raises due markers for ACTIVE
+ * cards only, so archiving a card mid-obligation takes that debt out of view;
+ * the API makes the caller acknowledge the amount first (see the DELETE route)
+ * instead of letting it vanish silently, which is how a $48.19 Capital One
+ * balance ended up stranded on an archived duplicate in the first place.
+ */
+export async function getCardOpenObligation(
+  userId: string,
+  cardId: string,
+): Promise<OpenStatementObligation> {
+  const [statements, promos] = await Promise.all([
+    listStatements(cardId),
+    listPromosForCard(userId, cardId),
+  ]);
+  return openStatementObligation(statements, promos);
 }
 
 export async function listStatements(cardId: string): Promise<CreditCardStatementRow[]> {

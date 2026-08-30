@@ -10,6 +10,7 @@ import {
   isStatementOpen,
   nextDayOfMonthOnOrAfter,
   nextStatementDateOnOrAfter,
+  openStatementObligation,
   paidWithoutInterest,
   previousStatementDateOnOrBefore,
   projectPromoSchedule,
@@ -1011,5 +1012,73 @@ describe("cardPromoWhatIf", () => {
     const c = promo({ id: "c", remainingAmountCents: 40_00 });
     const w = cardPromoWhatIf([a, b, c], card, "2026-05-03");
     expect(w.payOffNow.totalCents).toBe(40_00);
+  });
+});
+
+describe("openStatementObligation", () => {
+  it("is zero when every statement is settled", () => {
+    const r = openStatementObligation(
+      [statement({ statementBalanceCents: 200_00, paidAmountCents: 200_00 })],
+      [],
+    );
+    expect(r).toEqual({ cents: 0, count: 0, earliestDueDate: null });
+  });
+
+  it("is zero with no statements at all", () => {
+    expect(openStatementObligation([], [])).toEqual({
+      cents: 0,
+      count: 0,
+      earliestDueDate: null,
+    });
+  });
+
+  it("counts a fully unpaid statement", () => {
+    const r = openStatementObligation(
+      [statement({ statementBalanceCents: 48_19, dueDate: "2026-08-11" })],
+      [],
+    );
+    expect(r).toEqual({ cents: 48_19, count: 1, earliestDueDate: "2026-08-11" });
+  });
+
+  it("counts the RESIDUAL of a partially paid statement — what isStatementOpen can't see", () => {
+    const s = statement({
+      statementBalanceCents: 1220_11,
+      paidAmountCents: 832_26,
+      dueDate: "2026-08-07",
+    });
+    // A recorded payment makes it "not open", yet $387.85 is still owed.
+    expect(isStatementOpen(s)).toBe(false);
+    expect(openStatementObligation([s], [])).toEqual({
+      cents: 387_85,
+      count: 1,
+      earliestDueDate: "2026-08-07",
+    });
+  });
+
+  it("sums across statements and reports the soonest due date", () => {
+    const r = openStatementObligation(
+      [
+        statement({ id: "b", statementBalanceCents: 100_00, dueDate: "2026-09-10" }),
+        statement({ id: "a", statementBalanceCents: 50_00, dueDate: "2026-08-10" }),
+        statement({ id: "c", statementBalanceCents: 75_00, paidAmountCents: 75_00 }),
+      ],
+      [],
+    );
+    expect(r).toEqual({ cents: 150_00, count: 2, earliestDueDate: "2026-08-10" });
+  });
+
+  it("owes the interest-saving balance, not the full balance, on a promo card", () => {
+    const s = statement({
+      statementBalanceCents: 1220_11,
+      minimumPaymentCents: 143_16,
+      dueDate: "2026-08-07",
+    });
+    const plans = [
+      promo({ id: "ep1", remainingAmountCents: 73_37, endDate: "2026-10-07", monthlyPaymentCents: null }),
+      promo({ id: "ep2", remainingAmountCents: 123_23, endDate: "2026-11-07", monthlyPaymentCents: 30_82 }),
+      promo({ id: "ep3", remainingAmountCents: 89_09, endDate: "2026-12-07", monthlyPaymentCents: 17_82 }),
+      promo({ id: "ep4", remainingAmountCents: 210_32, endDate: "2027-01-07", monthlyPaymentCents: 35_06 }),
+    ];
+    expect(openStatementObligation([s], plans).cents).toBe(832_26);
   });
 });
