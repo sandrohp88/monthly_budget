@@ -549,6 +549,35 @@ describe("projectCardPayments — overdue statements & late cover", () => {
     expect(cashTotal(r)).toBe(0);
   });
 
+  it("an archived card's unpaid statement produces no overdue marker", () => {
+    // `statements` arrives with EVERY card's rows, archived ones included, but
+    // `activeCards` holds only the wallet. A marker for a card the credit-cards
+    // page won't list is an obligation the user can see but can't open, edit,
+    // or clear — exactly the stale duplicate left behind when a manual card is
+    // re-added as a Plaid-linked one and the manual original is archived.
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [],
+      statements: [
+        stmt({ cardId: "archived", statementDate: "2026-03-15", dueDate: "2026-04-10" }),
+      ],
+    });
+    expect(r.extras).toHaveLength(0);
+  });
+
+  it("archiving one card leaves the surviving card's markers intact", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card({ id: "live", name: "Live" })],
+      statements: [
+        stmt({ cardId: "archived", cardName: "Archived", dueDate: "2026-04-10" }),
+        stmt({ id: "s2", cardId: "live", cardName: "Live", dueDate: "2026-06-10" }),
+      ],
+    });
+    expect(markersOf(r)).toHaveLength(1);
+    expect(markersOf(r)[0]).toMatchObject({ date: "2026-06-10", sourceId: "live" });
+  });
+
   it("a paid statement past its due date produces no overdue marker", () => {
     const r = projectCardPayments({
       ...EMPTY,
