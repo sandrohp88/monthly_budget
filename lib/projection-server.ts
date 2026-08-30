@@ -429,9 +429,21 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
 
     // A mark must stay reversible: answering removes the occurrence from the
     // alert, so the alert can't also be where you take the answer back.
+    //
+    // But only while the answer is still the best thing we know. A `sent` mark
+    // is a promise that money is on its way; once the payment actually posts
+    // and reconciles, the promise has been kept and the row has nothing left
+    // to say. Reality beats every claim — the same rule findHeldOccurrences
+    // applies when it releases the cash hold. Without this the two halves
+    // disagree: the hold clears on posting while the "sent, awaiting post"
+    // line sits in the In flight band forever, telling the user money is
+    // outstanding that the app has already seen land (2026-08-30).
     const billNames = new Map(cashBills.map((b) => [b.id, b] as const));
     answeredOccurrences = marks
       .filter((m) => billNames.has(m.billId))
+      .filter(
+        (m) => !(paidOccurrencesByBill.get(m.billId) ?? []).some((p) => p.date === m.dueDate),
+      )
       .map((m) => {
         const bill = billNames.get(m.billId)!;
         const planned =

@@ -930,6 +930,59 @@ describe("buildProjection pending posting (money out, not yet posted)", () => {
     expect(projection?.unpaidRecentOccurrences).toEqual([]);
   });
 
+  it("drops a sent mark from the In flight band once the payment actually posts", async () => {
+    // The bug (2026-08-30): six bills marked "sent, awaiting post" stayed in
+    // the In flight band after their payments posted and were linked to the
+    // bills by hand. The cash hold released correctly — findHeldOccurrences
+    // skips a paid occurrence — but the ANSWERED list was built from the raw
+    // marks with no such check, so the band kept reporting money outstanding
+    // that the app had already watched land.
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-04-25" });
+    const bill = await seedBill(user.id);
+    await upsertBillPaymentState(user.id, bill!.id, {
+      dueDate: "2026-05-01",
+      state: "sent",
+      amountCents: null,
+      markedDate: "2026-05-01",
+      notes: null,
+    });
+
+    // Before the payment posts the mark is the only thing we know: it stays,
+    // holding the cash and offering its Undo.
+    const before = await buildProjection(user.id);
+    expect(before?.pendingPosting.answered).toHaveLength(1);
+    expect(before?.pendingPosting.attributedCents).toBe(2000_00);
+
+    // Now the real debit posts and reconciles against the occurrence.
+    await upsertPlaidDraft({
+      id: "txn-rent",
+      userId: user.id,
+      accountId: "checking",
+      date: "2026-05-02",
+      description: "Household Rent",
+      originalDescription: null,
+      amountCents: 2000_00,
+      plaidCategory: null,
+      merchantName: null,
+      pending: false,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+
+    const after = await buildProjection(user.id);
+    expect(after?.paidOccurrencesByBill[bill!.id]).toEqual([
+      { occurrenceDate: "2026-05-01", paidDate: "2026-05-02", paidAmountCents: 2000_00 },
+    ]);
+    // The promise was kept — the row has nothing left to say.
+    expect(after?.pendingPosting.answered).toEqual([]);
+    // And the money is no longer held twice over.
+    expect(after?.pendingPosting.attributedCents).toBe(0);
+  });
+
   it("holds the larger of the two when the bank sees more pending than bills explain", async () => {
     // $2,000 bill marked sent, but the bank shows $2,500 pending: the extra
     // $500 is some other unposted spend and still has to come out.
