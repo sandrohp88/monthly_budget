@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Plus, RefreshCw, Trash2 } from "lucide-react";
+import { CalendarClock, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,6 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
-  DialogDescription,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,7 +20,6 @@ import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { Switch } from "@/components/ui/switch";
 import { StatusPill } from "@/components/ui/status-pill";
-import { AlertBar } from "@/components/ui/alert-bar";
 import { Tile, TileGrid } from "@/components/ui/tile";
 import {
   Table,
@@ -32,21 +30,23 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { todayIso } from "@/lib/dates";
+import { describeCadence, summarizeSequences } from "@/lib/paycheck-schedule";
+import { ScheduleDialog, type ScheduleSeed } from "./schedule-dialog";
 import type { PaycheckRow } from "@/lib/db/schema";
 
 export function PaychecksClient({
   initialPaychecks,
   timezone,
+  defaultMonths,
 }: {
   initialPaychecks: PaycheckRow[];
   timezone: string;
+  defaultMonths: number;
 }) {
   const [items, setItems] = React.useState<PaycheckRow[]>(initialPaychecks);
   const [createOpen, setCreateOpen] = React.useState(false);
-  const [regenPreview, setRegenPreview] = React.useState<{ payDate: string; amountCents: number }[] | null>(
-    null,
-  );
-  const [submitting, setSubmitting] = React.useState(false);
+  const [scheduleOpen, setScheduleOpen] = React.useState(false);
+  const [scheduleSeed, setScheduleSeed] = React.useState<ScheduleSeed | null>(null);
 
   const today = todayIso(timezone);
   // Split on RECEIPT, not the scheduled date. Payroll often posts a day or two
@@ -118,26 +118,35 @@ export function PaychecksClient({
     }
   };
 
-  const previewRegen = async () => {
-    const res = await fetch("/api/paychecks", { method: "PUT" });
-    const json = await res.json();
-    setRegenPreview(json.preview ?? []);
+  // Every distinct run of paychecks on the page, grouped by label, with its
+  // cadence and amount read back out of the rows — so "edit this schedule"
+  // opens already describing what the user is looking at.
+  const sequences = React.useMemo(() => summarizeSequences(items, today), [items, today]);
+
+  const editSequence = (label: string) => {
+    const seq = sequences.find((s) => s.label === label);
+    if (!seq) return;
+    setScheduleSeed({
+      label,
+      amountCents: seq.amountCents,
+      // Anchor on the next unpaid payday: editing a run should re-space what is
+      // still ahead, not drag it back to where the run originally started.
+      anchorDate: seq.nextPayDate ?? today,
+      cadence: seq.cadence,
+      existing: true,
+    });
+    setScheduleOpen(true);
   };
 
-  const applyRegen = async () => {
-    setSubmitting(true);
-    try {
-      const res = await fetch("/api/paychecks?apply=true", { method: "PUT" });
-      if (!res.ok) throw new Error("regenerate failed");
-      const list = await fetch("/api/paychecks").then((r) => r.json());
-      setItems(list.paychecks ?? []);
-      setRegenPreview(null);
-      toast.success("Paychecks regenerated");
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setSubmitting(false);
-    }
+  const newSequence = () => {
+    setScheduleSeed({
+      label: "",
+      amountCents: 0,
+      anchorDate: today,
+      cadence: null,
+      existing: false,
+    });
+    setScheduleOpen(true);
   };
 
   return (
@@ -147,8 +156,8 @@ export function PaychecksClient({
         subtitle="Income schedule · scheduled and actual income reconciliation"
         actions={
           <>
-            <Button variant="outline" onClick={previewRegen}>
-              <RefreshCw className="h-3 w-3" /> Regen from settings
+            <Button variant="outline" onClick={newSequence}>
+              <CalendarClock className="h-3 w-3" /> New schedule
             </Button>
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
               <Plus className="h-3 w-3" /> Add paycheck
@@ -182,6 +191,82 @@ export function PaychecksClient({
         />
       </TileGrid>
 
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle className="mt-0.5">Schedules</CardTitle>
+            <p className="mt-1 text-2xs text-[var(--text-3)]">
+              How your income repeats. Edit one to change the amount or re-space the paydays ahead.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={newSequence}>
+            <Plus className="h-3 w-3" /> New schedule
+          </Button>
+        </CardHeader>
+        {sequences.length === 0 ? (
+          <div className="px-4 py-8 text-center text-[11px] text-[var(--text-2)]">
+            No schedule yet — create one and the paydays are laid out for you.
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Whose</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Repeats</TableHead>
+                <TableHead>Next payday</TableHead>
+                <TableHead>Planned through</TableHead>
+                <TableHead className="text-right">Edit</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sequences.map((seq) => (
+                <TableRow key={seq.label || "__main__"}>
+                  <TableCell className="text-[var(--text-0)]">
+                    {seq.label || "Main"}
+                    {seq.settledCount > 0 ? (
+                      <span className="ml-2 text-2xs text-[var(--text-3)]">
+                        {seq.settledCount} received
+                      </span>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-right text-[var(--mint)] font-semibold">
+                    <Money cents={seq.amountCents} />
+                  </TableCell>
+                  <TableCell className="text-[var(--text-1)]">
+                    {describeCadence(seq.cadence)}
+                  </TableCell>
+                  <TableCell>
+                    {seq.nextPayDate ? (
+                      <DateLabel iso={seq.nextPayDate} format="short" />
+                    ) : (
+                      <span className="text-[var(--text-3)]">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-[var(--text-2)]">
+                    {seq.lastPayDate ? (
+                      <>
+                        <DateLabel iso={seq.lastPayDate} format="short" />
+                        <span className="ml-2 text-2xs text-[var(--text-3)]">
+                          {seq.upcomingCount} ahead
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-[var(--text-3)]">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="sm" onClick={() => editSequence(seq.label)}>
+                      <Pencil className="h-3 w-3" /> Edit
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
       {items.length === 0 ? (
         <Card>
           <CardHeader>
@@ -189,7 +274,7 @@ export function PaychecksClient({
           </CardHeader>
           <div className="px-4 py-8 text-center">
             <p className="mb-4 text-[11px] tracking-wide text-[var(--text-2)]">
-              Add a paycheck or regenerate from settings.
+              Create a schedule to lay out your paydays, or add a single paycheck.
             </p>
           </div>
         </Card>
@@ -375,50 +460,13 @@ export function PaychecksClient({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={regenPreview !== null} onOpenChange={(o) => !o && setRegenPreview(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Regenerate paychecks</DialogTitle>
-            <DialogDescription>
-              {regenPreview && regenPreview.length > 0
-                ? `Add ${regenPreview.length} new paycheck${regenPreview.length === 1 ? "" : "s"}:`
-                : "No new paychecks to add."}
-            </DialogDescription>
-          </DialogHeader>
-          {regenPreview && regenPreview.length > 0 ? (
-            <AlertBar tag="Diff" variant="mint">
-              Will append <strong className="text-[var(--mint)]">{regenPreview.length}</strong> future paycheck{regenPreview.length === 1 ? "" : "s"} matching defaults. Existing rows are left untouched.
-            </AlertBar>
-          ) : null}
-          <ul className="max-h-72 space-y-1 overflow-auto text-[11px] tabular">
-            {regenPreview?.map((p) => (
-              <li
-                key={p.payDate}
-                className="flex justify-between border-b border-[var(--border-raw)] py-1.5 last:border-0"
-              >
-                <span className="text-[var(--text-1)]">
-                  <DateLabel iso={p.payDate} format="short" />
-                </span>
-                <span className="text-[var(--mint)] font-semibold">
-                  <Money cents={p.amountCents} />
-                </span>
-              </li>
-            ))}
-          </ul>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRegenPreview(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={applyRegen}
-              disabled={submitting || !regenPreview || regenPreview.length === 0}
-            >
-              {submitting ? "Applying…" : "Apply"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ScheduleDialog
+        open={scheduleOpen}
+        onOpenChange={setScheduleOpen}
+        seed={scheduleSeed}
+        defaultMonths={defaultMonths}
+        onApplied={setItems}
+      />
     </div>
   );
 }

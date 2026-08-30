@@ -15,6 +15,7 @@ export default async function PaychecksPage() {
     <PaychecksClient
       initialPaychecks={paychecks}
       timezone={settings?.timezone ?? DEFAULT_TIMEZONE}
+      defaultMonths={settings?.projectionMonths ?? 12}
     />
   );
 }

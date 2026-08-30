@@ -105,6 +105,25 @@ export const paycheckUpdateSchema = paycheckCreateSchema.extend({
   actualAmountCents: cents.nullable().optional(),
 });
 
+/**
+ * A paycheck run: the amount, where the cadence is anchored, and how far out to
+ * carry it. `label` selects which sequence it applies to — the row `note`, with
+ * "" meaning the unlabelled one — so a second earner is just a second label.
+ */
+export const paycheckScheduleSchema = z.object({
+  label: z.string().max(120).default(""),
+  amountCents: cents,
+  anchorDate: isoDate,
+  cadence: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("everyDays"), days: z.number().int().min(1).max(90) }),
+    z.object({ kind: z.literal("monthly"), day: z.number().int().min(1).max(31) }),
+  ]),
+  /** How far ahead to carry the run. Bounded so one click can't create years of rows. */
+  months: z.number().int().min(1).max(36),
+  /** Remove future unreconciled rows in this sequence the run doesn't want. */
+  pruneExtra: z.boolean().default(false),
+});
+
 export const extraCreateSchema = z.object({
   date: isoDate,
   description: z.string().min(1).max(120),
@@ -316,6 +335,7 @@ export type VariableBillUpdateInput = z.infer<typeof variableBillUpdateSchema>;
 export type VariableBillAverageInput = z.infer<typeof variableBillAverageSchema>;
 export type PaycheckCreateInput = z.infer<typeof paycheckCreateSchema>;
 export type PaycheckUpdateInput = z.infer<typeof paycheckUpdateSchema>;
+export type PaycheckScheduleInput = z.infer<typeof paycheckScheduleSchema>;
 export type ExtraCreateInput = z.infer<typeof extraCreateSchema>;
 export type SettingsUpdateInput = z.infer<typeof settingsUpdateSchema>;
 export type SetupInput = z.infer<typeof setupSchema>;

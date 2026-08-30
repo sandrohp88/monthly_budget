@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError, readJson } from "@/lib/api";
 import { paycheckCreateSchema } from "@/lib/validation";
-import { createPaycheck, getSettings, listPaychecks } from "@/lib/repos";
-import { generatePaychecksFromSettings } from "@/lib/projection";
-import { todayIso } from "@/lib/dates";
+import { createPaycheck, listPaychecks } from "@/lib/repos";
 
 export async function GET() {
   const auth = await ensureUser();
@@ -26,40 +24,4 @@ export async function POST(req: Request) {
   } catch (e) {
     return jsonError((e as Error).message ?? "create failed");
   }
-}
-
-export async function PUT(_req: Request) {
-  // Regenerate from settings: previews diff, applies if `?apply=true`.
-  const auth = await ensureUser();
-  if (auth instanceof NextResponse) return auth;
-  const url = new URL(_req.url);
-  const apply = url.searchParams.get("apply") === "true";
-
-  const settings = await getSettings(auth.userId);
-  if (!settings) return jsonError("settings missing", 400);
-
-  const projected = generatePaychecksFromSettings({
-    firstPayday: settings.firstPaydayDate,
-    frequencyDays: settings.payFrequencyDays,
-    months: settings.projectionMonths,
-    defaultAmountCents: settings.defaultPaycheckCents,
-    // Cover the projection window from today — the anchor only sets the
-    // cadence. Otherwise the series ends at firstPayday + months and the
-    // projection falls off a paycheck cliff as the anchor ages.
-    from: todayIso(settings.timezone),
-  });
-  const existing = await listPaychecks(auth.userId);
-  const existingDates = new Set(existing.map((p) => p.payDate));
-  const toAdd = projected.filter((p) => !existingDates.has(p.payDate));
-
-  if (apply) {
-    for (const p of toAdd) {
-      await createPaycheck(auth.userId, {
-        payDate: p.payDate,
-        amountCents: p.amountCents,
-        note: null,
-      });
-    }
-  }
-  return NextResponse.json({ added: toAdd.length, preview: toAdd, applied: apply });
 }

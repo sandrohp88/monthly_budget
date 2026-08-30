@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Download, Upload, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,9 +50,11 @@ export function SettingsClient({
 }: Props) {
   const [startingBalanceCents, setStartingBalance] = React.useState(initial.startingBalanceCents);
   const [startingBalanceAsOf, setStartingBalanceAsOf] = React.useState(initial.startingBalanceAsOf);
-  const [defaultPaycheckCents, setDefaultPaycheck] = React.useState(initial.defaultPaycheckCents);
-  const [firstPaydayDate, setFirstPayday] = React.useState(initial.firstPaydayDate);
-  const [payFrequencyDays, setPayFrequency] = React.useState<number>(initial.payFrequencyDays);
+  // Kept and re-saved as-is: the paychecks page owns the cadence now, but these
+  // still seed first-run setup, so settings must not blank them on save.
+  const defaultPaycheckCents = initial.defaultPaycheckCents;
+  const firstPaydayDate = initial.firstPaydayDate;
+  const payFrequencyDays = initial.payFrequencyDays;
   const [projectionMonths, setProjectionMonths] = React.useState<number>(initial.projectionMonths);
   const [currency, setCurrency] = React.useState(initial.currency);
   const [timezone, setTimezone] = React.useState(initial.timezone);
@@ -219,30 +222,23 @@ export function SettingsClient({
                     onChange={(e) => setStartingBalanceAsOf(e.target.value)}
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <Label>Default paycheck</Label>
-                  <MoneyInput valueCents={defaultPaycheckCents} onChangeCents={setDefaultPaycheck} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="firstPayday">First payday</Label>
-                  <Input
-                    id="firstPayday"
-                    type="date"
-                    required
-                    value={firstPaydayDate}
-                    onChange={(e) => setFirstPayday(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="payFreq">Pay frequency (days)</Label>
-                  <Input
-                    id="payFreq"
-                    type="number"
-                    min={1}
-                    max={60}
-                    value={payFrequencyDays}
-                    onChange={(e) => setPayFrequency(Number(e.target.value))}
-                  />
+                {/* Income cadence used to live here as three loose fields feeding one
+                    opaque "regen" button. It belongs with the paychecks themselves,
+                    where you can see what a change does before it happens. The values
+                    below still seed first-run setup; the page owns them now. */}
+                <div className="col-span-2 flex items-center justify-between rounded-md border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2">
+                  <div>
+                    <div className="text-[11px] text-[var(--text-1)]">Paycheck schedules</div>
+                    <p className="text-2xs text-[var(--text-3)]">
+                      Amount, cadence and paydays — including a second earner&apos;s.
+                    </p>
+                  </div>
+                  <Link
+                    href="/paychecks"
+                    className="text-[11px] text-[var(--mint)] hover:underline whitespace-nowrap"
+                  >
+                    Open paychecks →
+                  </Link>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="projMonths">Projection months</Label>
