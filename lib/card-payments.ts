@@ -186,9 +186,18 @@ type DueMarker = {
 };
 
 export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCardPaymentsResult {
-  const { today, endDate, activeCards, statements, promos, variableBills } = input;
+  const { today, endDate, activeCards, promos, variableBills } = input;
 
   const cardById = new Map(activeCards.map((c) => [c.id, c] as const));
+  // Statements arrive for EVERY card the user owns, archived ones included
+  // (listStatementsForUser passes includeArchived so a card's history survives
+  // archiving). The projection only speaks for cards still in the wallet:
+  // promo chunks, scheduled payments and paydowns all already guard on
+  // `cardById`, and the credit-cards page lists active cards only — so a due
+  // marker naming an archived card is an obligation the user can see but
+  // cannot open, edit, or clear. Archiving is the user saying "this card is
+  // out of my life"; drop its statements here so the guard is uniform.
+  const statements = input.statements.filter((s) => cardById.has(s.cardId));
   const balanceByPlaidAccount = new Map(
     input.plaidAccounts.map((a) => [a.id, a.balanceCents] as const),
   );
