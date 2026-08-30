@@ -30,6 +30,7 @@ import {
   listPromosForCard,
   listConsumedPaycheckDraftIds,
   listStartingBalanceDraftsInRange,
+  listPaychecksInRange,
   listUnreconciledPaychecksInRange,
   settlePaycheckWithDraft,
 } from "./repos";
@@ -414,14 +415,17 @@ const PAYCHECK_RECONCILE_LOOKBACK_DAYS = 45;
  */
 async function reconcilePaycheckDeposits(userId: string, today: string): Promise<number> {
   const windowStart = addDaysIso(today, -PAYCHECK_RECONCILE_LOOKBACK_DAYS);
-  const [pendingPaychecks, consumed] = await Promise.all([
-    // A deposit at either end of the draft window can settle a paycheck up
-    // to the match window away — pad the paycheck range accordingly.
-    listUnreconciledPaychecksInRange(
-      userId,
-      addDaysIso(windowStart, -PAYCHECK_MATCH_WINDOW_DAYS),
-      addDaysIso(today, PAYCHECK_MATCH_WINDOW_DAYS),
-    ),
+  // A deposit at either end of the draft window can settle a paycheck up
+  // to the match window away — pad the paycheck range accordingly.
+  const rangeStart = addDaysIso(windowStart, -PAYCHECK_MATCH_WINDOW_DAYS);
+  const rangeEnd = addDaysIso(today, PAYCHECK_MATCH_WINDOW_DAYS);
+  const [pendingPaychecks, schedule, consumed] = await Promise.all([
+    listUnreconciledPaychecksInRange(userId, rangeStart, rangeEnd),
+    // The full schedule — reconciled rows included — is the matcher's reference
+    // for "is this deposit plainly the OTHER earner's?". Without it, an earner
+    // whose row is already reconciled leaves their next deposit to land on
+    // whatever else is in range.
+    listPaychecksInRange(userId, rangeStart, rangeEnd),
     listConsumedPaycheckDraftIds(userId),
   ]);
   if (pendingPaychecks.length === 0) return 0;
@@ -432,7 +436,7 @@ async function reconcilePaycheckDeposits(userId: string, today: string): Promise
   if (drafts.length === 0) return 0;
 
   let settled = 0;
-  for (const m of matchPaycheckDeposits(pendingPaychecks, drafts)) {
+  for (const m of matchPaycheckDeposits(pendingPaychecks, drafts, { schedule })) {
     const row = await settlePaycheckWithDraft(userId, {
       paycheckId: m.paycheckId,
       draftId: m.draftId,

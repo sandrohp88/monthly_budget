@@ -73,10 +73,15 @@ export function PaychecksClient({
 
   const updateRow = async (row: PaycheckRow, patch: Partial<PaycheckRow>) => {
     const prev = items;
-    // The server releases the auto-reconcile draft link when a row is
-    // un-marked received — mirror that locally so the AUTO pill drops
-    // immediately instead of waiting for a reload.
-    if (patch.actualReceived === false) patch = { ...patch, settledByDraftId: null, actualDate: null };
+    // The server releases the auto-reconcile draft link and the posted amount
+    // when a row is un-marked received — mirror that locally so the AUTO pill
+    // and the recorded figure drop immediately instead of waiting for a reload.
+    // Clearing the amount matters: un-marking is how the user rejects a WRONG
+    // auto-match, and without this the rejected figure was sent straight back
+    // and persisted on the row it never belonged to.
+    if (patch.actualReceived === false) {
+      patch = { ...patch, settledByDraftId: null, actualDate: null, actualAmountCents: null };
+    }
     setItems((curr) => curr.map((p) => (p.id === row.id ? { ...p, ...patch } : p)));
     try {
       const res = await fetch(`/api/paychecks/${row.id}`, {
@@ -87,7 +92,10 @@ export function PaychecksClient({
           amountCents: patch.amountCents ?? row.amountCents,
           note: (patch.note ?? row.note) ?? null,
           actualReceived: patch.actualReceived ?? row.actualReceived,
-          actualAmountCents: patch.actualAmountCents ?? row.actualAmountCents,
+          // `??` can't carry an intentional null here (null is nullish, so it
+          // would fall back to the row's old figure) — key presence decides.
+          actualAmountCents:
+            "actualAmountCents" in patch ? patch.actualAmountCents : row.actualAmountCents,
         }),
       });
       if (!res.ok) throw new Error("update failed");

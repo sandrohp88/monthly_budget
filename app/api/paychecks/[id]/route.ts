@@ -19,8 +19,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       // Un-marking received releases the deposit draft that auto-settled this
       // paycheck — without this, the row could never auto-reconcile again
       // (the consume-once gate would see its own draft as already spent). Also
-      // drop the recorded posting date so a re-settle re-dates it cleanly.
-      ...(!(data.actualReceived ?? false) ? { settledByDraftId: null, actualDate: null } : {}),
+      // drop the recorded posting date so a re-settle re-dates it cleanly, and
+      // the recorded amount: un-marking is how the user REJECTS a wrong
+      // auto-match, so keeping the rejected figure would leave the row holding
+      // the very number they just disowned. The server settles this regardless
+      // of what the client echoes back.
+      ...(!(data.actualReceived ?? false)
+        ? { settledByDraftId: null, actualDate: null, actualAmountCents: null }
+        : {}),
     });
     if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
     return NextResponse.json({ paycheck: updated });

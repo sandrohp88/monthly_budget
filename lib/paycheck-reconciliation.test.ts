@@ -163,3 +163,81 @@ describe("draftMatchesPaycheckNote", () => {
     expect(draftMatchesPaycheckNote("HR", { description: "HR BLOCK", merchantName: null })).toBe(false);
   });
 });
+
+describe("matchPaycheckDeposits — the other earner's deposit", () => {
+  // The real shape (2026-08-30): Lisette is paid $3,974 every 14 days and the
+  // deposit posts a day early; her husband's $2,000 lands on the 1st. Her row
+  // was already marked received by hand, so it left the unreconciled pool —
+  // and her $3,974.43 deposit found only his $2,000 row within the window.
+  const hers = { id: "hers", payDate: "2026-08-27", amountCents: 3974_00, note: null };
+  const his = { id: "his", payDate: "2026-09-01", amountCents: 2000_00, note: "Husband" };
+  const herDeposit = deposit({
+    id: "igt-0827",
+    date: "2026-08-27",
+    description: "Deposit Ach Igt Type: Payroll",
+    amountCents: -3974_43,
+  });
+
+  it("does not hand her deposit to his paycheck once her row is reconciled", () => {
+    // Without the schedule reference this is the bug: his $2,000 row accepts
+    // anything up to $4,000, so $3,974.43 sails under the ceiling.
+    expect(matchPaycheckDeposits([his], [herDeposit])).toHaveLength(1);
+    // With it, the deposit is recognized as plainly hers and left alone.
+    expect(
+      matchPaycheckDeposits([his], [herDeposit], { schedule: [hers, his] }),
+    ).toEqual([]);
+  });
+
+  it("still settles her row when it is the one awaiting reconciliation", () => {
+    expect(matchPaycheckDeposits([hers, his], [herDeposit], { schedule: [hers, his] })).toEqual([
+      {
+        paycheckId: "hers",
+        draftId: "igt-0827",
+        depositDate: "2026-08-27",
+        depositAmountCents: 3974_43,
+      },
+    ]);
+  });
+
+  it("still settles his own deposit — the guard only rejects loose fits", () => {
+    const hisDeposit = deposit({
+      id: "p2p-0901",
+      date: "2026-09-01",
+      description: "Deposit Ach Sandro Herrera Type: P2p",
+      amountCents: -2000_00,
+    });
+    expect(matchPaycheckDeposits([his], [hisDeposit], { schedule: [hers, his] })).toEqual([
+      {
+        paycheckId: "his",
+        draftId: "p2p-0901",
+        depositDate: "2026-09-01",
+        depositAmountCents: 2000_00,
+      },
+    ]);
+  });
+
+  it("still tolerates a light check — a loose fit with no better claimant stands", () => {
+    // $1,700 against his $2,000: loose, but nothing else in range is a
+    // near-exact match for it, so the conservative band still applies.
+    const light = deposit({ id: "light", date: "2026-09-01", amountCents: -1700_00 });
+    expect(matchPaycheckDeposits([his], [light], { schedule: [hers, his] })).toHaveLength(1);
+  });
+
+  it("ignores a near-exact row that is nowhere near the deposit's date", () => {
+    // Her NEXT cycle is out of the window, so it can't veto a match on his row.
+    const far = { id: "hers-next", payDate: "2026-10-09", amountCents: 3974_00, note: null };
+    const overtime = deposit({ id: "ot", date: "2026-09-01", amountCents: -3974_00 });
+    expect(matchPaycheckDeposits([his], [overtime], { schedule: [far, his] })).toHaveLength(1);
+  });
+
+  it("defaults the schedule to the pool when the caller passes none", () => {
+    expect(matchPaycheckDeposits([hers, his], [herDeposit])).toEqual([
+      {
+        paycheckId: "hers",
+        draftId: "igt-0827",
+        depositDate: "2026-08-27",
+        depositAmountCents: 3974_43,
+      },
+    ]);
+  });
+});

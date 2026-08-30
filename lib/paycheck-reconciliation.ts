@@ -46,6 +46,13 @@ export const PAYCHECK_MATCH_MIN_FRACTION = 0.7;
  * sale, transfer between own accounts) is not this paycheck.
  */
 export const PAYCHECK_MATCH_MAX_FRACTION = 2;
+/**
+ * How close a deposit must sit to a scheduled amount to read as "that is
+ * plainly this paycheck". Used by the other-earner guard below — never as an
+ * eligibility gate of its own. 2% absorbs the hours/deduction drift that makes
+ * a real payroll deposit post at $3,974.43 against a planned $3,974.00.
+ */
+export const PAYCHECK_NEAR_EXACT_FRACTION = 0.02;
 
 export type ReconcilableDepositDraft = {
   id: string;
@@ -101,13 +108,29 @@ export function draftMatchesPaycheckNote(
 export function matchPaycheckDeposits(
   paychecks: ReadonlyArray<ReconcilablePaycheck>,
   drafts: ReadonlyArray<ReconcilableDepositDraft>,
-  opts: { windowDays?: number } = {},
+  opts: { windowDays?: number; schedule?: ReadonlyArray<ReconcilablePaycheck> } = {},
 ): PaycheckDepositMatch[] {
   const windowDays = Math.max(1, opts.windowDays ?? PAYCHECK_MATCH_WINDOW_DAYS);
 
   const deposits = drafts.filter((d) => d.amountCents < 0);
   const expected = paychecks.filter((p) => p.amountCents > 0);
   if (deposits.length === 0 || expected.length === 0) return [];
+
+  /**
+   * Every scheduled paycheck in range, ALREADY-RECONCILED ONES INCLUDED —
+   * `paychecks` holds only rows still awaiting reconciliation.
+   *
+   * Splitting two earners by amount only works while both their rows are on
+   * the board. Once one is reconciled (auto-settled, or marked received by
+   * hand) it leaves `paychecks`, and the next deposit for that earner finds
+   * only the OTHER earner's row to land on. The eligibility band is wide by
+   * design — a $2,000 paycheck accepts up to $4,000 so overtime still
+   * matches — so a $3,974.43 payroll deposit sails under the ceiling of a
+   * $2,000 row and silently records wrong income. That is exactly how a
+   * biweekly $3,974 deposit ended up recorded against a monthly $2,000
+   * paycheck (2026-08-30).
+   */
+  const schedule = opts.schedule ?? paychecks;
 
   type Pair = {
     paycheck: ReconcilablePaycheck;
@@ -116,6 +139,33 @@ export function matchPaycheckDeposits(
     distanceDays: number;
     amountGapCents: number;
   };
+  const nearExact = (depositCents: number, p: ReconcilablePaycheck) =>
+    Math.abs(depositCents - p.amountCents) <=
+    Math.round(p.amountCents * PAYCHECK_NEAR_EXACT_FRACTION);
+
+  /**
+   * Is this deposit plainly some OTHER scheduled paycheck's, rather than the
+   * one we're about to hand it to? True when it lands near-exactly on another
+   * row in range while fitting this one only loosely. Deliberately asymmetric:
+   * it can only REJECT a loose pair, never rescue one, so the conservative
+   * bias of the whole matcher is preserved — an unmatched deposit just waits
+   * for the user, while a wrong match silently records wrong income.
+   */
+  const belongsToAnotherPaycheck = (
+    depositCents: number,
+    draftDate: string,
+    candidate: ReconcilablePaycheck,
+  ) => {
+    if (nearExact(depositCents, candidate)) return false;
+    return schedule.some(
+      (other) =>
+        other.id !== candidate.id &&
+        other.amountCents > 0 &&
+        Math.abs(daysBetween(other.payDate, draftDate)) <= windowDays &&
+        nearExact(depositCents, other),
+    );
+  };
+
   const pairs: Pair[] = [];
   for (const paycheck of expected) {
     for (const draft of deposits) {
@@ -124,6 +174,7 @@ export function matchPaycheckDeposits(
       const depositCents = -draft.amountCents;
       if (depositCents < Math.round(paycheck.amountCents * PAYCHECK_MATCH_MIN_FRACTION)) continue;
       if (depositCents > Math.round(paycheck.amountCents * PAYCHECK_MATCH_MAX_FRACTION)) continue;
+      if (belongsToAnotherPaycheck(depositCents, draft.date, paycheck)) continue;
       pairs.push({
         paycheck,
         draft,

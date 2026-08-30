@@ -877,6 +877,35 @@ export async function listUnreconciledPaychecksInRange(
 }
 
 /**
+ * Every ACTIVE paycheck with payDate in [startIso, endIso], reconciled or not.
+ *
+ * The deposit matcher needs this alongside the unreconciled feed above: two
+ * earners' deposits split by amount, which only works while both rows are
+ * visible. A row that's already been reconciled still has to be *seen*, or the
+ * next deposit for that earner finds only the other earner's row to land on.
+ */
+export async function listPaychecksInRange(
+  userId: string,
+  startIso: string,
+  endIso: string,
+): Promise<PaycheckRow[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(paychecks)
+    .where(
+      and(
+        eq(paychecks.userId, userId),
+        eq(paychecks.isActive, true),
+        gte(paychecks.payDate, startIso),
+        lte(paychecks.payDate, endIso),
+      ),
+    )
+    .orderBy(asc(paychecks.payDate))
+    .all();
+}
+
+/**
  * Draft ids already consumed by SOME paycheck (any status, archived included
  * until the archive path releases them). The matcher must never see these —
  * a spent draft winning an assignment would starve a free one.
