@@ -241,3 +241,60 @@ describe("matchPaycheckDeposits — the other earner's deposit", () => {
     ]);
   });
 });
+
+describe("matchPaycheckDeposits — a note must not outrank a better amount", () => {
+  // The label trap (2026-08-30). Her rows were labelled so the schedules card
+  // would stop calling them "Main". The obvious label is her first name — but
+  // her husband's P2P transfers name her as the RECIPIENT, so the label matched
+  // HIS deposit's text. noteMatch outranks amount fit in the sort, so his
+  // $4,000 transfer beat his own exactly-matching $4,000 row and landed on her
+  // $3,974 paycheck: 1.99x is inside the amount band, so nothing else stopped it.
+  const hisTransfer =
+    "Deposit Ach Capital One Type: P2p Id: 9000000021 Co: Sandro Herrera Name: Lisette Izada Galiano";
+  const hers = { id: "hers", payDate: "2026-07-31", amountCents: 3974_00, note: "Lisette" };
+  const his = { id: "his", payDate: "2026-08-01", amountCents: 4000_00, note: "Husband" };
+  const transfer = deposit({
+    id: "p2p",
+    date: "2026-07-28",
+    description: hisTransfer,
+    amountCents: -4000_00,
+  });
+
+  it("the label really does match his text — that part is not in doubt", () => {
+    expect(draftMatchesPaycheckNote("Lisette", { description: hisTransfer, merchantName: null })).toBe(
+      true,
+    );
+  });
+
+  it("his deposit still lands on his row despite her label matching its text", () => {
+    const m = matchPaycheckDeposits([hers, his], [transfer], { schedule: [hers, his] });
+    expect(m).toEqual([expect.objectContaining({ paycheckId: "his", draftId: "p2p" })]);
+  });
+
+  it("and lands nowhere when his row is already reconciled, rather than on hers", () => {
+    // His row is off the board, so only hers is assignable. $26 further from the
+    // deposit than his was — leave it for the user instead of guessing.
+    const m = matchPaycheckDeposits([hers], [transfer], { schedule: [hers, his] });
+    expect(m).toEqual([]);
+  });
+
+  it("a note still decides between two paychecks that fit the amount equally", () => {
+    // Same-day, same amount, two earners: here the note is the only signal, and
+    // the guard stays out of the way because neither row fits better.
+    const a = { id: "a", payDate: "2026-07-10", amountCents: 2000_00, note: "ACME" };
+    const b = { id: "b", payDate: "2026-07-10", amountCents: 2000_00, note: "ZORP" };
+    const d = deposit({ id: "acme", description: "ACME CORP DIRECT DEP", amountCents: -2000_00 });
+    const m = matchPaycheckDeposits([a, b], [d], { schedule: [a, b] });
+    expect(m).toEqual([expect.objectContaining({ paycheckId: "a" })]);
+  });
+
+  it("a cents-level difference is still a tie the note may break", () => {
+    // $2.00 apart — inside PAYCHECK_BETTER_FIT_CENTS, so this stays the note's
+    // call rather than being decided by small payroll drift.
+    const a = { id: "a", payDate: "2026-07-10", amountCents: 2000_00, note: "ACME" };
+    const b = { id: "b", payDate: "2026-07-10", amountCents: 1998_00, note: "ZORP" };
+    const d = deposit({ id: "acme", description: "ACME CORP DIRECT DEP", amountCents: -1998_00 });
+    const m = matchPaycheckDeposits([a, b], [d], { schedule: [a, b] });
+    expect(m).toEqual([expect.objectContaining({ paycheckId: "a" })]);
+  });
+});

@@ -47,12 +47,15 @@ export const PAYCHECK_MATCH_MIN_FRACTION = 0.7;
  */
 export const PAYCHECK_MATCH_MAX_FRACTION = 2;
 /**
- * How close a deposit must sit to a scheduled amount to read as "that is
- * plainly this paycheck". Used by the other-earner guard below — never as an
- * eligibility gate of its own. 2% absorbs the hours/deduction drift that makes
- * a real payroll deposit post at $3,974.43 against a planned $3,974.00.
+ * How much closer another paycheck's amount must be before this deposit is
+ * treated as plainly that one's, not this one's. Used by the other-earner guard
+ * below — never as an eligibility gate of its own.
+ *
+ * Small on purpose: real payroll varies by cents (hours, deductions), so two
+ * rows that genuinely compete for one deposit differ by cents, not dollars. A
+ * whole $5 of extra distance means the other row is simply the better answer.
  */
-export const PAYCHECK_NEAR_EXACT_FRACTION = 0.02;
+export const PAYCHECK_BETTER_FIT_CENTS = 500;
 
 export type ReconcilableDepositDraft = {
   id: string;
@@ -139,30 +142,40 @@ export function matchPaycheckDeposits(
     distanceDays: number;
     amountGapCents: number;
   };
-  const nearExact = (depositCents: number, p: ReconcilablePaycheck) =>
-    Math.abs(depositCents - p.amountCents) <=
-    Math.round(p.amountCents * PAYCHECK_NEAR_EXACT_FRACTION);
+  const gapTo = (depositCents: number, p: ReconcilablePaycheck) =>
+    Math.abs(depositCents - p.amountCents);
 
   /**
    * Is this deposit plainly some OTHER scheduled paycheck's, rather than the
-   * one we're about to hand it to? True when it lands near-exactly on another
-   * row in range while fitting this one only loosely. Deliberately asymmetric:
-   * it can only REJECT a loose pair, never rescue one, so the conservative
-   * bias of the whole matcher is preserved — an unmatched deposit just waits
-   * for the user, while a wrong match silently records wrong income.
+   * one we're about to hand it to? True when another row in range fits its
+   * amount MATERIALLY better.
+   *
+   * This is the one direction where the note hint must not get a vote. Choosing
+   * among DEPOSITS for one paycheck, a note is provenance — the employer's name
+   * on the wire really does say which deposit is that paycheck. Choosing among
+   * PAYCHECKS for one deposit, it says much less: a bank description names
+   * whoever it likes, including the RECIPIENT. A transfer reading
+   * "Co: Sandro Herrera Name: Lisette Izada Galiano" carries her name while
+   * being entirely his money, so labelling her rows "Lisette" would hand his
+   * $4,000 to her $3,974 paycheck — past the amount band (1.99x), past the sort
+   * (noteMatch outranks amount fit), and into her income. Amount decides here.
+   *
+   * Deliberately asymmetric: it can only REJECT a pair, never rescue one, so the
+   * conservative bias of the whole matcher is preserved — an unmatched deposit
+   * waits for the user, while a wrong match silently records wrong income.
    */
   const belongsToAnotherPaycheck = (
     depositCents: number,
     draftDate: string,
     candidate: ReconcilablePaycheck,
   ) => {
-    if (nearExact(depositCents, candidate)) return false;
+    const ourGap = gapTo(depositCents, candidate);
     return schedule.some(
       (other) =>
         other.id !== candidate.id &&
         other.amountCents > 0 &&
         Math.abs(daysBetween(other.payDate, draftDate)) <= windowDays &&
-        nearExact(depositCents, other),
+        ourGap - gapTo(depositCents, other) > PAYCHECK_BETTER_FIT_CENTS,
     );
   };
 
