@@ -5,6 +5,7 @@ import {
   listBills,
   listCategories,
   listCreditCards,
+  listCreditCardPaymentOverridesForUser,
   listExtras,
   listPlaidAccounts,
   listPlaidDrafts,
@@ -21,17 +22,19 @@ export default async function TransactionsPage() {
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const [drafts, accounts, cards, categories, bills, extras, projection] = await Promise.all([
-    listPlaidDrafts(userId, "approved"),
-    listPlaidAccounts(userId),
-    listCreditCards(userId, false),
-    listCategories(userId),
-    listBills(userId, false),
-    listExtras(userId),
-    // Cached per request (the layout already builds it) — reused here for the
-    // bill-reconciliation matches so the rows can show "this paid bill X".
-    buildProjection(userId),
-  ]);
+  const [drafts, accounts, cards, categories, bills, extras, projection, cardPlans] =
+    await Promise.all([
+      listPlaidDrafts(userId, "approved"),
+      listPlaidAccounts(userId),
+      listCreditCards(userId, false),
+      listCategories(userId),
+      listBills(userId, false),
+      listExtras(userId),
+      // Cached per request (the layout already builds it) — reused here for the
+      // bill-reconciliation matches so the rows can show "this paid bill X".
+      buildProjection(userId),
+      listCreditCardPaymentOverridesForUser(userId),
+    ]);
 
   const accountMap = new Map(accounts.map((a) => [a.id, a]));
   const cardMap = new Map(
@@ -44,7 +47,7 @@ export default async function TransactionsPage() {
       .filter(isPayPalCreditAccount)
       .map((account) => {
         const linked = cardMap.get(account.id);
-        return linked ? [account.itemId, linked] as const : null;
+        return linked ? ([account.itemId, linked] as const) : null;
       })
       .filter((entry): entry is [string, { id: string; name: string }] => entry !== null),
   );
@@ -87,6 +90,14 @@ export default async function TransactionsPage() {
         intervalMonths: b.intervalMonths,
         anchorDate: b.anchorDate,
       }))}
+      plannedCardPayments={cardPlans
+        .filter((p) => p.amountCents > 0 && cards.some((c) => c.id === p.cardId))
+        .map((p) => ({
+          id: p.cardId,
+          date: p.dueDate,
+          amountCents: p.amountCents,
+          description: `${cards.find((c) => c.id === p.cardId)!.name} planned payment`,
+        }))}
       extras={extras.map((e) => ({
         id: e.id,
         description: e.description,

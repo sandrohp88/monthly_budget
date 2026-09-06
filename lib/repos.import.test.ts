@@ -10,7 +10,7 @@ vi.mock("./auth", () => ({
 import { __resetDbCacheForTests, getDb, runMigrations } from "./db/client";
 import { users, creditCards, bills, oneTimeExpenses } from "./db/schema";
 import { newId } from "./ids";
-import { importAll, exportAll, createBill, createCreditCard } from "./repos";
+import { importAll, exportAll, createBill, createCreditCard, upsertCreditCardPaymentOverride } from "./repos";
 import { backupImportSchema, type BackupImportInput } from "./validation";
 import { and, eq } from "drizzle-orm";
 
@@ -218,7 +218,7 @@ describe("backup import / transactional rollback", () => {
 
   it("a successful round-trip preserves the user's data", async () => {
     const user = await makeUser("a@example.com");
-    await createCreditCard(user.id, {
+    const card = await createCreditCard(user.id, {
       name: "Card A",
       statementDay: 5,
       dueDay: 25,
@@ -237,12 +237,19 @@ describe("backup import / transactional rollback", () => {
       isActive: true,
     });
 
+    await upsertCreditCardPaymentOverride(user.id, card.id, { dueDate: "2026-05-01", amountCents: 20000, notes: null, trackPosting: true });
+    await upsertCreditCardPaymentOverride(user.id, card.id, { dueDate: "2026-04-01", amountCents: 10000, notes: null, trackPosting: false });
     const exported = await exportAll(user.id);
     // Round-trip: parse with the schema, then import back over the user's
     // own data. End state should be equivalent.
     const parsed = backupImportSchema.parse(exported);
     await importAll(user.id, parsed);
 
+    const restored = await exportAll(user.id);
+    expect(restored.schemaVersion).toBe(11);
+    expect(restored.creditCardPaymentOverrides.map((p) => [p.dueDate, p.trackPosting])).toEqual(
+      exported.creditCardPaymentOverrides.map((p) => [p.dueDate, p.trackPosting]),
+    );
     const db = getDb();
     const cards = await db.select().from(creditCards).where(eq(creditCards.userId, user.id)).all();
     const billRows = await db

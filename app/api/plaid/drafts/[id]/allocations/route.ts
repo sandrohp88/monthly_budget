@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { ensureUser, jsonError, readJson } from "@/lib/api";
 import {
   getBill,
+  getCreditCard,
+  listCreditCardPaymentOverridesForUser,
   getExtra,
   getPlaidDraft,
+  listPlaidAccounts,
   listDraftAllocations,
   replaceDraftAllocations,
 } from "@/lib/repos";
@@ -63,6 +66,21 @@ export async function PUT(req: Request, ctx: Ctx) {
 
     if (a.targetKind === "bill") {
       if (!(await getBill(auth.userId, a.targetId))) return jsonError("Bill not found", 404);
+    } else if (a.targetKind === "card_payment") {
+      const accounts = await listPlaidAccounts(auth.userId);
+      if (draft.pending || draft.status !== "approved" || !accounts.some((account) =>
+        account.id === draft.accountId && account.type === "depository" && account.useAsStartingBalance)) {
+        return jsonError("Link a posted debit from a starting-balance bank account", 400);
+      }
+      if (!(await getCreditCard(auth.userId, a.targetId))) return jsonError("Card not found", 404);
+      const plans = await listCreditCardPaymentOverridesForUser(auth.userId);
+      if (
+        !plans.some(
+          (p) => p.cardId === a.targetId && p.dueDate === a.targetDate && p.amountCents > 0,
+        )
+      ) {
+        return jsonError("Planned payment not found", 404);
+      }
     } else {
       const extra = await getExtra(auth.userId, a.targetId);
       if (!extra) return jsonError("One-time expense not found", 404);

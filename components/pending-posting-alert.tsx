@@ -34,16 +34,18 @@ type Answered = {
  *   2. Answered — reversible, because answering removes an occurrence from
  *      band 1 and band 1 is the only place it was reachable.
  *   3. The total held, including whatever pending float the bank reports that
- *      no bill accounts for.
+ *      no bill or planned payment accounts for.
  */
 export function PendingPostingAlert({
   occurrences,
+  cardPayments,
   answered,
   totalHeldCents,
   unattributedCents,
   today,
 }: {
   occurrences: UnpaidRecentOccurrence[];
+  cardPayments: Array<{ cardId: string; cardName: string; date: string; amountCents: number }>;
   answered: Answered[];
   totalHeldCents: number;
   unattributedCents: number;
@@ -75,15 +77,32 @@ export function PendingPostingAlert({
               markedDate: dueDate > today ? today : dueDate,
             }),
           })
-        : await fetch(
-            `/api/bills/${billId}/payment-state?dueDate=${encodeURIComponent(dueDate)}`,
-            { method: "DELETE" },
-          );
+        : await fetch(`/api/bills/${billId}/payment-state?dueDate=${encodeURIComponent(dueDate)}`, {
+            method: "DELETE",
+          });
       if (!res.ok) {
         const payload = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error ?? "Could not save");
       }
       toast.success(successMessage);
+      router.refresh();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function cancelCardPlan(cardId: string, date: string) {
+    const key = `${cardId}:${date}`;
+    setBusy(key);
+    try {
+      const res = await fetch(
+        `/api/credit-cards/${cardId}/payment-overrides?dueDate=${encodeURIComponent(date)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) throw new Error("Could not cancel the plan");
+      toast.success("Payment plan cancelled — reserved cash released");
       router.refresh();
     } catch (err) {
       toast.error((err as Error).message);
@@ -98,8 +117,8 @@ export function PendingPostingAlert({
         <AlertBar tag="Unposted" variant="amber">
           <div className="flex flex-col gap-2">
             <div>
-              No matching payment has posted for these, so their cash is still
-              held out of your balance. Which is it?
+              No matching payment has posted for these, so their cash is still held out of your
+              balance. Which is it?
             </div>
             <ul className="flex flex-col gap-1.5">
               {occurrences.slice(0, 5).map((o) => {
@@ -169,17 +188,48 @@ export function PendingPostingAlert({
           <div className="flex flex-col gap-2">
             {totalHeldCents > 0 ? (
               <div>
-                <Money cents={totalHeldCents} /> has left your account (or is due
-                to) without posting yet, and is already held out of every balance
-                below
+                <Money cents={totalHeldCents} /> has left your account (or is due to) without
+                posting yet, and is already held out of every balance below
                 {unattributedCents > 0 ? (
                   <>
                     {" "}
-                    — including <Money cents={unattributedCents} /> your bank
-                    reports as pending that no bill accounts for
+                    — including <Money cents={unattributedCents} /> your bank reports as pending
+                    that no bill or planned payment accounts for
                   </>
                 ) : null}
                 . Each piece clears itself as its transaction posts.
+              </div>
+            ) : null}
+            {cardPayments.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                <ul className="flex flex-col gap-1">
+                  {cardPayments.map((p) => (
+                    <li key={`${p.cardId}:${p.date}`} className="flex flex-wrap items-center gap-2">
+                      {p.cardName} · planned <DateLabel iso={p.date} format="short" /> ·{" "}
+                      <Money cents={p.amountCents} /> reserved
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy === `${p.cardId}:${p.date}`}
+                        onClick={() => cancelCardPlan(p.cardId, p.date)}
+                      >
+                        Cancel plan
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+                <div>
+                  Card payments stay reserved until a posted checking transaction matches. If one
+                  already posted under different wording, use{" "}
+                  <Link href="/transactions" className="text-[var(--mint)] hover:underline">
+                    Split on the transaction
+                  </Link>{" "}
+                  to link its planned payment. Review plans in{" "}
+                  <Link href="/calendar" className="text-[var(--mint)] hover:underline">
+                    Calendar
+                  </Link>
+                  .
+                </div>
               </div>
             ) : null}
             {answered.length > 0 ? (

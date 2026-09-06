@@ -404,6 +404,9 @@ export const creditCardPaymentOverrides = sqliteTable(
       .references(() => creditCards.id, { onDelete: "cascade" }),
     dueDate: text("due_date").notNull(),
     amountCents: integer("amount_cents").notNull(),
+    /** New/recent plans keep reserving cash until reconciled. Legacy history
+     * predating rollout is left settled; editing such a plan opts it in. */
+    trackPosting: integer("track_posting", { mode: "boolean" }).notNull().default(true),
     notes: text("notes"),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
     updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
@@ -762,7 +765,7 @@ export const draftAllocations = sqliteTable(
     draftId: text("draft_id")
       .notNull()
       .references(() => plaidTransactionDrafts.id, { onDelete: "cascade" }),
-    targetKind: text("target_kind", { enum: ["bill", "extra"] }).notNull(),
+    targetKind: text("target_kind", { enum: ["bill", "extra", "card_payment"] }).notNull(),
     targetId: text("target_id").notNull(),
     /** Occurrence date for a bill; the expense's own date for an extra. */
     targetDate: text("target_date").notNull(),

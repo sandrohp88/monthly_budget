@@ -118,6 +118,7 @@ export type OneTimeExpense = {
   /** See ProjectionEvent.awaitingPost — money the bank has committed but not
    *  yet posted (the unattributed remainder of the pending float). */
   awaitingPost?: boolean;
+  heldSinceDate?: string;
   /** See ProjectionEvent.dueMarker — a zero-cash credit-card due-date marker. */
   dueMarker?: boolean;
   /** For a due marker: cash the user has scheduled toward this cycle's balance. */
@@ -431,6 +432,7 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
       skipped: e.skipped,
       isPaid: e.isPaid,
       awaitingPost: e.awaitingPost,
+      heldSinceDate: e.heldSinceDate,
       chargedToCardName: e.chargedToCardName,
       paydownTargetDate: e.paydownTargetDate,
       dueMarker: e.dueMarker,

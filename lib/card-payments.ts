@@ -62,6 +62,9 @@ export type ProjectCardPaymentsInput = {
   /** Plaid account balances, for cards linked to a Plaid account. */
   plaidAccounts: Array<{ id: string; balanceCents: number | null }>;
   cardPaymentOverrides: CreditCardPaymentOverrideRow[];
+  /** Linked mode: remaining cash after posted checking payments. Past plans
+   * stay effective while they are still reserved, including promo prepayment. */
+  remainingPlannedCentsByKey?: ReadonlyMap<string, number>;
 };
 
 export type ProjectCardPaymentsResult = {
@@ -143,10 +146,7 @@ export function cardPaymentMoveError(
  * real card due (`paymentDueCents > 0`) being scheduled after its issuer due
  * date. Null when the chosen day carries no late-payment risk.
  */
-export function cardPaymentLateWarning(
-  input: CardPaymentMoveInput,
-  toDate: string,
-): string | null {
+export function cardPaymentLateWarning(input: CardPaymentMoveInput, toDate: string): string | null {
   if (input.isPaydown || input.paymentDueCents <= 0) return null;
   const dueDate = input.relatedDate ?? input.fromDate;
   if (toDate <= dueDate) return null;
@@ -187,6 +187,8 @@ type DueMarker = {
 
 export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCardPaymentsResult {
   const { today, endDate, activeCards, promos, variableBills } = input;
+  const stillInFlight = (cardId: string, date: string) =>
+    (input.remainingPlannedCentsByKey?.get(overrideKey(cardId, date)) ?? 0) > 0;
 
   const cardById = new Map(activeCards.map((c) => [c.id, c] as const));
   // Statements arrive for EVERY card the user owns, archived ones included
@@ -202,10 +204,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     input.plaidAccounts.map((a) => [a.id, a.balanceCents] as const),
   );
 
-  const promoPaymentsByPromoId = new Map<
-    string,
-    Array<{ dueDate: string; amountCents: number }>
-  >();
+  const promoPaymentsByPromoId = new Map<string, Array<{ dueDate: string; amountCents: number }>>();
   for (const pp of input.promoPayments) {
     const list = promoPaymentsByPromoId.get(pp.promoId) ?? [];
     list.push({ dueDate: pp.dueDate, amountCents: pp.amountCents });
@@ -258,7 +257,13 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     amountCents: number;
     movedFrom?: string;
   }> = [];
-  for (const o of input.cardPaymentOverrides) {
+  for (const original of input.cardPaymentOverrides) {
+    const o = {
+      ...original,
+      amountCents:
+        input.remainingPlannedCentsByKey?.get(overrideKey(original.cardId, original.dueDate)) ??
+        original.amountCents,
+    };
     const target = paydownTargetDate(o.notes);
     if (target) {
       paydowns.push({
@@ -284,7 +289,8 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     });
   }
   const overrideByKey = new Map<string, number>();
-  for (const o of nonPaydownOverrides) overrideByKey.set(overrideKey(o.cardId, o.date), o.amountCents);
+  for (const o of nonPaydownOverrides)
+    overrideByKey.set(overrideKey(o.cardId, o.date), o.amountCents);
   const claimedOverrideKeys = new Set<string>();
 
   // ── Promo chunks (cash, unchanged) ────────────────────────────────────────
@@ -337,7 +343,14 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   // ── Variable spend (cash, unchanged) ──────────────────────────────────────
   const variableBillChargeGroups = new Map<
     string,
-    { cardId: string; cardName: string; dueDate: string; amountCents: number; names: string[]; categories: string[] }
+    {
+      cardId: string;
+      cardName: string;
+      dueDate: string;
+      amountCents: number;
+      names: string[];
+      categories: string[];
+    }
   >();
   const variableCharges = projectVariableBillCardCharges({
     variableBills,
@@ -389,7 +402,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     }
   };
   for (const p of paydowns) {
-    if (p.date < today || p.amountCents <= 0) continue;
+    if ((p.date < today && !stillInFlight(p.cardId, p.date)) || p.amountCents <= 0) continue;
     const key = overrideKey(p.cardId, p.targetDate);
     // A paydown always counts as coverage toward a due marker on its target
     // date (display only — the marker has no cash of its own). Entries keep
@@ -400,7 +413,10 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     // If that date ALSO carries promo/variable cash, the paydown reduces it too
     // so the same money isn't projected twice.
     if (cashChargeKeys.has(key)) {
-      promoPaydownRemainingByKey.set(key, (promoPaydownRemainingByKey.get(key) ?? 0) + p.amountCents);
+      promoPaydownRemainingByKey.set(
+        key,
+        (promoPaydownRemainingByKey.get(key) ?? 0) + p.amountCents,
+      );
     }
   }
   // Several generators can share one (card, date); consume from a shared pool so
@@ -597,8 +613,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       // collapses to $0 with a phantom "drift". Only when the unpaid total can
       // actually contain the principal (unpaid ≥ remaining) — a smaller total
       // is the PayPal shape, where statements bill only the cycle's cash.
-      const unpaid =
-        unpaidRaw >= promoRemainingRaw ? unpaidRaw - promoRemainingRaw : unpaidRaw;
+      const unpaid = unpaidRaw >= promoRemainingRaw ? unpaidRaw - promoRemainingRaw : unpaidRaw;
       // Cap the promo subtraction at the live-balance headroom so a drifted
       // promo total can't wipe the estimate to $0; record the overflow.
       const headroom = Math.max(0, liveBalance - unpaid);
@@ -693,7 +708,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     for (const d of m.overdueDueDates ?? []) statementMarkerKeys.add(overrideKey(m.cardId, d));
   }
   for (const p of paydowns) {
-    if (p.date < today || p.amountCents <= 0) continue;
+    if ((p.date < today && !stillInFlight(p.cardId, p.date)) || p.amountCents <= 0) continue;
     const targetKey = overrideKey(p.cardId, p.targetDate);
     if (
       cashChargeKeys.has(targetKey) ||
@@ -762,7 +777,12 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       for (const p of pool) if (p.remaining > 0) estCash.push({ date: p.date, amt: p.remaining });
       const estDues = estimatedDuesByCard.get(cardId);
       for (const pd of paydowns) {
-        if (pd.cardId !== cardId || pd.amountCents <= 0 || pd.date < today) continue;
+        if (
+          pd.cardId !== cardId ||
+          pd.amountCents <= 0 ||
+          (pd.date < today && !stillInFlight(pd.cardId, pd.date))
+        )
+          continue;
         if (estDues?.has(pd.targetDate)) estCash.push({ date: pd.date, amt: pd.amountCents });
       }
       for (const em of estimateMarkers) {

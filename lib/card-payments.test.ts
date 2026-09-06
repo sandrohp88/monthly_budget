@@ -81,6 +81,7 @@ function override(over: Partial<CreditCardPaymentOverrideRow> = {}): CreditCardP
     cardId: "c1",
     dueDate: "2026-06-10",
     amountCents: 300_00,
+    trackPosting: true,
     notes: null,
     createdAt: 0,
     updatedAt: 0,

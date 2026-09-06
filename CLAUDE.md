@@ -1184,6 +1184,39 @@ issuer payoff deadline, or card-cycle payments through the promotional window.
 Both are planning inputs and must still total the issuer-reconciled remaining
 balance.
 
+### Planned payments awaiting bank posting (2026-09-06)
+The dashboard's **Available to plan** tile subtracts reserved card payments as
+well as held bills/bank float. A tracked positive card-payment override reserves
+cash once its date arrives, survives midnight and the visible-window boundary,
+and stops reserving only when a posted checking debit reconciles or the user
+cancels the plan. Future plans still debit their chosen date. Partial explicit
+allocations reserve the remainder. `awaitingPost` keeps the raw bank balance
+visible alongside the planning balance and prevents date-based phantom settlement.
+
+`lib/card-payment-reconciliation.ts` is pure. Automatic matches require exact
+cents, a unique pairing within -3/+14 days, and either card-name/payment wording
+or a matching posted receipt on the explicitly linked card within three days of
+the checking debit. Card-side receipts alone NEVER release checking cash. Only
+active depository starting-balance accounts provide source debits. Ambiguous or
+unrecognized matches remain reserved; Transactions → **Split** can allocate a
+posted debit to a saved `card_payment` target. Allocations stay exhaustive so a
+bill, extra and card plan cannot reuse the same debit. Pending drafts cannot settle.
+
+Migration **0040** adds `credit_card_payment_overrides.track_posting`: new and
+edited plans opt in. At rollout only existing plans dated within the preceding
+12 days or later opt in (same initial lookback as bills); older history keeps its
+previous behavior. This is a ONE-TIME boundary, not a rolling expiry: a tracked
+plan remains held indefinitely until reconciled/cancelled. No amounts, dates or
+paid-statement facts are changed. JSON export v11 preserves the flag; pre-v11
+imports use the same legacy cutoff. Full SQLite backups preserve Plaid drafts and
+allocations; the existing portable JSON format omits those bank records.
+
+Cash and bank-pending float overlap: total held remains `max(observedFloat,
+heldBills + heldCardPayments)`, never their sum. Remaining unposted paydowns still
+cover their target and reduce future promo chunks, so midnight cannot reintroduce
+the same cash on its target date. A reserved plan is reviewed/cancelled via the
+In flight band; its date/amount is not draggable while in flight.
+
 ### Calendar card-payment planning
 Calendar credit-card events surface `paymentDueCents` as the statement amount
 needed to avoid interest, while estimated and deferred-interest events are
@@ -1236,10 +1269,10 @@ Unlike a slot override, a paydown is never a replacement: it always debits its
 own date as a planned payment, and `projectCardPayments` subtracts it from
 whatever the projection charges at the target date (statement, open-cycle
 estimate, promo chunk), consumed once per `(card, dueDate)` across generators
-so colliding sources never double-subtract. Only paydowns dated **today or
-later** reduce their target — once the date passes, reality (posted payments,
-statement paid amounts, live balances) is expected to carry the effect, so a
-stale plan can't discount a due date forever. Partial amounts split the
+so colliding sources never double-subtract. In linked mode a tracked unposted
+paydown continues to reduce its target after its date passes; reconciled portions
+stop doing so. Untracked legacy plans and manual mode retain the today-or-later
+rule. See the posting-tracking section above. Partial amounts split the
 obligation: the remainder stays on the due date.
 
 A stored target can also go **stale**: statement reconciliation or cycle-config

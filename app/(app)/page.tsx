@@ -190,7 +190,7 @@ export default async function DashboardPage() {
       <TileGrid cols={4}>
         <Tile
           compact
-          label="Current balance"
+          label="Available to plan"
           value={<Money cents={currentBalanceCents} />}
           variant={balanceVariant(currentBalanceCents)}
           delta={
@@ -275,6 +275,7 @@ export default async function DashboardPage() {
       <PendingPostingAlert
         occurrences={unpaidRecentOccurrences}
         answered={pendingPosting.answered}
+        cardPayments={pendingPosting.cardPayments}
         totalHeldCents={pendingPosting.totalHeldCents}
         unattributedCents={pendingPosting.unattributedCents}
         today={today}

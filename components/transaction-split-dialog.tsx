@@ -36,7 +36,7 @@ export type SplitExtraOption = {
 };
 
 export type Allocation = {
-  targetKind: "bill" | "extra";
+  targetKind: "bill" | "extra" | "card_payment";
   targetId: string;
   targetDate: string;
   amountCents: number;
@@ -45,7 +45,7 @@ export type Allocation = {
 /** One obligation the transaction could have paid: a dated, planned amount. */
 type Candidate = {
   key: string;
-  targetKind: "bill" | "extra";
+  targetKind: "bill" | "extra" | "card_payment";
   targetId: string;
   targetDate: string;
   label: string;
@@ -68,6 +68,7 @@ function candidatesFor(
   txnDate: string,
   bills: ReadonlyArray<SplitBillOption>,
   extras: ReadonlyArray<SplitExtraOption>,
+  cardPayments: ReadonlyArray<SplitExtraOption>,
 ): Candidate[] {
   const from = addDays(txnDate, -MATCH_WINDOW_DAYS);
   const to = addDays(txnDate, MATCH_WINDOW_DAYS);
@@ -98,6 +99,18 @@ function candidatesFor(
       distanceDays: Math.abs(daysBetween(e.date, txnDate)),
     });
   }
+  for (const p of cardPayments) {
+    // All saved plans stay selectable, even if posting was very late.
+    out.push({
+      key: `card_payment:${p.id}:${p.date}`,
+      targetKind: "card_payment",
+      targetId: p.id,
+      targetDate: p.date,
+      label: p.description,
+      plannedCents: p.amountCents,
+      distanceDays: Math.abs(daysBetween(p.date, txnDate)),
+    });
+  }
   out.sort((a, b) => a.distanceDays - b.distanceDays || a.label.localeCompare(b.label));
   return out;
 }
@@ -118,6 +131,7 @@ export function TransactionSplitDialog({
   initialAllocations,
   bills,
   extras,
+  cardPayments = [],
   onClose,
 }: {
   transactionId: string;
@@ -128,13 +142,14 @@ export function TransactionSplitDialog({
   initialAllocations: ReadonlyArray<Allocation>;
   bills: ReadonlyArray<SplitBillOption>;
   extras: ReadonlyArray<SplitExtraOption>;
+  cardPayments?: ReadonlyArray<SplitExtraOption>;
   onClose: () => void;
 }) {
   const router = useRouter();
   const [saving, setSaving] = React.useState(false);
   const candidates = React.useMemo(
-    () => candidatesFor(transactionDate, bills, extras),
-    [transactionDate, bills, extras],
+    () => candidatesFor(transactionDate, bills, extras, cardPayments),
+    [transactionDate, bills, extras, cardPayments],
   );
 
   // Selected portions, keyed by candidate key. Absent = not part of the split.
@@ -207,7 +222,7 @@ export function TransactionSplitDialog({
         <div className="space-y-4">
           <div className="rounded-md border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2 text-[13px]">
             <div className="font-semibold text-[var(--text-0)]">{transactionLabel}</div>
-            <div className="mt-0.5 text-2xs text-[var(--text-3)]">
+            <div className="text-2xs mt-0.5 text-[var(--text-3)]">
               <DateLabel iso={transactionDate} format="short" /> ·{" "}
               <Money cents={transactionAmountCents} />
             </div>
@@ -244,8 +259,12 @@ export function TransactionSplitDialog({
                             {c.label}
                           </div>
                           <div className="text-2xs text-[var(--text-3)]">
-                            {c.targetKind === "bill" ? "Bill" : "One-time"} · due{" "}
-                            <DateLabel iso={c.targetDate} format="short" /> · plan{" "}
+                            {c.targetKind === "bill"
+                              ? "Bill"
+                              : c.targetKind === "card_payment"
+                                ? "Card payment"
+                                : "One-time"}{" "}
+                            · due <DateLabel iso={c.targetDate} format="short" /> · plan{" "}
                             <Money cents={c.plannedCents} />
                           </div>
                         </button>
@@ -286,8 +305,8 @@ export function TransactionSplitDialog({
           </div>
 
           <p className="text-2xs leading-relaxed text-[var(--text-3)]">
-            Splitting takes this transaction out of automatic matching — the portions below are
-            what counts. Leaving some unattributed is fine; that part simply doesn&apos;t settle
+            Splitting takes this transaction out of automatic matching — the portions below are what
+            counts. Leaving some unattributed is fine; that part simply doesn&apos;t settle
             anything. Any bill you name here also learns this wording for future months.
           </p>
         </div>

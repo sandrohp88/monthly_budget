@@ -34,6 +34,8 @@ import {
   upsertPlaidAccount,
   updatePlaidAccount,
   upsertPlaidDraft,
+  replaceDraftAllocations,
+  deleteCreditCardPaymentOverride,
 } from "./repos";
 
 let dbDir: string;
@@ -123,7 +125,9 @@ async function seedPromoProjection(statementBalanceCents: number | null) {
 describe("buildProjection promo statement reconciliation", () => {
   it("does not project a promo payment when the statement due amount is zero", async () => {
     const row = await seedPromoProjection(0);
-    expect(row?.events.some((event) => event.label === "PayPal promo (deferred-interest purchase)")).toBe(false);
+    expect(
+      row?.events.some((event) => event.label === "PayPal promo (deferred-interest purchase)"),
+    ).toBe(false);
   });
 
   it("does not double-count a promo payment when a positive statement already covers the cycle", async () => {
@@ -272,7 +276,9 @@ describe("buildProjection promo statement reconciliation", () => {
 
     const row = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-06-10");
 
-    expect(row?.events.some((event) => event.label === "PayPal promo (deferred-interest purchase)")).toBe(false);
+    expect(
+      row?.events.some((event) => event.label === "PayPal promo (deferred-interest purchase)"),
+    ).toBe(false);
     // The statement due date shows as a zero-cash marker, not a forced payment.
     expect(row?.events).toEqual(
       expect.arrayContaining([
@@ -653,10 +659,8 @@ describe("buildProjection linked starting balance", () => {
     expect(today?.expenseCents).toBe(212_00);
   });
 
-  it("a planned card payment dated in the PAST settles as a paid marker in lookback mode", async () => {
-    // Once the date passes, reality (posted drafts inside the live balance)
-    // carries the effect — the stale plan renders as a paid marker showing
-    // the planned amount, and stops debiting the projection.
+  it("a past planned card payment stays reserved until a checking debit posts", async () => {
+    // Midnight is not evidence that checking posted the payment.
     const user = await makeUser();
     await seedLinkedStartingBalance(user.id, 500_00);
     await updateSettings(user.id, { startingBalanceAsOf: "2026-05-01" });
@@ -674,14 +678,148 @@ describe("buildProjection linked starting balance", () => {
       notes: null,
     });
 
-    const may2 = (await buildProjection(user.id))?.rows.find((r) => r.date === "2026-05-02");
-    const planned = may2?.events.find((e) => e.label === "Costco planned payment");
-    expect(planned).toMatchObject({
-      amountCents: 0,
-      isPaid: true,
-      originalAmountCents: 212_00, // the planned amount, for display (PR #93)
+    const projection = await buildProjection(user.id);
+    const may2 = projection?.rows.find((r) => r.date === "2026-05-02");
+    expect(may2?.events.find((e) => e.label === "Costco planned payment")).toMatchObject({
+      amountCents: 212_00,
+      awaitingPost: true,
     });
-    expect(may2?.expenseCents).toBe(0);
+    expect(projection?.pendingPosting.totalHeldCents).toBe(212_00);
+    expect(projection?.rows.find((r) => r.date === "2026-05-04")).toMatchObject({
+      balanceCents: 288_00,
+      postedBalanceCents: 500_00,
+    });
+  });
+
+  async function pendingCardFixture(date = "2026-05-02") {
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 1000_00);
+    const card = await createCreditCard(user.id, {
+      name: "Test Visa",
+      statementDay: 15,
+      dueDay: 10,
+      currentBalanceCents: 500_00,
+      autoPay: false,
+      isActive: true,
+    });
+    await upsertCreditCardPaymentOverride(user.id, card.id, {
+      dueDate: date,
+      amountCents: 200_00,
+      notes: "pays-down:2026-05-10",
+    });
+    await createStatement(card.id, {
+      statementDate: "2026-04-15", dueDate: "2026-05-10", statementBalanceCents: 500_00,
+      paidAmountCents: null, paidDate: null, notes: null,
+    });
+    const post = async (id: string, pending: boolean, amountCents = 200_00) => {
+      await upsertPlaidDraft({
+        id,
+        userId: user.id,
+        accountId: "checking",
+        date: "2026-05-04",
+        description: "Test Visa Payment",
+        merchantName: null,
+        originalDescription: null,
+        amountCents,
+        pending,
+        kind: "expense",
+        status: "approved",
+        plaidCategory: null,
+        linkedExpenseId: null,
+        linkedPromoId: null,
+      });
+    };
+    return { user, card, post };
+  }
+
+  it("reserves past plans without lookback and includes them in today's posted/available pair", async () => {
+    const { user } = await pendingCardFixture();
+    const p = await buildProjection(user.id);
+    expect(p?.rows[0]).toMatchObject({
+      date: "2026-05-04",
+      balanceCents: 800_00,
+      postedBalanceCents: 1000_00,
+    });
+    expect(p?.rows[0]?.events.find((e) => e.awaitingPost)).toMatchObject({
+      heldSinceDate: "2026-05-02",
+      amountCents: 200_00,
+    });
+    expect(p?.pendingPosting.cardPayments).toHaveLength(1);
+    expect(
+      p?.rows.find((r) => r.date === "2026-05-10")?.events.find((e) => e.dueMarker)
+        ?.scheduledCoverCents,
+    ).toBe(200_00);
+  });
+
+  it("deducts a plan and the bank's pending view only once, then releases on posting", async () => {
+    const { user, post } = await pendingCardFixture();
+    await post("payment", true);
+    const pending = await buildProjection(user.id);
+    expect(pending?.pendingPosting.totalHeldCents).toBe(200_00);
+    expect(pending?.pendingPosting.unattributedCents).toBe(0);
+    expect(pending?.rows[0]?.balanceCents).toBe(800_00);
+    await post("payment", false);
+    // The same debit is now reflected in the bank's current balance.
+    await getDb().run(`UPDATE plaid_accounts SET balance_cents = 80000 WHERE id = 'checking'`);
+    const posted = await buildProjection(user.id);
+    expect(posted?.pendingPosting.totalHeldCents).toBe(0);
+    expect(posted?.rows[0]?.balanceCents).toBe(800_00);
+    expect(posted?.rows[0]?.postedBalanceCents).toBe(800_00);
+  });
+
+  it("holds only the remainder after an explicit partial posting and clears when fully allocated", async () => {
+    const { user, card, post } = await pendingCardFixture();
+    await post("partial", false, 75_00);
+    await replaceDraftAllocations(user.id, "partial", [
+      {
+        targetKind: "card_payment",
+        targetId: card.id,
+        targetDate: "2026-05-02",
+        amountCents: 75_00,
+      },
+    ]);
+    await getDb().run(`UPDATE plaid_accounts SET balance_cents = 92500 WHERE id = 'checking'`);
+    const p = await buildProjection(user.id);
+    expect(p?.pendingPosting.totalHeldCents).toBe(125_00);
+    expect(p?.rows[0]?.balanceCents).toBe(800_00);
+    await post("remainder", false, 125_00);
+    await replaceDraftAllocations(user.id, "remainder", [
+      {
+        targetKind: "card_payment",
+        targetId: card.id,
+        targetDate: "2026-05-02",
+        amountCents: 125_00,
+      },
+    ]);
+    await getDb().run(`UPDATE plaid_accounts SET balance_cents = 80000 WHERE id = 'checking'`);
+    expect((await buildProjection(user.id))?.pendingPosting.totalHeldCents).toBe(0);
+  });
+
+  it("projects future plans on their chosen date without reserving them today", async () => {
+    const { user } = await pendingCardFixture("2026-05-06");
+    const p = await buildProjection(user.id);
+    expect(p?.pendingPosting.totalHeldCents).toBe(0);
+    expect(p?.rows[0]?.balanceCents).toBe(1000_00);
+    expect(p?.rows.find((r) => r.date === "2026-05-06")?.balanceCents).toBe(800_00);
+  });
+
+  it("stops debiting a future plan when its checking payment posts early", async () => {
+    const { user, post } = await pendingCardFixture("2026-05-06");
+    await post("early", false);
+    await getDb().run(`UPDATE plaid_accounts SET balance_cents = 80000 WHERE id = 'checking'`);
+    const p = await buildProjection(user.id);
+    expect(p?.rows.find((r) => r.date === "2026-05-06")?.balanceCents).toBe(800_00);
+    expect(
+      p?.rows.find((r) => r.date === "2026-05-06")?.events.find((e) => e.isPaid)
+        ?.originalAmountCents,
+    ).toBe(200_00);
+  });
+
+  it("does not silently release an old unposted plan, and cancellation releases it", async () => {
+    const { user, card } = await pendingCardFixture("2026-02-02");
+    expect((await buildProjection(user.id))?.pendingPosting.totalHeldCents).toBe(200_00);
+    await deleteCreditCardPaymentOverride(user.id, card.id, "2026-02-02");
+    expect((await buildProjection(user.id))?.pendingPosting.totalHeldCents).toBe(0);
   });
 
   it("a one-time expense dated TODAY stays live in lookback mode (not phantom-settled)", async () => {
@@ -1011,12 +1149,7 @@ describe("buildProjection pending posting (money out, not yet posted)", () => {
    * matter how much is actually in flight. Plaid's own pending transaction
    * rows are the second, independent measure.
    */
-  async function seedPendingDraft(
-    userId: string,
-    id: string,
-    amountCents: number,
-    pending = true,
-  ) {
+  async function seedPendingDraft(userId: string, id: string, amountCents: number, pending = true) {
     await upsertPlaidDraft({
       id,
       userId,

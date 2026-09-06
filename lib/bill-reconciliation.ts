@@ -77,7 +77,7 @@ export type DraftAllocation = {
   amountCents: number;
 };
 
-export type ObligationKind = "bill" | "extra";
+export type ObligationKind = "bill" | "extra" | "card_payment";
 
 export type ReconcilableBill = Pick<
   BillRow,
@@ -240,7 +240,7 @@ export function matchAllocatedObligations(
     // breakdown and must not also be offered to the heuristic matcher.
     allocatedDraftIds.add(draft.id);
     for (const a of allocations) {
-      if (a.amountCents <= 0) continue;
+      if (a.amountCents <= 0 || a.targetKind === "card_payment") continue;
       const key = `${a.targetKind}:${a.targetId}:${a.targetDate}`;
       const existing = buckets.get(key);
       if (existing) {

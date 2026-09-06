@@ -1,3 +1,5 @@
+import { looksLikeCardPayment, looksLikeReversal } from "./plaid-transaction-kind";
+import { addDaysIso, todayIso } from "./dates";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
@@ -100,7 +102,7 @@ export async function findUserByEmail(email: string): Promise<UserRow | undefine
   return db.select().from(users).where(eq(users.email, email.toLowerCase())).get();
 }
 
-// ── user management ──────────────────────────────────────────────���───────────
+// ── user management ──────────────────────────────────────────────────────────
 
 export async function listUsers(): Promise<UserSafe[]> {
   const db = getDb();
@@ -752,7 +754,7 @@ export async function upsertCreditCardPaymentOverride(
   if (existing) {
     await db
       .update(creditCardPaymentOverrides)
-      .set({ amountCents: data.amountCents, notes: data.notes ?? null, updatedAt: Date.now() })
+      .set({ amountCents: data.amountCents, notes: data.notes ?? null, trackPosting: true, updatedAt: Date.now() })
       .where(eq(creditCardPaymentOverrides.id, existing.id))
       .run();
     return db
@@ -2426,10 +2428,13 @@ export async function listStartingBalanceDraftsInRange(
   const accountRows = await db
     .select({ id: plaidAccounts.id })
     .from(plaidAccounts)
+    .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.itemId))
     .where(
       and(
         eq(plaidAccounts.userId, userId),
         eq(plaidAccounts.useAsStartingBalance, true),
+        eq(plaidAccounts.type, "depository"),
+        eq(plaidItems.isActive, true),
       ),
     )
     .all();
@@ -2465,6 +2470,27 @@ export async function listStartingBalanceDraftsInRange(
     )
     .orderBy(asc(plaidTransactionDrafts.date))
     .all();
+}
+
+/** Posted payment receipts identify the destination card, never the source
+ * of cash. Projection reconciliation still requires a matching checking debit. */
+export async function listCardPaymentReceipts(userId: string) {
+  const rows = await getDb().select({
+    cardId: creditCards.id, date: plaidTransactionDrafts.date,
+    amountCents: plaidTransactionDrafts.amountCents, kind: plaidTransactionDrafts.kind,
+    description: plaidTransactionDrafts.description, originalDescription: plaidTransactionDrafts.originalDescription,
+    primaryCategory: plaidTransactionDrafts.plaidCategory,
+  }).from(creditCards)
+    .innerJoin(plaidAccounts, eq(plaidAccounts.id, creditCards.plaidAccountId))
+    .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.itemId))
+    .innerJoin(plaidTransactionDrafts, eq(plaidTransactionDrafts.accountId, plaidAccounts.id))
+    .where(and(eq(creditCards.userId, userId), eq(creditCards.isActive, true),
+      eq(plaidItems.isActive, true), eq(plaidAccounts.type, "credit"),
+      eq(plaidTransactionDrafts.userId, userId), eq(plaidTransactionDrafts.status, "approved"),
+      eq(plaidTransactionDrafts.pending, false))).all();
+  return rows.filter((r) => r.amountCents !== 0 && !looksLikeReversal(r.description, r.originalDescription) &&
+    (r.kind === "card_payment" || looksLikeCardPayment(r)))
+    .map((r) => ({ cardId: r.cardId, date: r.date, amountCents: Math.abs(r.amountCents) }));
 }
 
 export type CardTransaction = {
@@ -2908,7 +2934,7 @@ export async function exportAll(userId: string) {
   ]);
   return {
     exportedAt: new Date().toISOString(),
-    schemaVersion: 10,
+    schemaVersion: 11,
     settings: s,
     bills: b,
     billPaymentOverrides: bo,
@@ -3257,6 +3283,8 @@ function importInsideTransaction(
       dueDate: o.dueDate,
       amountCents: o.amountCents,
       notes: o.notes ?? null,
+      // Older JSON backups have no posting metadata: preserve their history.
+      trackPosting: o.trackPosting ?? o.dueDate >= addDaysIso(todayIso("UTC"), -12),
     }).run();
   }
   for (const p of payload.paychecks ?? []) {

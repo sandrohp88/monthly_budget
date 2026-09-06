@@ -834,7 +834,7 @@ export function CalendarClient({
       // A skipped cycle has an override row but no cash — moving it would
       // delete the skip (reviving the chunk) and plant a stray $0 elsewhere.
       if (ev.skipped) return false;
-      if (ev.isPaid || ev.chargedToCardName || iso < today) return false;
+      if (ev.isPaid || ev.awaitingPost || ev.chargedToCardName || iso < today) return false;
       // A real due (has cash), a scheduled paydown, or a plain planned override.
       // A fully-covered $0 slot with no plan of its own is not draggable.
       return (
@@ -1257,7 +1257,7 @@ export function CalendarClient({
     if (!ev.sourceId) return;
     setSavingCardPayment(true);
     try {
-      await deleteCardPaymentOverride(ev.sourceId, iso);
+      await deleteCardPaymentOverride(ev.sourceId, ev.heldSinceDate ?? iso);
       // A moved payment also has a "moved-from" row at its original due date —
       // remove it too so the payment reverts to its natural due date.
       if (ev.relatedDate && ev.relatedDate !== iso) {
@@ -1956,7 +1956,7 @@ export function CalendarClient({
                             {isCardCharge ? "" : credit ? "+" : "−"}
                             <Money cents={displayCents(ev)} />
                           </span>
-                          {isCardPayment && !ev.isPaid && !isPastDay ? (
+                          {isCardPayment && !ev.isPaid && !ev.awaitingPost && !isPastDay ? (
                             isPaydown ? (
                               <Button
                                 size="sm"
@@ -2008,8 +2008,8 @@ export function CalendarClient({
                           !isDueMarker &&
                           !ev.skipped &&
                           !ev.isPaid &&
-                          !isPastDay &&
-                          isScheduledPayment(ev, selectedDate) ? (
+                          (!isPastDay || ev.awaitingPost) &&
+                          isScheduledPayment(ev, ev.heldSinceDate ?? selectedDate) ? (
                             <Button
                               size="sm"
                               variant="ghost"

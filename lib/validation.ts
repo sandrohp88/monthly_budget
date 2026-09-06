@@ -46,7 +46,7 @@ export const draftAllocationsSchema = z.object({
   allocations: z
     .array(
       z.object({
-        targetKind: z.enum(["bill", "extra"]),
+        targetKind: z.enum(["bill", "extra", "card_payment"]),
         targetId: z.string().min(1),
         targetDate: isoDate,
         amountCents: cents.refine((n) => n > 0, "Each portion must be more than zero"),
@@ -610,6 +610,7 @@ const importVariableBillCardSchema = z.object({
 });
 
 const importCreditCardPaymentOverrideSchema = z.object({
+  trackPosting: z.boolean().optional(),
   id: id.optional(),
   cardId: id,
   dueDate: isoDate,

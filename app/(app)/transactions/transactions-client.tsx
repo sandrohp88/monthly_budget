@@ -80,12 +80,14 @@ export function TransactionsClient({
   billMatches,
   bills = [],
   extras = [],
+  plannedCardPayments = [],
 }: {
   initialTransactions: DraftWithAccount[];
   categoryNames: string[];
   billMatches: Record<string, BillMatch>;
   bills?: BillOption[];
   extras?: SplitExtraOption[];
+  plannedCardPayments?: SplitExtraOption[];
 }) {
   const router = useRouter();
   const [transactions, setTransactions] = React.useState(initialTransactions);
@@ -404,12 +406,12 @@ export function TransactionsClient({
                         <Link2 className={cn("h-3.5 w-3.5", txn.linkedBillId && "text-[var(--mint)]")} />
                       </Button>
                     ) : null}
-                    {txn.amountCents > 0 && txn.kind !== "card_payment" ? (
+                    {txn.amountCents > 0 ? (
                       <Button
                         size="icon"
                         variant="ghost"
                         aria-label="Split across obligations"
-                        title="Split this across several bills / one-time expenses"
+                        title="Link or split this across bills, one-time expenses, or planned card payments"
                         onClick={() => openSplit(txn)}
                       >
                         <Split className="h-3.5 w-3.5" />
@@ -461,6 +463,7 @@ export function TransactionsClient({
           initialAllocations={splitAllocations}
           bills={bills}
           extras={extras}
+          cardPayments={plannedCardPayments}
           onClose={() => setSplittingTxn(null)}
         />
       ) : null}
