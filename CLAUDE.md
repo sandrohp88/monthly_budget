@@ -133,7 +133,7 @@ components/
 lib/
   db/
     schema.ts              ← Drizzle table definitions (single source of truth)
-    client.ts              ← getDb() singleton + runMigrations() with self-heal
+    client.ts              ← getDb() singleton + runMigrations() with tracking verification
     migrations/            ← SQL files + meta/_journal.json (HAND-WRITTEN, see §7)
   projection.ts            ← PURE function — never imports server-only stuff
   projection.test.ts       ← 13 vitest cases — keep passing
@@ -299,18 +299,29 @@ This is the most foot-gun-heavy area. Lessons learned the hard way:
 - ❌ **Never delete `_journal.json` entries** — Drizzle uses them to know
   what's been applied.
 
-### Self-heal in `runMigrations()`
+### Migration tracking and drift (no self-heal)
 
-`lib/db/client.ts` wraps `migrate()` in a try/catch that handles the one
-recoverable error — `duplicate column name`. If a migration tries to add a
-column that already exists (because a prior boot applied it but didn't durably
-record the tracking row), the catch handler reads the journal, computes the
-proper SHA-256 hash for each entry, and inserts any missing rows into
-`__drizzle_migrations`. This makes redeploys idempotent.
+Drizzle decides what to run **by timestamp only**: it applies a journal entry
+when its `when` is newer than the newest `__drizzle_migrations.created_at`.
+It never compares hashes. A single tracking row with a wrong `created_at`
+(for example `Date.now()` from a hand-applied fix) therefore makes every later
+migration be **skipped silently**. That happened in production on 2026-09-21:
+0040's row carried `1788725376900` and 0041 was skipped.
 
-You generally don't need to think about this — but if you see weird migration
-errors on the server, check `__drizzle_migrations` against the journal and
-the file hashes (`sha256sum lib/db/migrations/*.sql`).
+`runMigrations()` (`lib/db/client.ts`) therefore:
+- runs `migrate()` once per process and wraps failures with Drizzle's hidden
+  `cause` (e.g. `duplicate column name: …`);
+- then calls `diagnoseMigrationTracking()`, which requires a tracking row for
+  **every** journal entry. It matches by file hash with LF or CRLF line
+  endings, because deploys from Windows recorded CRLF hashes. Anything missing
+  is a startup failure that names the migration and the too-new rowid.
+
+There is **no automatic repair**. The old self-heal marked every journal
+entry applied with `Date.now()` without running its SQL. To repair drift:
+back up, verify the schema effect of each missing migration yourself, apply
+its SQL, and insert its tracking row with `created_at` = **its journal
+`when`** (never `Date.now()`). Note that `__drizzle_migrations.id` is NULL
+(`SERIAL` isn't a SQLite rowid alias); address rows by `rowid` or `created_at`.
 
 ### Snapshot files
 Drizzle stores `meta/NNNN_snapshot.json` next to each migration so
@@ -405,7 +416,7 @@ and fix** — never push past a red check.
 | `Comments inside children section of tag` | JSX literal `// FOO` outside braces — wrap in `{"// FOO"}` |
 | `'X' is defined but never used` | ESLint with `@typescript-eslint/no-unused-vars` — actually remove the import or rename to `_X` |
 | Build fails: `/app/public not found` | `public/` directory is missing — keep at least `public/.gitkeep` |
-| Drizzle "duplicate column name" at runtime | Old `__drizzle_migrations` rows are stale — see §7 self-heal section |
+| `Database migration failed … duplicate column name` or `migrations are out of sync` | Tracking drift — see §7 "Migration tracking and drift"; repair deliberately, never with `Date.now()` |
 
 ---
 
@@ -603,7 +614,7 @@ These bit us before. Don't repeat:
 1. **Do not run `drizzle-kit generate` in the Dockerfile** — it auto-creates spurious migrations
 2. **Container must run as `node` user** (UID 1000) to write the bind-mounted SQLite file
 3. **Migration journal must list every migration file** — Drizzle won't apply unjournaled files
-4. **Drizzle stores SHA-256 of the raw migration file content** in `__drizzle_migrations.hash`, not the tag name
+4. **Drizzle stores SHA-256 of the raw migration file content** in `__drizzle_migrations.hash`, not the tag name, and decides what to run from `created_at` alone. A hand-inserted tracking row must use the migration's journal `when` as `created_at`, never `Date.now()`, or every later migration is skipped (the 2026-09-21 incident).
 5. **Never embed live secrets in committed code** — deploy scripts with credentials are gitignored
 6. **`public/` directory must exist** even if empty (keep `.gitkeep`) — Docker COPY will fail otherwise
 7. **The `.home` TLD requires `tls internal`** in Caddy — Let's Encrypt can't validate it

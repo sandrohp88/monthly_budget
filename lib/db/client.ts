@@ -40,71 +40,92 @@ export function getRawSqlite(): Database.Database {
   return cached.sqlite;
 }
 
+type JournalEntry = { idx: number; tag: string; when: number };
+
+/**
+ * Set once migrations have run and been verified in this process. Migrations
+ * only change with a deploy (a new process), so later calls are free.
+ */
+let migrationsVerified = false;
+
+/**
+ * Apply pending migrations, then prove every journal entry is recorded.
+ *
+ * Why the proof: Drizzle decides what to run by timestamp alone. It applies
+ * only journal entries whose `when` is newer than the newest
+ * `__drizzle_migrations.created_at`. A tracking row with a wrong timestamp
+ * (e.g. `Date.now()` written by a manual fix) makes every later migration be
+ * skipped silently, and the app then fails at query time on a missing column.
+ * That is how 0041 was skipped in production on 2026-09-21 (review R03).
+ *
+ * There is deliberately no automatic repair. The old "self-heal" marked every
+ * journal entry applied without running or checking its SQL. Drift is a clear
+ * startup failure; the fix is a deliberate, verified repair (see CLAUDE.md §7).
+ */
 export function runMigrations() {
   getDb();
   if (!cached) throw new Error("db not initialized");
+  if (migrationsVerified) return;
   const migrationsFolder = path.resolve(process.cwd(), "lib/db/migrations");
   if (!fs.existsSync(migrationsFolder)) return;
   try {
     migrate(cached.db, { migrationsFolder });
   } catch (err) {
-    // SQLite doesn't support ADD COLUMN IF NOT EXISTS, so when a migration
-    // that adds a column runs against a DB that already has the column
-    // (typically after the same migration was applied previously but the
-    // tracking row wasn't durably committed), we self-heal by marking every
-    // journal entry as applied using Drizzle's expected hash format
-    // (SHA256 of the raw migration file bytes).
-    const msg = (err as Error).message ?? "";
-    if (!msg.includes("duplicate column name")) throw err;
-    selfHealMigrationTracking(migrationsFolder);
+    // Drizzle wraps the SQLite error; surface the real cause.
+    const e = err as Error & { cause?: unknown };
+    const cause = e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+    throw new Error(`Database migration failed: ${e.message}${cause}`, { cause: err });
   }
+  const problems = diagnoseMigrationTracking(cached.sqlite, migrationsFolder);
+  if (problems.length > 0) {
+    throw new Error(`Database migrations are out of sync:\n- ${problems.join("\n- ")}`);
+  }
+  migrationsVerified = true;
 }
 
-function selfHealMigrationTracking(migrationsFolder: string) {
-  if (!cached) return;
-  const sqlite = cached.sqlite;
-  sqlite.exec(
-    "CREATE TABLE IF NOT EXISTS __drizzle_migrations " +
-      "(id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL, created_at INTEGER)"
-  );
+/** Drizzle's hash: SHA-256 of the migration file bytes. */
+function sha256(text: string): string {
+  return crypto.createHash("sha256").update(text).digest("hex");
+}
 
+/**
+ * Compare the journal with `__drizzle_migrations`. Returns one message per
+ * journal entry that has no tracking row, plus a hint naming any tracking row
+ * whose timestamp would make Drizzle skip it. Empty means in sync.
+ *
+ * Hashes are compared with LF and CRLF line endings, because deploys from
+ * Windows and Linux checkouts record different bytes for the same migration.
+ */
+export function diagnoseMigrationTracking(
+  sqlite: Database.Database,
+  migrationsFolder: string,
+): string[] {
   const journalPath = path.join(migrationsFolder, "meta", "_journal.json");
-  if (!fs.existsSync(journalPath)) return;
+  const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as { entries: JournalEntry[] };
+  const rows = sqlite
+    // rowid, not id: Drizzle declares `id SERIAL PRIMARY KEY`, which SQLite
+    // does not treat as an integer rowid alias, so `id` is NULL on every row.
+    .prepare("SELECT rowid AS rowid, hash, created_at AS createdAt FROM __drizzle_migrations")
+    .all() as Array<{ rowid: number; hash: string; createdAt: number }>;
+  const tracked = new Set(rows.map((r) => r.hash));
 
-  const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
-    entries: Array<{ tag: string }>;
-  };
+  const missing = journal.entries.filter((entry) => {
+    const lf = fs.readFileSync(path.join(migrationsFolder, `${entry.tag}.sql`), "utf8").replace(/\r\n/g, "\n");
+    return !tracked.has(sha256(lf)) && !tracked.has(sha256(lf.replace(/\n/g, "\r\n")));
+  });
+  if (missing.length === 0) return [];
 
-  const existing = new Set(
-    sqlite
-      .prepare("SELECT hash FROM __drizzle_migrations")
-      .all()
-      .map((r) => (r as { hash: string }).hash)
-  );
-
-  const insert = sqlite.prepare(
-    "INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)"
-  );
-
-  for (const entry of journal.entries) {
-    const sqlPath = path.join(migrationsFolder, `${entry.tag}.sql`);
-    if (!fs.existsSync(sqlPath)) continue;
-    const buf = fs.readFileSync(sqlPath);
-    const hash = crypto.createHash("sha256").update(buf).digest("hex");
-    if (!existing.has(hash)) {
-      insert.run(hash, Date.now());
-    }
+  const problems = missing.map((m) => `${m.tag} was not applied`);
+  const firstMissing = Math.min(...missing.map((m) => m.when));
+  const blockers = rows.filter((r) => r.createdAt >= firstMissing);
+  for (const r of blockers) {
+    problems.push(
+      `__drizzle_migrations rowid ${r.rowid} has created_at ${r.createdAt}, newer than ` +
+        `${missing[0]!.tag} (${firstMissing}); Drizzle skips migrations older than the ` +
+        `newest row. Set that row's created_at to its own journal "when", then restart.`,
+    );
   }
-
-  // Promote the earliest user to admin if not already (covers the role migration's UPDATE
-  // statement that may have been skipped when ALTER TABLE failed mid-script).
-  sqlite
-    .prepare(
-      "UPDATE users SET role = 'admin' WHERE role = 'member' " +
-        "AND id = (SELECT id FROM users ORDER BY created_at ASC LIMIT 1) " +
-        "AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')"
-    )
-    .run();
+  return problems;
 }
 
 export { schema };
@@ -117,6 +138,7 @@ export { schema };
  * NEVER call this from production code paths.
  */
 export function __resetDbCacheForTests(): void {
+  migrationsVerified = false;
   if (cached) {
     try {
       cached.sqlite.close();
