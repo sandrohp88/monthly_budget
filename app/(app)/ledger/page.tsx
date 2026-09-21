@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { requirePageUser } from "@/lib/auth";
 import { buildProjection } from "@/lib/projection-server";
 import { DateLabel } from "@/components/date-label";
 import { ProjectionClient } from "../projection/projection-client";
@@ -14,9 +14,7 @@ export default async function LedgerPage({
 }: {
   searchParams: Promise<{ tab?: string }>;
 }) {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) redirect("/login");
+  const { id: userId } = await requirePageUser();
 
   const [projection, reportsData, sp] = await Promise.all([
     buildProjection(userId),

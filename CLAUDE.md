@@ -355,6 +355,8 @@ weird gets emitted before merging.
 - `0037_draft_allocations` — `draft_allocations` table: how ONE posted transaction divides across the obligations it paid (bill occurrences and/or one-time expenses). Allocations are exhaustive for their draft. See §17 "Splitting one transaction".
 - `0038_live_balance_refresh` — `plaid_items.balance_refreshed_at`: throttle state for the live `/accounts/balance/get` pull (a PAID, per-item rate-limited call), stamped on every attempt including failures. NOT a freshness signal. See §17 "Cached vs live balances".
 - `0039_transactions_refresh` — `plaid_items.transactions_refreshed_at`: same throttle contract for `/transactions/refresh`. Separate column because the two calls sit at different points in the sync and have different Plaid limits. See §17 "The ledger must be as fresh as the balance".
+- `0040_track_planned_payment_posting` — `credit_card_payment_overrides.track_posting` (see §17 posting-aware reservations).
+- `0041_user_session_version` — `users.session_version`: revocable sessions. The JWT carries the version it was issued at; `lib/session-user.ts` rejects mismatches, deleted users and stale roles.
 
 ---
 

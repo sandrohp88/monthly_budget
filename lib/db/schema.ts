@@ -15,6 +15,13 @@ export const users = sqliteTable(
     passwordHash: text("password_hash").notNull(),
     displayName: text("display_name").notNull(),
     role: text("role", { enum: ["admin", "member"] }).notNull().default("member"),
+    /**
+     * Bumped whenever existing sessions must stop working (password or role
+     * change). The JWT records the value it was issued at; lib/session-user.ts
+     * rejects a token whose version no longer matches. Deleting the user
+     * revokes too, because the lookup then finds no row.
+     */
+    sessionVersion: integer("session_version").notNull().default(0),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
@@ -526,7 +533,7 @@ export const categories = sqliteTable("categories", {
 });
 
 export type UserRow = typeof users.$inferSelect;
-export type UserSafe = Omit<UserRow, "passwordHash">;
+export type UserSafe = Omit<UserRow, "passwordHash" | "sessionVersion">;
 export type SettingsRow = typeof settings.$inferSelect;
 export type PaycheckRow = typeof paychecks.$inferSelect;
 export type BillRow = typeof bills.$inferSelect;

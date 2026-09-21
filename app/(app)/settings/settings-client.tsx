@@ -576,10 +576,10 @@ function AccountCard({ currentUser }: { currentUser: CurrentUser }) {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "save failed");
-      toast.success("Password changed");
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
+      // A password change revokes every session, this one included.
+      toast.success("Password changed. Sign in with your new password.");
+      const { signOut } = await import("next-auth/react");
+      await signOut({ callbackUrl: "/login" });
     } catch (e) {
       toast.error((e as Error).message);
     } finally {

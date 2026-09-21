@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { auth } from "@/lib/auth";
+import { requirePageUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { buildProjection } from "@/lib/projection-server";
 import { listPaychecks, listPromos, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance, getSettings } from "@/lib/repos";
@@ -58,9 +58,7 @@ const CARD_DUE_ALERT_DAYS = 14;
 const CARD_DUE_URGENT_DAYS = 7;
 
 export default async function DashboardPage() {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) redirect("/login");
+  const { id: userId } = await requirePageUser();
 
   const [projection, settings] = await Promise.all([
     buildProjection(userId),

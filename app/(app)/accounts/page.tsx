@@ -1,5 +1,4 @@
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { requirePageUser } from "@/lib/auth";
 import {
   listPlaidItems,
   listPlaidAccountsByItem,
@@ -12,9 +11,7 @@ import { AccountsClient } from "./accounts-client";
 export const dynamic = "force-dynamic";
 
 export default async function AccountsPage() {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) redirect("/login");
+  const { id: userId } = await requirePageUser();
 
   const [items, cards] = await Promise.all([
     listPlaidItems(userId),

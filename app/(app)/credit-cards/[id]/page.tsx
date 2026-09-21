@@ -1,5 +1,5 @@
-import { notFound, redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { notFound } from "next/navigation";
+import { requirePageUser } from "@/lib/auth";
 import {
   getCreditCard,
   getSettings,
@@ -26,9 +26,7 @@ export default async function CreditCardDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) redirect("/login");
+  const { id: userId } = await requirePageUser();
 
   const { id } = await params;
   const card = await getCreditCard(userId, id);

@@ -1,5 +1,4 @@
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { requirePageUser } from "@/lib/auth";
 import { buildProjection } from "@/lib/projection-server";
 import {
   getSettings,
@@ -15,9 +14,7 @@ import { BillsClient, type LastPaid } from "./bills-client";
 export const dynamic = "force-dynamic";
 
 export default async function BillsPage() {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) redirect("/login");
+  const { id: userId } = await requirePageUser();
 
   const [bills, variableBills, categories, cards, overrides, projection, settings] =
     await Promise.all([
