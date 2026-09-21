@@ -95,6 +95,39 @@ export const creditCardPaymentOverrideSchema = z.object({
   notes: z.string().max(500).nullable().optional(),
 });
 
+/**
+ * One atomic change to planned card payments. The calendar's move, edit,
+ * plan and reset actions each touch several rows; sending them as one batch
+ * lets the server apply all or nothing (review 2026-09-21 R06).
+ *
+ * put: `replace` says the caller knows the row at that date is its own. A put
+ * onto an occupied date without it is a conflict, never a silent overwrite.
+ * delete: `mustExist` makes a vanished row a conflict (stale view), so a move
+ * can't resurrect a payment someone already removed.
+ */
+export const cardPaymentOpSchema = z.discriminatedUnion("op", [
+  z.object({
+    op: z.literal("put"),
+    cardId: z.string().min(1).max(64),
+    dueDate: isoDate,
+    amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
+    notes: z.string().max(500).nullable().optional(),
+    replace: z.boolean().optional(),
+  }),
+  z.object({
+    op: z.literal("delete"),
+    cardId: z.string().min(1).max(64),
+    dueDate: isoDate,
+    mustExist: z.boolean().optional(),
+  }),
+]);
+
+export const cardPaymentBatchSchema = z.object({
+  ops: z.array(cardPaymentOpSchema).min(1).max(10),
+});
+
+export type CardPaymentOp = z.infer<typeof cardPaymentOpSchema>;
+
 export const paycheckCreateSchema = z.object({
   payDate: isoDate,
   amountCents: cents,

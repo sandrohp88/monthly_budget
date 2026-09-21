@@ -807,6 +807,77 @@ export async function deleteCreditCardPaymentOverride(
     .run();
 }
 
+/** A batch op that can't be applied as the caller expected. Maps to 409. */
+export class CardPaymentConflictError extends Error {}
+
+/**
+ * Apply a calendar card-payment change as ONE transaction: every op or none.
+ * Replaces client-side DELETE-then-PUT sequences, where a failure between
+ * requests deleted the original payment or left half a move (R06).
+ *
+ * Checks, all inside the transaction:
+ *   - every card belongs to the user (else "not found");
+ *   - `put` onto an existing row requires `replace` (collision policy);
+ *   - `delete` with `mustExist` requires the row (stale-state check).
+ * Ops apply in order, so delete-then-put on the same date is a clean move.
+ */
+export function applyCardPaymentOps(userId: string, ops: CardPaymentOp[]): void {
+  const db = getDb();
+  db.transaction((tx) => {
+    const owned = new Set(
+      tx
+        .select({ id: creditCards.id })
+        .from(creditCards)
+        .where(eq(creditCards.userId, userId))
+        .all()
+        .map((c) => c.id),
+    );
+    for (const op of ops) {
+      if (!owned.has(op.cardId)) throw new CardPaymentConflictError("card not found");
+      const where = and(
+        eq(creditCardPaymentOverrides.userId, userId),
+        eq(creditCardPaymentOverrides.cardId, op.cardId),
+        eq(creditCardPaymentOverrides.dueDate, op.dueDate),
+      );
+      const existing = tx.select().from(creditCardPaymentOverrides).where(where).get();
+      if (op.op === "delete") {
+        if (!existing) {
+          if (op.mustExist) {
+            throw new CardPaymentConflictError(
+              "That payment changed since you opened it. Refresh and try again.",
+            );
+          }
+          continue;
+        }
+        tx.delete(creditCardPaymentOverrides).where(eq(creditCardPaymentOverrides.id, existing.id)).run();
+        continue;
+      }
+      if (existing) {
+        if (!op.replace) {
+          throw new CardPaymentConflictError(
+            `A payment is already planned for this card on ${op.dueDate}. Edit that payment instead.`,
+          );
+        }
+        tx.update(creditCardPaymentOverrides)
+          .set({ amountCents: op.amountCents, notes: op.notes ?? null, trackPosting: true, updatedAt: Date.now() })
+          .where(eq(creditCardPaymentOverrides.id, existing.id))
+          .run();
+        continue;
+      }
+      tx.insert(creditCardPaymentOverrides)
+        .values({
+          id: newId(),
+          userId,
+          cardId: op.cardId,
+          dueDate: op.dueDate,
+          amountCents: op.amountCents,
+          notes: op.notes ?? null,
+        })
+        .run();
+    }
+  });
+}
+
 export async function listPaychecks(userId: string, includeArchived = false): Promise<PaycheckRow[]> {
   const db = getDb();
   const conditions = [eq(paychecks.userId, userId)];
@@ -2976,7 +3047,7 @@ export async function exportAll(userId: string) {
   };
 }
 
-import { BACKUP_SCHEMA_VERSION, type BackupImportInput } from "./validation";
+import { BACKUP_SCHEMA_VERSION, type BackupImportInput, type CardPaymentOp } from "./validation";
 
 /** Rows per collection: what a restore would delete vs. insert. */
 export type ImportPreview = {

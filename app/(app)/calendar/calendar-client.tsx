@@ -38,6 +38,7 @@ import { showsPostedBalance } from "@/lib/soft-balance";
 import { BillForm, type BillFormValues } from "../bills/bill-form";
 import { cardPaymentLateWarning, cardPaymentMoveError } from "@/lib/card-payments";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
+import type { CardPaymentOp } from "@/lib/validation";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -1118,29 +1119,18 @@ export function CalendarClient({
     }
   };
 
-  const putCardPaymentOverride = async (
-    cardId: string,
-    dueDate: string,
-    amountCents: number,
-    notes?: string | null,
-  ) => {
-    const res = await fetch(`/api/credit-cards/${cardId}/payment-overrides`, {
-      method: "PUT",
+  // Every multi-row card-payment change goes to the server as ONE batch that
+  // is applied in a single transaction: all or nothing, with collision and
+  // stale-state checks (review 2026-09-21 R06). Never sequence separate
+  // DELETE/PUT requests here: a failure between them loses the payment.
+  const applyCardPaymentOps = async (ops: CardPaymentOp[]) => {
+    const res = await fetch("/api/credit-cards/payment-overrides/batch", {
+      method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ dueDate, amountCents, notes }),
+      body: JSON.stringify({ ops }),
     });
     const json = await res.json();
     if (!res.ok) throw new Error(json.error ?? "save failed");
-  };
-
-  const deleteCardPaymentOverride = async (cardId: string, dueDate: string) => {
-    const qs = new URLSearchParams({ dueDate });
-    const res = await fetch(
-      `/api/credit-cards/${cardId}/payment-overrides?${qs}`,
-      { method: "DELETE" },
-    );
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error ?? "reset failed");
   };
 
   const saveScheduledPayment = async (
@@ -1152,15 +1142,21 @@ export function CalendarClient({
   ) => {
     setSavingCardPayment(true);
     try {
-      if (previous && (previous.cardId !== cardId || previous.date !== date)) {
-        await deleteCardPaymentOverride(previous.cardId, previous.date);
+      const sameRow = previous?.cardId === cardId && previous.date === date;
+      const ops: CardPaymentOp[] = [];
+      if (previous && !sameRow) {
+        // Moving: the source must still exist, or we'd resurrect a deleted plan.
+        ops.push({ op: "delete", cardId: previous.cardId, dueDate: previous.date, mustExist: true });
       }
-      await putCardPaymentOverride(
+      ops.push({
+        op: "put",
         cardId,
-        date,
+        dueDate: date,
         amountCents,
-        targetDate ? `pays-down:${targetDate}` : null,
-      );
+        notes: targetDate ? `pays-down:${targetDate}` : null,
+        replace: sameRow,
+      });
+      await applyCardPaymentOps(ops);
       toast.success("Card payment scheduled");
       setSchedulingPayment(null);
       setSelectedDate(null);
@@ -1175,7 +1171,7 @@ export function CalendarClient({
   const removeScheduledPayment = async (cardId: string, date: string) => {
     setSavingCardPayment(true);
     try {
-      await deleteCardPaymentOverride(cardId, date);
+      await applyCardPaymentOps([{ op: "delete", cardId, dueDate: date }]);
       toast.success("Scheduled payment removed");
       setSchedulingPayment(null);
       setSelectedDate(null);
@@ -1196,33 +1192,47 @@ export function CalendarClient({
     try {
       const originalDate = plan.relatedDate ?? plan.dueDate;
       const moved = plannedDate !== originalDate;
+      // Rows at the plan's own dates belong to this plan and may be replaced;
+      // any other date must be free (collision policy).
+      const own = new Set([plan.dueDate, plan.relatedDate].filter(Boolean));
+      const put = (dueDate: string, cents: number, notes: string | null): CardPaymentOp => ({
+        op: "put",
+        cardId: plan.cardId,
+        dueDate,
+        amountCents: cents,
+        notes,
+        replace: own.has(dueDate),
+      });
+      const ops: CardPaymentOp[] = [];
       if (amountCents === 0) {
         // A $0 plan is a per-cycle SKIP: nothing leaves checking, the balance
         // stays owed. It lives on the chunk's own date — for a moved payment
         // that's originalDate, not the moved row's date — and clears any
         // moved-payment rows so the vacated cycle can't silently revive.
-        await putCardPaymentOverride(plan.cardId, originalDate, 0, null);
+        ops.push(put(originalDate, 0, null));
         if (plan.dueDate !== originalDate) {
-          await deleteCardPaymentOverride(plan.cardId, plan.dueDate);
+          ops.push({ op: "delete", cardId: plan.cardId, dueDate: plan.dueDate });
         }
       } else if (moved) {
         // Pay earlier than the issuer due date: leave a vacate marker on the due
         // date and put the real payment on the chosen day (linked back so it
-        // still counts against that due date's balance).
-        await putCardPaymentOverride(plan.cardId, originalDate, 0, `moved-to:${plannedDate}`);
-        await putCardPaymentOverride(plan.cardId, plannedDate, amountCents, `moved-from:${originalDate}`);
+        // still counts against that due date's balance). Clear a previous
+        // moved row first so re-moving the same plan isn't a collision.
         if (plan.dueDate !== originalDate && plan.dueDate !== plannedDate) {
-          await deleteCardPaymentOverride(plan.cardId, plan.dueDate);
+          ops.push({ op: "delete", cardId: plan.cardId, dueDate: plan.dueDate });
         }
+        ops.push(put(originalDate, 0, `moved-to:${plannedDate}`));
+        ops.push(put(plannedDate, amountCents, `moved-from:${originalDate}`));
       } else {
         // Pay on the due date. A card is no longer force-paid by default, so a
         // scheduled payment (even the full balance) is always written as an
         // override — that's the cash that actually leaves checking.
-        await putCardPaymentOverride(plan.cardId, plannedDate, amountCents, null);
         if (plan.dueDate !== plannedDate) {
-          await deleteCardPaymentOverride(plan.cardId, plan.dueDate);
+          ops.push({ op: "delete", cardId: plan.cardId, dueDate: plan.dueDate });
         }
+        ops.push(put(plannedDate, amountCents, null));
       }
+      await applyCardPaymentOps(ops);
       toast.success("Card payment plan saved");
       setPlanningCardPayment(null);
       setSelectedDate(null);
@@ -1240,7 +1250,9 @@ export function CalendarClient({
       const dates = new Set(
         [plan.dueDate, plan.relatedDate].filter((date): date is string => Boolean(date)),
       );
-      for (const date of dates) await deleteCardPaymentOverride(plan.cardId, date);
+      await applyCardPaymentOps(
+        [...dates].map((dueDate) => ({ op: "delete" as const, cardId: plan.cardId, dueDate })),
+      );
       toast.success("Card payment plan reset");
       setPlanningCardPayment(null);
       setSelectedDate(null);
@@ -1257,12 +1269,15 @@ export function CalendarClient({
     if (!ev.sourceId) return;
     setSavingCardPayment(true);
     try {
-      await deleteCardPaymentOverride(ev.sourceId, ev.heldSinceDate ?? iso);
+      const ops: CardPaymentOp[] = [
+        { op: "delete", cardId: ev.sourceId, dueDate: ev.heldSinceDate ?? iso },
+      ];
       // A moved payment also has a "moved-from" row at its original due date —
       // remove it too so the payment reverts to its natural due date.
       if (ev.relatedDate && ev.relatedDate !== iso) {
-        await deleteCardPaymentOverride(ev.sourceId, ev.relatedDate);
+        ops.push({ op: "delete", cardId: ev.sourceId, dueDate: ev.relatedDate });
       }
+      await applyCardPaymentOps(ops);
       toast.success("Scheduled payment deleted");
       setSelectedDate(null);
       router.refresh();
