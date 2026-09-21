@@ -8,6 +8,8 @@ import {
 } from "@/lib/repos";
 import { isPushConfigured, vapidPublicKey } from "@/lib/push";
 
+const MAX_SUBSCRIPTIONS_PER_USER = 10;
+
 /** Push status for the settings page: server config + this user's devices. */
 export async function GET() {
   const auth = await ensureUser();
@@ -26,6 +28,12 @@ export async function POST(req: Request) {
   if (auth instanceof NextResponse) return auth;
   const data = await readJson(req, pushSubscribeSchema);
   if (data instanceof NextResponse) return data;
+  // A person has a handful of browsers; cap rows so one account can't fan
+  // the hourly dispatcher out to thousands of endpoints.
+  const existing = await listPushSubscriptions(auth.userId);
+  if (existing.length >= MAX_SUBSCRIPTIONS_PER_USER && !existing.some((s) => s.endpoint === data.endpoint)) {
+    return jsonError(`at most ${MAX_SUBSCRIPTIONS_PER_USER} devices can receive notifications`, 409);
+  }
   try {
     await upsertPushSubscription(auth.userId, {
       endpoint: data.endpoint,
