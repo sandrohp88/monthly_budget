@@ -178,14 +178,27 @@ export async function updateUserProfile(
   if (patch.displayName !== undefined) update.displayName = patch.displayName;
   if (patch.role !== undefined) update.role = patch.role;
   if (Object.keys(update).length === 0) return (await listUsers()).find((u) => u.id === id);
-  await db.update(users).set(update).where(eq(users.id, id)).run();
+  // A role change revokes the user's existing sessions (lib/session-user.ts);
+  // a display-name edit does not.
+  const current = patch.role !== undefined ? await getUserById(id) : undefined;
+  const bump = current !== undefined && current.role !== patch.role;
+  await db
+    .update(users)
+    .set(bump ? { ...update, sessionVersion: sql`${users.sessionVersion} + 1` } : update)
+    .where(eq(users.id, id))
+    .run();
   return (await listUsers()).find((u) => u.id === id);
 }
 
 export async function updateUserPassword(id: string, newPassword: string): Promise<void> {
   const db = getDb();
   const hash = await hashPassword(newPassword);
-  await db.update(users).set({ passwordHash: hash }).where(eq(users.id, id)).run();
+  // Revoke every existing session for this user, including the caller's.
+  await db
+    .update(users)
+    .set({ passwordHash: hash, sessionVersion: sql`${users.sessionVersion} + 1` })
+    .where(eq(users.id, id))
+    .run();
 }
 
 export async function deleteUser(id: string): Promise<void> {

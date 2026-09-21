@@ -288,6 +288,13 @@
       "when": 1784001600010,
       "tag": "0040_track_planned_payment_posting",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1784001600011,
+      "tag": "0041_user_session_version",
+      "breakpoints": true
     }
   ]
 }

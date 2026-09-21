@@ -1,3 +1,5 @@
+import { cache } from "react";
+import { redirect } from "next/navigation";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import argon2 from "argon2";
@@ -6,6 +8,7 @@ import { getDb } from "./db/client";
 import { users } from "./db/schema";
 import { loginSchema } from "./validation";
 import authConfig from "../auth.config";
+import { resolveSessionUser, type SessionUser } from "./session-user";
 
 // Rate limiting lives in middleware.ts (per real client IP) — the
 // Credentials authorize() callback runs server-side without request headers,
@@ -37,7 +40,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const ok = await argon2.verify(row.passwordHash, parsed.data.password);
         if (!ok) return null;
 
-        return { id: row.id, email: row.email, name: row.displayName, role: row.role };
+        return {
+          id: row.id,
+          email: row.email,
+          name: row.displayName,
+          sessionVersion: row.sessionVersion,
+        };
       },
     }),
   ],
@@ -47,10 +55,26 @@ export async function hashPassword(plain: string): Promise<string> {
   return argon2.hash(plain, { type: argon2.argon2id, memoryCost: 19_456, timeCost: 2 });
 }
 
-export async function getCurrentUserId(): Promise<string | null> {
+/**
+ * The signed-in user, verified against the database (deleted users, revoked
+ * sessions and stale roles all resolve to null / the current role). Every
+ * API route and server page must authorize through this — never through
+ * `auth()`'s session object directly. Memoized per request.
+ */
+export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   const session = await auth();
-  const id = (session?.user as { id?: string } | undefined)?.id;
-  return id ?? null;
+  return resolveSessionUser(session?.user as { id?: string; sv?: number } | undefined);
+});
+
+/** Server pages: the current user, or a redirect to /login. */
+export async function requirePageUser(): Promise<SessionUser> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+  return user;
+}
+
+export async function getCurrentUserId(): Promise<string | null> {
+  return (await getCurrentUser())?.id ?? null;
 }
 
 export async function requireUserId(): Promise<string> {
@@ -60,13 +84,12 @@ export async function requireUserId(): Promise<string> {
 }
 
 export async function getCurrentUserRole(): Promise<string> {
-  const session = await auth();
-  return (session?.user as { role?: string } | undefined)?.role ?? "member";
+  return (await getCurrentUser())?.role ?? "member";
 }
 
 export async function requireAdmin(): Promise<string> {
-  const [id, role] = await Promise.all([getCurrentUserId(), getCurrentUserRole()]);
-  if (!id) throw new Error("not authenticated");
-  if (role !== "admin") throw new Error("forbidden");
-  return id;
+  const user = await getCurrentUser();
+  if (!user) throw new Error("not authenticated");
+  if (user.role !== "admin") throw new Error("forbidden");
+  return user.id;
 }

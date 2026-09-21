@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { runMigrations } from "@/lib/db/client";
-import { auth } from "@/lib/auth";
+import { requirePageUser } from "@/lib/auth";
 import { getSettings, userExists } from "@/lib/repos";
 import { log } from "@/lib/log";
 import { AppShell, type SidebarSummary } from "@/components/app-shell";
@@ -12,13 +12,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   runMigrations();
   if (!(await userExists())) redirect("/setup");
 
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) redirect("/login");
+  const user = await requirePageUser();
+  const userId = user.id;
 
   const settings = await getSettings(userId);
-  const displayName = session?.user?.name ?? "there";
-  const role = (session?.user as { role?: string } | undefined)?.role ?? "MEMBER";
+  const displayName = user.displayName || "there";
+  const role = user.role;
 
   // Compact projection summary for the sidebar widget. `buildProjection` is
   // deduped per-request via React.cache, so this doesn't double the work on

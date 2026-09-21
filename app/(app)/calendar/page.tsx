@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { requirePageUser } from "@/lib/auth";
 import { buildProjection } from "@/lib/projection-server";
 import {
   getSettings,
@@ -14,9 +14,7 @@ import { CalendarClient } from "./calendar-client";
 export const dynamic = "force-dynamic";
 
 export default async function CalendarPage() {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) redirect("/login");
+  const { id: userId } = await requirePageUser();
 
   const [projection, categories, cards, overrides, settings, accounts] = await Promise.all([
     buildProjection(userId),
