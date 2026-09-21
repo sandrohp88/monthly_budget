@@ -24,6 +24,8 @@ import {
   updateStatement,
   settleStatementWithDraft,
   getStatementSettledByDraft,
+  findInvalidSplitDraftIds,
+  reopenPaycheckSettledByDraft,
   updatePlaidDraft,
   deletePlaidDraft,
   listStatements,
@@ -740,6 +742,17 @@ export async function syncPlaidTransactions(
             totalStatementsReconciled++;
           }
           await supersedePendingPredecessor(userId, txn);
+          // A corrected amount or sign can leave a user's split claiming more
+          // than the transaction now proves. Reconciliation already credits
+          // such a split nothing (splitIsValid); say so, and Transactions
+          // flags it for review. Never silently rewrite the user's split.
+          if ((await findInvalidSplitDraftIds(userId, [txn.transaction_id])).size > 0) {
+            log.warn(
+              `plaid-sync: transaction ${txn.transaction_id} changed to ` +
+                `${amountCents} cents and its split no longer fits — ` +
+                `split ignored until the user reviews it`,
+            );
+          }
           modified++;
         }
 
@@ -766,6 +779,15 @@ export async function syncPlaidTransactions(
               `plaid-sync: transaction ${removedTxn.transaction_id} was removed by Plaid but had ` +
                 `settled statement ${settledStmt.id} — statement re-opened; if this card has active ` +
                 `promos, their remaining balances may need manual reconciliation`,
+            );
+          }
+          // Same rule for a deposit that had settled a paycheck: the money it
+          // proved no longer exists, so the paycheck is expected again.
+          const reopenedPaycheck = await reopenPaycheckSettledByDraft(userId, removedTxn.transaction_id);
+          if (reopenedPaycheck) {
+            log.warn(
+              `plaid-sync: transaction ${removedTxn.transaction_id} was removed by Plaid but had ` +
+                `settled paycheck ${reopenedPaycheck.id} (${reopenedPaycheck.payDate}) — paycheck re-opened`,
             );
           }
           await deletePlaidDraft(userId, removedTxn.transaction_id);

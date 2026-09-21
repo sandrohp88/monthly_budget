@@ -1,5 +1,5 @@
 import { daysBetween } from "./dates";
-import { draftNamesBill, type ReconcilableDraft } from "./bill-reconciliation";
+import { draftNamesBill, splitIsValid, type ReconcilableDraft } from "./bill-reconciliation";
 
 export type PlannedCardPayment = {
   cardId: string;
@@ -28,7 +28,9 @@ export function reconcilePlannedCardPayments(
   const planKeys = new Set(plans.map((p) => cardPaymentKey(p.cardId, p.date)));
   const explicitlyAssigned = new Set<string>();
   for (const d of drafts) {
-    if (d.amountCents <= 0) continue;
+    // A split the bank has since invalidated credits nothing (see splitIsValid);
+    // the draft still stays out of the heuristic pass below.
+    if (!splitIsValid(d)) continue;
     for (const a of d.allocations ?? []) {
       if (a.targetKind !== "card_payment") continue;
       const key = cardPaymentKey(a.targetId, a.targetDate);
