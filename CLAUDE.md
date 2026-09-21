@@ -533,6 +533,13 @@ INTEREST AlertBar (`findUncoveredCardDues`). Moving parts:
   `components/push-notifications-card.tsx` on /settings (enable / disable /
   send test per device).
 
+- **Offline caching rule:** `public/sw.js` caches **public static assets only**
+  (`/_next/static/*`, `/icons/*`, `/manifest.json`, `/offline.html`). Never
+  cache page HTML, RSC or `/api/` responses: CacheStorage is per origin, not
+  per user, and survives logout. Offline navigations get `/offline.html`. When
+  you change what is cached, bump `CACHE_NAME`; activation deletes every other
+  cache. Sign-out goes through `lib/client-signout.ts`, which also clears caches.
+
 ---
 
 ## 12. Security
