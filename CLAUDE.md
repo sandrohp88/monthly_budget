@@ -557,7 +557,12 @@ INTEREST AlertBar (`findUncoveredCardDues`). Moving parts:
 7. **Sidebar** — add nav entry in `components/sidebar.tsx` with a unique shortcut
 8. **Crumb** — add to `ROUTE_TO_CRUMB` in `components/app-shell.tsx`
 9. **Projection** — if it affects cash flow, inject as `extras` in `lib/projection-server.ts`
-10. **Export/import** — extend `exportAll()` and `importAll()` in `lib/repos.ts`, bump `schemaVersion`
+10. **Export/import** — extend `exportAll()`, the `import*Schema` in `lib/validation.ts` **and**
+    `importInsideTransaction()` in `lib/repos.ts`, then bump `BACKUP_SCHEMA_VERSION`. Every new
+    user-authored column must survive the round trip — `lib/repos.import.test.ts` ("semantic round
+    trip") compares export → import → export and the projection; extend its seed. Import is
+    two-step: `POST /api/backup/import` previews, `?confirm=1` snapshots to `data/pre-import/`
+    and then replaces.
 11. **README** — update the deploy guide if needed
 12. `npm run check` then commit
 

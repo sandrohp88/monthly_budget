@@ -557,22 +557,33 @@ export type PlaidLinkCardInput = z.infer<typeof plaidLinkCardSchema>;
 const id = z.string().min(1).max(64);
 const optionalNotes = z.string().max(500).nullable().optional();
 
-const importBillSchema = z.object({
-  id: id.optional(),
-  name: z.string().min(1).max(80),
-  category: z.string().min(1).max(50).optional(),
-  amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
-  intervalMonths: z.number().int().min(1).max(120).optional(),
-  anchorDate: isoDate.optional(),
-  // Legacy fields tolerated for old backups (see migration 0006).
-  frequency: z.enum(["monthly", "annual"]).optional(),
-  dueDay: z.number().int().min(1).max(31).optional(),
-  dueMonth: z.number().int().min(1).max(12).nullable().optional(),
-  autoPay: z.boolean().optional(),
-  paidViaCardId: id.nullable().optional(),
-  notes: optionalNotes,
-  isActive: z.boolean().optional(),
-});
+const importBillSchema = z
+  .object({
+    id: id.optional(),
+    name: z.string().min(1).max(80),
+    category: z.string().min(1).max(50).optional(),
+    amountCents: cents.refine((n) => n >= 0, "Amount must be non-negative"),
+    intervalMonths: z.number().int().min(1).max(120).optional(),
+    anchorDate: isoDate.optional(),
+    // Legacy fields tolerated for old backups (see migration 0006).
+    frequency: z.enum(["monthly", "annual"]).optional(),
+    dueDay: z.number().int().min(1).max(31).optional(),
+    dueMonth: z.number().int().min(1).max(12).nullable().optional(),
+    autoPay: z.boolean().optional(),
+    paidViaCardId: id.nullable().optional(),
+    matchAlias: z.string().max(200).nullable().optional(),
+    notes: optionalNotes,
+    isActive: z.boolean().optional(),
+  })
+  // A bill with no usable recurrence used to pass validation and then be
+  // silently skipped on insert — a quiet data loss. Reject it up front.
+  .refine(
+    (b) =>
+      (b.intervalMonths !== undefined && b.anchorDate !== undefined) ||
+      (b.frequency === "monthly" && b.dueDay !== undefined) ||
+      (b.frequency === "annual" && b.dueDay !== undefined && typeof b.dueMonth === "number"),
+    "Bill needs intervalMonths + anchorDate (or a legacy frequency/dueDay)",
+  );
 
 const importBillOverrideSchema = z.object({
   id: id.optional(),
@@ -625,6 +636,7 @@ const importPaycheckSchema = z.object({
   note: z.string().max(120).nullable().optional(),
   actualReceived: z.boolean().optional(),
   actualAmountCents: cents.nullable().optional(),
+  actualDate: isoDate.nullable().optional(),
   // Plaid transaction_id of the deposit that settled this paycheck. Must
   // round-trip through backup/restore or every deposit becomes re-spendable
   // after an import (same rule as the statement settledByDraftId below).
@@ -659,7 +671,9 @@ const importCreditCardSchema = z.object({
   statementCycleAnchorDate: isoDate.nullable().optional(),
   statementCycleIntervalDays: z.number().int().min(1).max(366).optional(),
   dueDay: z.number().int().min(1).max(31),
+  gracePeriodDays: z.number().int().min(0).max(60).optional(),
   currentBalanceCents: cents.nullable().optional(),
+  creditLimitCents: cents.refine((n) => n > 0, "Credit limit must be positive").nullable().optional(),
   autoPay: z.boolean().optional(),
   notes: optionalNotes,
   isActive: z.boolean().optional(),
@@ -670,6 +684,7 @@ const importCreditCardStatementSchema = z.object({
   cardId: id,
   statementDate: isoDate,
   dueDate: isoDate,
+  dueDateUserOverride: z.boolean().optional(),
   statementBalanceCents: cents.refine((n) => n >= 0, "Balance must be non-negative"),
   minimumPaymentCents: cents.nullable().optional(),
   paidAmountCents: cents.nullable().optional(),
@@ -714,24 +729,43 @@ const importAssetSchema = z.object({
 });
 
 /**
+ * Settings as exported. Partial because older backups predate some columns
+ * (e.g. startingBalanceAsOf); the restore applies only the keys present.
+ */
+const importSettingsSchema = settingsUpdateSchema.partial();
+
+/** Version written by `exportAll`. Backups from a newer app are rejected. */
+export const BACKUP_SCHEMA_VERSION = 12;
+
+/**
  * Top-level shape of a backup payload. Every collection is bounded so a
  * pathological backup can't OOM the server. Ordering of inserts is enforced
  * by `importAll` (parents before children); validation here is shape-only.
+ *
+ * Import REPLACES the user's data, so the envelope is strict: every export
+ * since v2 carries `exportedAt`, `schemaVersion`, `settings` and the core
+ * collections. Requiring them means `{}` or an unrelated JSON file can never
+ * validate into a wipe. Collections added in later versions stay optional so
+ * older backups still restore.
  */
 export const backupImportSchema = z.object({
-  schemaVersion: z.number().int().nonnegative().optional(),
-  exportedAt: z.string().optional(),
-  settings: z.unknown().optional(),
-  bills: z.array(importBillSchema).max(1000).optional(),
+  schemaVersion: z
+    .number()
+    .int()
+    .min(1)
+    .max(BACKUP_SCHEMA_VERSION, "Backup is from a newer version of the app"),
+  exportedAt: z.string().min(1),
+  settings: importSettingsSchema.nullable(),
+  bills: z.array(importBillSchema).max(1000),
   billPaymentOverrides: z.array(importBillOverrideSchema).max(10000).optional(),
   billPaymentStates: z.array(importBillPaymentStateSchema).max(10000).optional(),
   variableBills: z.array(importVariableBillSchema).max(1000).optional(),
   variableBillCards: z.array(importVariableBillCardSchema).max(10000).optional(),
   creditCardPaymentOverrides: z.array(importCreditCardPaymentOverrideSchema).max(10000).optional(),
-  paychecks: z.array(importPaycheckSchema).max(10000).optional(),
-  extras: z.array(importExtraSchema).max(10000).optional(),
+  paychecks: z.array(importPaycheckSchema).max(10000),
+  extras: z.array(importExtraSchema).max(10000),
   categories: z.array(importCategorySchema).max(500).optional(),
-  creditCards: z.array(importCreditCardSchema).max(200).optional(),
+  creditCards: z.array(importCreditCardSchema).max(200),
   creditCardStatements: z.array(importCreditCardStatementSchema).max(20000).optional(),
   creditCardPromos: z.array(importCreditCardPromoSchema).max(2000).optional(),
   creditCardPromoPayments: z.array(importCreditCardPromoPaymentSchema).max(20000).optional(),

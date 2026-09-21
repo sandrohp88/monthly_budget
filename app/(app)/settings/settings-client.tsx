@@ -23,6 +23,7 @@ import {
 import { CategoryDialog } from "@/components/category-dialog";
 import { PushNotificationsCard } from "@/components/push-notifications-card";
 import type { CategoryRow, SettingsRow, UserSafe } from "@/lib/db/schema";
+import type { ImportPreview } from "@/lib/repos";
 
 interface CurrentUser {
   id: string;
@@ -60,6 +61,12 @@ export function SettingsClient({
   const [timezone, setTimezone] = React.useState(initial.timezone);
   const [submitting, setSubmitting] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [pendingImport, setPendingImport] = React.useState<{
+    fileName: string;
+    payload: unknown;
+    preview: ImportPreview;
+  } | null>(null);
+  const [importing, setImporting] = React.useState(false);
 
   const [users, setUsers] = React.useState<UserSafe[]>(initialUsers);
   const [userDialog, setUserDialog] = React.useState<"create" | "edit" | null>(null);
@@ -111,26 +118,48 @@ export function SettingsClient({
     }
   };
 
-  const importFile = async (file: File) => {
+  // Step 1: the server validates the file and returns what it would replace.
+  // Nothing is written until the user confirms in ImportConfirmDialog.
+  const previewFile = async (file: File) => {
     try {
-      const text = await file.text();
-      const json = JSON.parse(text);
+      let json: unknown;
+      try {
+        json = JSON.parse(await file.text());
+      } catch {
+        throw new Error("That file isn't valid JSON");
+      }
       const res = await fetch("/api/backup/import", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(json),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "import failed");
-      const warnings: string[] = body.warnings ?? [];
-      if (warnings.length > 0) {
-        toast.warning(`Imported with ${warnings.length} warning(s): ${warnings[0]}`);
-      } else {
-        toast.success("Imported. Reloading…");
-      }
-      setTimeout(() => window.location.reload(), 600);
+      if (!res.ok) throw new Error(`Not a usable backup — ${body.error ?? "import failed"}`);
+      setPendingImport({ fileName: file.name, payload: json, preview: body.preview });
     } catch (e) {
       toast.error((e as Error).message);
+    }
+  };
+
+  // Step 2: replace the data. The server snapshots the current data first.
+  const confirmImport = async () => {
+    if (!pendingImport) return;
+    setImporting(true);
+    try {
+      const res = await fetch("/api/backup/import?confirm=1", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(pendingImport.payload),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "import failed");
+      setPendingImport(null);
+      toast.success("Restored. Your previous data was saved as a snapshot. Reloading…");
+      setTimeout(() => window.location.reload(), 900);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -181,7 +210,7 @@ export function SettingsClient({
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) importFile(f);
+                if (f) previewFile(f);
                 e.target.value = "";
               }}
             />
@@ -452,6 +481,15 @@ export function SettingsClient({
             setUserDialog(null);
             await refreshUsers();
           }}
+        />
+      ) : null}
+      {pendingImport ? (
+        <ImportConfirmDialog
+          fileName={pendingImport.fileName}
+          preview={pendingImport.preview}
+          busy={importing}
+          onCancel={() => setPendingImport(null)}
+          onConfirm={confirmImport}
         />
       ) : null}
       {deleteTarget ? (
@@ -858,6 +896,88 @@ function ConfirmDeleteDialog({
           </Button>
           <Button variant="destructive" onClick={onConfirm}>
             Remove
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const IMPORT_LABELS: Record<string, string> = {
+  bills: "Bills",
+  billPaymentOverrides: "Bill payment plans",
+  billPaymentStates: "Bill payment marks",
+  variableBills: "Variable bills",
+  creditCards: "Credit cards",
+  creditCardStatements: "Card statements",
+  creditCardPaymentOverrides: "Card payment plans",
+  creditCardPromos: "Promos",
+  creditCardPromoPayments: "Promo payments",
+  paychecks: "Paychecks",
+  extras: "Extras",
+  categories: "Categories",
+  assets: "Assets",
+};
+
+function ImportConfirmDialog({
+  fileName,
+  preview,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  fileName: string;
+  preview: ImportPreview;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const rows = Object.keys(IMPORT_LABELS).filter(
+    (k) => (preview.current[k] ?? 0) > 0 || (preview.incoming[k] ?? 0) > 0,
+  );
+  const exported = preview.exportedAt.slice(0, 10);
+  return (
+    <Dialog open onOpenChange={(open) => !open && !busy && onCancel()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Replace your data with this backup?</DialogTitle>
+        </DialogHeader>
+        <p className="pt-1 text-[11px] tracking-wide text-[var(--text-2)]">
+          <span className="text-[var(--text-1)]">{fileName}</span> · exported {exported} · schema v
+          {preview.schemaVersion}. Everything below is replaced; bank links and transactions are kept.
+          A snapshot of your current data is saved on the server first.
+        </p>
+        <table className="w-full text-[11px] tabular-nums">
+          <thead>
+            <tr className="text-left text-[var(--text-3)]">
+              <th scope="col" className="py-1 font-normal">Records</th>
+              <th scope="col" className="py-1 text-right font-normal">Now</th>
+              <th scope="col" className="py-1 text-right font-normal">After restore</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((k) => (
+              <tr key={k} className="border-t border-[var(--border-dim)]">
+                <th scope="row" className="py-1 text-left font-normal">{IMPORT_LABELS[k]}</th>
+                <td className="py-1 text-right">{preview.current[k] ?? 0}</td>
+                <td className="py-1 text-right">{preview.incoming[k] ?? 0}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {preview.warnings.length > 0 ? (
+          <ul className="list-disc space-y-1 pl-4 text-[11px] text-[var(--text-2)]">
+            {preview.warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        ) : null}
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={onConfirm} disabled={busy}>
+            {busy ? "Restoring…" : "Replace my data"}
           </Button>
         </DialogFooter>
       </DialogContent>

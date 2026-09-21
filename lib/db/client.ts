@@ -10,7 +10,7 @@ type DrizzleDb = ReturnType<typeof drizzle<typeof schema>>;
 
 let cached: { db: DrizzleDb; sqlite: Database.Database } | null = null;
 
-function resolveDbPath(): string {
+export function resolveDbPath(): string {
   const url = process.env.DATABASE_URL ?? "file:./data/budget.db";
   return url.startsWith("file:") ? url.slice("file:".length) : url;
 }
