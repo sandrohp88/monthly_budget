@@ -71,6 +71,7 @@ import {
   type VariableBillRow,
 } from "./db/schema";
 import { newId } from "./ids";
+import { splitIsValid } from "./bill-reconciliation";
 import { hashPassword } from "./auth";
 import { calculateMonthlyHistoryAverage } from "./variable-bills";
 import { log } from "./log";
@@ -2794,6 +2795,65 @@ export async function replaceDraftAllocations(
     }
   });
   return listDraftAllocations(userId, draftId);
+}
+
+/**
+ * Drafts whose stored split no longer fits the transaction as the bank now
+ * reports it (see splitIsValid in lib/bill-reconciliation.ts). Reconciliation
+ * already credits nothing for these; this lets sync log them and the
+ * Transactions page flag them for review. `draftIds` narrows the check.
+ */
+export async function findInvalidSplitDraftIds(
+  userId: string,
+  draftIds?: readonly string[],
+): Promise<Set<string>> {
+  const db = getDb();
+  const conditions = [eq(draftAllocations.userId, userId)];
+  if (draftIds) {
+    if (draftIds.length === 0) return new Set();
+    conditions.push(inArray(draftAllocations.draftId, [...draftIds]));
+  }
+  const rows = db
+    .select({
+      draftId: draftAllocations.draftId,
+      allocationCents: draftAllocations.amountCents,
+      draftCents: plaidTransactionDrafts.amountCents,
+    })
+    .from(draftAllocations)
+    .innerJoin(plaidTransactionDrafts, eq(plaidTransactionDrafts.id, draftAllocations.draftId))
+    .where(and(...conditions))
+    .all();
+  const byDraft = new Map<string, { amountCents: number; allocations: { amountCents: number }[] }>();
+  for (const r of rows) {
+    const d = byDraft.get(r.draftId) ?? { amountCents: r.draftCents, allocations: [] };
+    d.allocations.push({ amountCents: r.allocationCents });
+    byDraft.set(r.draftId, d);
+  }
+  return new Set([...byDraft].filter(([, d]) => !splitIsValid(d)).map(([id]) => id));
+}
+
+/**
+ * Reopen the paycheck a now-removed deposit had auto-settled, mirroring how a
+ * removed card payment reopens its statement. Without this the paycheck
+ * stays "received" on the strength of a deposit that no longer exists.
+ * Only rows settled BY that draft are touched; manual marks are left alone.
+ */
+export async function reopenPaycheckSettledByDraft(
+  userId: string,
+  draftId: string,
+): Promise<PaycheckRow | undefined> {
+  const db = getDb();
+  const row = db
+    .select()
+    .from(paychecks)
+    .where(and(eq(paychecks.userId, userId), eq(paychecks.settledByDraftId, draftId)))
+    .get();
+  if (!row) return undefined;
+  db.update(paychecks)
+    .set({ actualReceived: false, actualAmountCents: null, actualDate: null, settledByDraftId: null })
+    .where(eq(paychecks.id, row.id))
+    .run();
+  return row;
 }
 
 /**

@@ -36,6 +36,7 @@ import {
   upsertPlaidDraft,
   replaceDraftAllocations,
   deleteCreditCardPaymentOverride,
+  findInvalidSplitDraftIds,
 } from "./repos";
 
 let dbDir: string;
@@ -793,6 +794,25 @@ describe("buildProjection linked starting balance", () => {
     ]);
     await getDb().run(`UPDATE plaid_accounts SET balance_cents = 80000 WHERE id = 'checking'`);
     expect((await buildProjection(user.id))?.pendingPosting.totalHeldCents).toBe(0);
+  });
+
+  // Review 2026-09-21 R07: bank-modified -> DB -> projection. The split was
+  // valid when saved; the bank then corrected the debit below it.
+  it("stops crediting a split once the bank corrects its transaction below it", async () => {
+    const { user, card, post } = await pendingCardFixture();
+    await post("partial", false, 75_00);
+    await replaceDraftAllocations(user.id, "partial", [
+      { targetKind: "card_payment", targetId: card.id, targetDate: "2026-05-02", amountCents: 75_00 },
+    ]);
+    await getDb().run(`UPDATE plaid_accounts SET balance_cents = 92500 WHERE id = 'checking'`);
+    expect((await buildProjection(user.id))?.pendingPosting.totalHeldCents).toBe(125_00);
+
+    // Same transaction id, corrected amount, exactly as a Plaid "modified" upsert.
+    await post("partial", false, 25_00);
+    await getDb().run(`UPDATE plaid_accounts SET balance_cents = 97500 WHERE id = 'checking'`);
+    // The stale $75 split proves nothing now: the whole plan is held again.
+    expect((await buildProjection(user.id))?.pendingPosting.totalHeldCents).toBe(200_00);
+    expect([...(await findInvalidSplitDraftIds(user.id))]).toEqual(["partial"]);
   });
 
   it("projects future plans on their chosen date without reserving them today", async () => {

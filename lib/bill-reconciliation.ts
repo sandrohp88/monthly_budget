@@ -79,6 +79,34 @@ export type DraftAllocation = {
 
 export type ObligationKind = "bill" | "extra" | "card_payment";
 
+/**
+ * Whether a draft's explicit split may be credited, judged against the
+ * transaction AS IT IS NOW. The split route checks the same rule on save, but
+ * the bank can later change the transaction (a corrected amount, a sign flip),
+ * and the stored split then claims money the transaction no longer proves:
+ * a stale $1,000 split on a corrected $100 debit settled $1,000 of
+ * obligations (review 2026-09-21 R07).
+ *
+ * An invalid split credits nothing, and its draft stays out of heuristic
+ * matching too. The app never guesses which obligation should lose funding;
+ * the split is kept for the user to review (Transactions flags it).
+ * A draft without allocations is trivially valid.
+ */
+export function splitIsValid(draft: {
+  amountCents: number;
+  allocations?: ReadonlyArray<{ amountCents: number }> | null;
+}): boolean {
+  const allocations = draft.allocations ?? [];
+  if (allocations.length === 0) return true;
+  if (draft.amountCents <= 0) return false;
+  let total = 0;
+  for (const a of allocations) {
+    if (a.amountCents <= 0) return false;
+    total += a.amountCents;
+  }
+  return total <= draft.amountCents;
+}
+
 export type ReconcilableBill = Pick<
   BillRow,
   "id" | "name" | "amountCents" | "intervalMonths" | "anchorDate"
@@ -239,6 +267,8 @@ export function matchAllocatedObligations(
     // Exhaustive: this draft is now fully accounted for by the user's own
     // breakdown and must not also be offered to the heuristic matcher.
     allocatedDraftIds.add(draft.id);
+    // A split the bank has since invalidated credits nothing (see splitIsValid).
+    if (!splitIsValid(draft)) continue;
     for (const a of allocations) {
       if (a.amountCents <= 0 || a.targetKind === "card_payment") continue;
       const key = `${a.targetKind}:${a.targetId}:${a.targetDate}`;

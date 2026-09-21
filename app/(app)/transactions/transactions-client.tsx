@@ -78,6 +78,7 @@ export function TransactionsClient({
   initialTransactions,
   categoryNames,
   billMatches,
+  invalidSplitIds = [],
   bills = [],
   extras = [],
   plannedCardPayments = [],
@@ -85,11 +86,14 @@ export function TransactionsClient({
   initialTransactions: DraftWithAccount[];
   categoryNames: string[];
   billMatches: Record<string, BillMatch>;
+  /** Drafts whose split exceeds what the bank now reports; credited nothing until fixed. */
+  invalidSplitIds?: string[];
   bills?: BillOption[];
   extras?: SplitExtraOption[];
   plannedCardPayments?: SplitExtraOption[];
 }) {
   const router = useRouter();
+  const invalidSplits = React.useMemo(() => new Set(invalidSplitIds), [invalidSplitIds]);
   const [transactions, setTransactions] = React.useState(initialTransactions);
   const [splittingTxn, setSplittingTxn] = React.useState<DraftWithAccount | null>(null);
   const [splitAllocations, setSplitAllocations] = React.useState<Allocation[]>([]);
@@ -406,15 +410,25 @@ export function TransactionsClient({
                         <Link2 className={cn("h-3.5 w-3.5", txn.linkedBillId && "text-[var(--mint)]")} />
                       </Button>
                     ) : null}
-                    {txn.amountCents > 0 ? (
+                    {txn.amountCents > 0 || invalidSplits.has(txn.id) ? (
                       <Button
                         size="icon"
                         variant="ghost"
-                        aria-label="Split across obligations"
-                        title="Link or split this across bills, one-time expenses, or planned card payments"
+                        aria-label={
+                          invalidSplits.has(txn.id)
+                            ? "Split needs review: the bank changed this transaction"
+                            : "Split across obligations"
+                        }
+                        title={
+                          invalidSplits.has(txn.id)
+                            ? "The bank changed this transaction and its split no longer fits. It counts toward nothing until you fix or clear it."
+                            : "Link or split this across bills, one-time expenses, or planned card payments"
+                        }
                         onClick={() => openSplit(txn)}
                       >
-                        <Split className="h-3.5 w-3.5" />
+                        <Split
+                          className={cn("h-3.5 w-3.5", invalidSplits.has(txn.id) && "text-[var(--amber)]")}
+                        />
                       </Button>
                     ) : null}
                     <Button size="icon" variant="ghost" aria-label="Edit" onClick={() => setEditing(txn)}>

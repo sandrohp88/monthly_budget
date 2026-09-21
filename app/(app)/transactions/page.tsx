@@ -8,6 +8,7 @@ import {
   listExtras,
   listPlaidAccounts,
   listPlaidDrafts,
+  findInvalidSplitDraftIds,
 } from "@/lib/repos";
 import { detectPromoPayoffDate } from "@/lib/plaid-promo-parser";
 import { isPayPalCreditAccount, isPayPalWalletAccount } from "@/lib/paypal-special-financing";
@@ -19,7 +20,7 @@ export const dynamic = "force-dynamic";
 export default async function TransactionsPage() {
   const { id: userId } = await requirePageUser();
 
-  const [drafts, accounts, cards, categories, bills, extras, projection, cardPlans] =
+  const [drafts, accounts, cards, categories, bills, extras, projection, cardPlans, invalidSplits] =
     await Promise.all([
       listPlaidDrafts(userId, "approved"),
       listPlaidAccounts(userId),
@@ -31,6 +32,7 @@ export default async function TransactionsPage() {
       // bill-reconciliation matches so the rows can show "this paid bill X".
       buildProjection(userId),
       listCreditCardPaymentOverridesForUser(userId),
+      findInvalidSplitDraftIds(userId),
     ]);
 
   const accountMap = new Map(accounts.map((a) => [a.id, a]));
@@ -78,6 +80,7 @@ export default async function TransactionsPage() {
       initialTransactions={transactions}
       categoryNames={categories.filter((c) => c.kind === "expense").map((c) => c.name)}
       billMatches={projection?.billMatchesByDraftId ?? {}}
+      invalidSplitIds={[...invalidSplits]}
       // The split dialog enumerates each bill's occurrences client-side, so it
       // needs the recurrence shape — not just a name.
       bills={bills.map((b) => ({
