@@ -2903,6 +2903,15 @@ export async function getNetWorthComponents(userId: string): Promise<NetWorthCom
  *   v5: + variableBills, variableBillCards
  *   v6: + categories.budgetAmountCents
  *   v10: + billPaymentStates (per-occurrence sent / paid-externally marks)
+ *   v11: + creditCardPaymentOverrides.trackPosting
+ *   v12: restore now honours settings, bills.matchAlias,
+ *        creditCards.gracePeriodDays / creditLimitCents,
+ *        creditCardStatements.dueDateUserOverride and paychecks.actualDate
+ *        (always exported as full rows, but dropped on import before v12).
+ *
+ * Draft allocations and manual draft→bill links live on the Plaid drafts,
+ * which import never touches: a same-install restore keeps them (ids are
+ * preserved), and a fresh install has no bank history for them to describe.
  *
  * Plaid items / accounts / drafts are intentionally NOT exported — the
  * access tokens are encrypted with a per-deployment PLAID_ENCRYPTION_KEY,
@@ -2934,8 +2943,9 @@ export async function exportAll(userId: string) {
   ]);
   return {
     exportedAt: new Date().toISOString(),
-    schemaVersion: 11,
-    settings: s,
+    schemaVersion: BACKUP_SCHEMA_VERSION,
+    // Always present (null before setup) — the import envelope requires it.
+    settings: s ?? null,
     bills: b,
     billPaymentOverrides: bo,
     billPaymentStates: bps,
@@ -2953,7 +2963,70 @@ export async function exportAll(userId: string) {
   };
 }
 
-import type { BackupImportInput } from "./validation";
+import { BACKUP_SCHEMA_VERSION, type BackupImportInput } from "./validation";
+
+/** Rows per collection: what a restore would delete vs. insert. */
+export type ImportPreview = {
+  schemaVersion: number;
+  exportedAt: string;
+  current: Record<string, number>;
+  incoming: Record<string, number>;
+  warnings: string[];
+};
+
+/**
+ * Dry run of `importAll`: validates the payload graph and reports what the
+ * restore would replace, without writing anything. The Settings page shows
+ * this before the user confirms the destructive import.
+ */
+export async function previewImport(
+  userId: string,
+  payload: BackupImportInput,
+): Promise<ImportPreview> {
+  await validateImportGraph(userId, payload);
+  const current = await exportAll(userId);
+  const count = (rows: unknown[] | null | undefined) => rows?.length ?? 0;
+  const collections = [
+    "bills",
+    "billPaymentOverrides",
+    "billPaymentStates",
+    "variableBills",
+    "creditCardPaymentOverrides",
+    "paychecks",
+    "extras",
+    "categories",
+    "creditCards",
+    "creditCardStatements",
+    "creditCardPromos",
+    "creditCardPromoPayments",
+    "assets",
+  ] as const;
+  const warnings = detectDuplicateBills(await listBills(userId, true), payload.bills);
+  if (payload.schemaVersion < BACKUP_SCHEMA_VERSION) {
+    warnings.push(
+      `Backup is schema v${payload.schemaVersion}; fields added since then keep their defaults.`,
+    );
+  }
+  if (!payload.settings) warnings.push("Backup has no settings; current settings are kept.");
+  if (payload.categories === undefined) {
+    warnings.push("Backup has no categories; current categories are kept.");
+  }
+  return {
+    schemaVersion: payload.schemaVersion,
+    exportedAt: payload.exportedAt,
+    current: Object.fromEntries(collections.map((k) => [k, count(current[k])])),
+    // Categories are only replaced when the backup carries them.
+    incoming: Object.fromEntries(
+      collections.map((k) => [
+        k,
+        k === "categories" && payload.categories === undefined
+          ? count(current.categories)
+          : count(payload[k]),
+      ]),
+    ),
+    warnings,
+  };
+}
 
 /**
  * Build the set of valid IDs that child rows may reference inside a backup
@@ -3111,6 +3184,16 @@ function importInsideTransaction(
   userId: string,
   payload: BackupImportInput,
 ): void {
+  // Settings are exported as a full row; apply whichever keys the backup
+  // carries (older backups predate some columns). No settings row yet (a
+  // restore before setup ever wrote one) is left alone — setup owns creation.
+  if (payload.settings && Object.keys(payload.settings).length > 0) {
+    tx.update(settings)
+      .set({ ...payload.settings, updatedAt: Date.now() })
+      .where(eq(settings.userId, userId))
+      .run();
+  }
+
   // Categories: only replace if provided. Backups created before categories
   // were exportable would otherwise wipe the user's category list.
   if (Array.isArray(payload.categories)) {
@@ -3142,7 +3225,9 @@ function importInsideTransaction(
       statementCycleAnchorDate: card.statementCycleAnchorDate ?? null,
       statementCycleIntervalDays: card.statementCycleIntervalDays ?? 31,
       dueDay: card.dueDay,
+      gracePeriodDays: card.gracePeriodDays ?? 14,
       currentBalanceCents: card.currentBalanceCents ?? null,
+      creditLimitCents: card.creditLimitCents ?? null,
       autoPay: card.autoPay ?? false,
       notes: card.notes ?? null,
       isActive: card.isActive ?? true,
@@ -3156,6 +3241,7 @@ function importInsideTransaction(
       cardId: s.cardId,
       statementDate: s.statementDate,
       dueDate: s.dueDate,
+      dueDateUserOverride: s.dueDateUserOverride ?? false,
       statementBalanceCents: s.statementBalanceCents,
       minimumPaymentCents: s.minimumPaymentCents ?? null,
       paidAmountCents: s.paidAmountCents ?? null,
@@ -3237,7 +3323,9 @@ function importInsideTransaction(
       const day = Math.min(b.dueDay, monthDays[b.dueMonth - 1] ?? 28);
       anchorDate = `2024-${String(b.dueMonth).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     } else {
-      continue;
+      // Unreachable after backupImportSchema's recurrence refine; throwing
+      // (and rolling back) beats silently dropping the bill.
+      throw new Error(`bill "${b.name}" has no usable recurrence`);
     }
     tx.insert(bills).values({
       id: b.id ?? newId(),
@@ -3249,6 +3337,7 @@ function importInsideTransaction(
       anchorDate,
       autoPay: b.autoPay ?? false,
       paidViaCardId: b.paidViaCardId ?? null,
+      matchAlias: b.matchAlias ?? null,
       notes: b.notes ?? null,
       isActive: b.isActive ?? true,
     }).run();
@@ -3296,6 +3385,7 @@ function importInsideTransaction(
       note: p.note ?? null,
       actualReceived: p.actualReceived ?? false,
       actualAmountCents: p.actualAmountCents ?? null,
+      actualDate: p.actualDate ?? null,
       settledByDraftId: p.settledByDraftId ?? null,
       isActive: p.isActive ?? true,
     }).run();
