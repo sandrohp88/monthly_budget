@@ -24,6 +24,7 @@ import { CategoryDialog } from "@/components/category-dialog";
 import { PushNotificationsCard } from "@/components/push-notifications-card";
 import type { CategoryRow, SettingsRow, UserSafe } from "@/lib/db/schema";
 import type { ImportPreview } from "@/lib/repos";
+import { signOutAndClearCaches } from "@/lib/client-signout";
 
 interface CurrentUser {
   id: string;
@@ -578,8 +579,7 @@ function AccountCard({ currentUser }: { currentUser: CurrentUser }) {
       if (!res.ok) throw new Error(json.error ?? "save failed");
       // A password change revokes every session, this one included.
       toast.success("Password changed. Sign in with your new password.");
-      const { signOut } = await import("next-auth/react");
-      await signOut({ callbackUrl: "/login" });
+      await signOutAndClearCaches();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -987,8 +987,7 @@ function ImportConfirmDialog({
 
 function SignOutButton() {
   const handleSignOut = async () => {
-    const { signOut } = await import("next-auth/react");
-    await signOut({ callbackUrl: "/login" });
+    await signOutAndClearCaches();
   };
   return (
     <Button variant="outline" onClick={handleSignOut}>
