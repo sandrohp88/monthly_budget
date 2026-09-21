@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isAllowedPushEndpoint, isValidPushKeys } from "./push-endpoint";
 
 const isoDate = z
   .string()
@@ -778,11 +779,17 @@ export type BackupImportInput = z.infer<typeof backupImportSchema>;
 
 /** Browser PushSubscription.toJSON() shape, as posted by the settings page. */
 export const pushSubscribeSchema = z.object({
-  endpoint: z.string().url().max(2000),
-  keys: z.object({
-    p256dh: z.string().min(1).max(500),
-    auth: z.string().min(1).max(500),
-  }),
+  endpoint: z
+    .string()
+    .url()
+    .max(2000)
+    .refine(isAllowedPushEndpoint, "Endpoint is not a supported push service"),
+  keys: z
+    .object({
+      p256dh: z.string().min(1).max(500),
+      auth: z.string().min(1).max(500),
+    })
+    .refine(isValidPushKeys, "Invalid push subscription keys"),
   userAgent: z.string().max(500).nullable().optional(),
 });
 

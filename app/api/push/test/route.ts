@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError } from "@/lib/api";
 import { isPushConfigured, sendTestPush } from "@/lib/push";
+import { takeToken } from "@/lib/rate-limit";
 
 /**
  * Settings-page "send test" button: pushes the pending interest alert when
@@ -11,6 +12,10 @@ export async function POST() {
   const auth = await ensureUser();
   if (auth instanceof NextResponse) return auth;
   if (!isPushConfigured()) return jsonError("web push is not configured on the server", 503);
+  // Each test fans out one request per device; 5 in a burst, then one a minute.
+  if (!takeToken(`push-test:${auth.userId}`, { capacity: 5, refillPerSecond: 1 / 60 })) {
+    return jsonError("too many test notifications; try again in a minute", 429);
+  }
   try {
     const result = await sendTestPush(auth.userId);
     return NextResponse.json(result);

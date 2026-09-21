@@ -30,6 +30,10 @@ import {
   type PushPayload,
 } from "./push-payload";
 import type { PushSubscriptionRow } from "./db/schema";
+import { isAllowedPushEndpoint, isValidPushKeys } from "./push-endpoint";
+
+/** Upper bound on one push-service request, so a slow host can't stall dispatch. */
+const PUSH_SEND_TIMEOUT_MS = 10_000;
 
 /** Horizon must match the dashboard alert (app/(app)/page.tsx). */
 const PUSH_ALERT_HORIZON_DAYS = 14;
@@ -60,18 +64,25 @@ export type PushSendResult = "sent" | "pruned" | "failed";
 
 /**
  * Send one payload to one subscription. Deletes the row when the push
- * service says the subscription no longer exists (404/410).
+ * service says the subscription no longer exists (404/410), and — without
+ * sending anything — when the stored endpoint or keys fail the push-service
+ * allowlist (rows saved before that rule existed are not trusted).
  */
-async function sendToSubscription(
+export async function sendToSubscription(
   sub: PushSubscriptionRow,
   payload: PushPayload,
 ): Promise<PushSendResult> {
+  if (!isAllowedPushEndpoint(sub.endpoint) || !isValidPushKeys(sub)) {
+    console.warn(`[push] pruning subscription ${sub.id}: endpoint/keys not allowed`);
+    await deletePushSubscriptionById(sub.id);
+    return "pruned";
+  }
   ensureVapid();
   try {
     await webpush.sendNotification(
       { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
       JSON.stringify(payload),
-      { TTL: 12 * 60 * 60, urgency: "normal" },
+      { TTL: 12 * 60 * 60, urgency: "normal", timeout: PUSH_SEND_TIMEOUT_MS },
     );
     return "sent";
   } catch (e) {
