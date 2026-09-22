@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cardPaymentKey,
   reconcilePlannedCardPayments,
   type PlannedCardPayment,
 } from "./card-payment-reconciliation";
@@ -79,5 +80,85 @@ describe("reconcilePlannedCardPayments", () => {
     expect(reconcilePlannedCardPayments([plan], [partial, draft]).get("visa:2026-09-04")).toBe(
       5000,
     );
+  });
+});
+
+// 2026-09-21, Lisette's account: five posted card payments went unmatched
+// because checking descriptors name the ISSUER, not the card nickname.
+describe("reconcilePlannedCardPayments: issuer names", () => {
+  const plan = (cardId: string, cardName: string, amountCents: number, issuerName?: string) => ({
+    cardId,
+    cardName,
+    issuerName: issuerName ?? null,
+    date: "2026-09-05",
+    amountCents,
+  });
+  const debit = (id: string, description: string, amountCents: number, date = "2026-09-08") => ({
+    id,
+    date,
+    description,
+    merchantName: null,
+    amountCents,
+  });
+  const key = (cardId: string) => cardPaymentKey(cardId, "2026-09-05");
+
+  it("matches the card's issuer with payment wording (Quicksilver <- Capital One)", () => {
+    const posted = reconcilePlannedCardPayments(
+      [plan("qs", "Quicksilver ****2729", 4819, "Capital One")],
+      [debit("d", "Withdrawal Ach Capital One Type: Online Pmt Id: 9279744391", 4819)],
+    );
+    expect(posted.get(key("qs"))).toBe(4819);
+  });
+
+  it("matches the nickname without its short words (Discover it <- Discover Cap One)", () => {
+    const posted = reconcilePlannedCardPayments(
+      [plan("di", "Discover it ****4474", 2096, "Capital One")],
+      [debit("d", "Withdrawal Ach Discover Cap One Type: Online Pmt Id: 9541719375", 2096)],
+    );
+    expect(posted.get(key("di"))).toBe(2096);
+  });
+
+  it("accepts transfer wording only together with the issuer (PayPal Credit <- Paypal Inst Xfer)", () => {
+    const d = debit("d", "Withdrawal Ach Paypal Type: Inst Xfer Id: Paypalsi77", 100_000);
+    expect(
+      reconcilePlannedCardPayments([plan("pp", "PayPal Credit Card ****9288", 100_000, "PayPal")], [d]).get(key("pp")),
+    ).toBe(100_000);
+    // Same card, no known issuer: a transfer alone proves nothing.
+    expect(
+      reconcilePlannedCardPayments([plan("pp", "PayPal Credit Card ****9288", 100_000)], [d]).get(key("pp")),
+    ).toBeUndefined();
+  });
+
+  it("strips generic words from the issuer (Sam's Club - Credit Card <- Samsclub ... Paymnt)", () => {
+    const posted = reconcilePlannedCardPayments(
+      [plan("sc", "Sam's Club® World Elite Mastercard® ****5885", 90_235, "Sam's Club - Credit Card")],
+      [debit("d", "Withdrawal Ach Samsclub Mstrcrd Type: Syf Paymnt Id: 9069872103", 90_235)],
+    );
+    expect(posted.get(key("sc"))).toBe(90_235);
+  });
+
+  it("still requires the exact amount", () => {
+    const posted = reconcilePlannedCardPayments(
+      [plan("sc", "Sam's Club ****5885", 90_300, "Sam's Club - Credit Card")],
+      [debit("d", "Withdrawal Ach Samsclub Mstrcrd Type: Syf Paymnt", 90_235)],
+    );
+    expect(posted.get(key("sc"))).toBeUndefined();
+  });
+
+  it("stays reserved when the issuer match is ambiguous", () => {
+    const posted = reconcilePlannedCardPayments(
+      [plan("qs", "Quicksilver", 5000, "Capital One"), plan("sv", "Savor", 5000, "Capital One")],
+      [debit("d", "Withdrawal Ach Capital One Type: Online Pmt", 5000)],
+    );
+    expect(posted.get(key("qs"))).toBeUndefined();
+    expect(posted.get(key("sv"))).toBeUndefined();
+  });
+
+  it("does not match an unrelated issuer", () => {
+    const posted = reconcilePlannedCardPayments(
+      [plan("qs", "Quicksilver", 5000, "Capital One")],
+      [debit("d", "Withdrawal Ach Chase Credit Crd Type: Epay", 5000)],
+    );
+    expect(posted.get(key("qs"))).toBeUndefined();
   });
 });
