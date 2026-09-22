@@ -477,8 +477,13 @@ LXC 125, extracts over `/opt/budget`, then builds and recreates the app.
 **Always `npm run check` first** so you don't ship broken code.
 
 ```bash
-python scripts/redeploy.py   # no paramiko/passwords — uses the pve7050 ssh alias
+python scripts/redeploy.py   # Windows workstation — no paramiko/passwords — uses the pve7050 ssh alias
+scripts/deploy-lxc125.sh     # Linux/macOS — committed; same steps plus a pre-deploy VACUUM INTO backup
 ```
+
+`scripts/deploy-lxc125.sh` also excludes the host-owned `Caddyfile`, `docker-compose.yml`
+and `.env*` from the archive, writes `/opt/budget/DEPLOYED_REVISION`, and verifies an
+unknown pve-7050 host key against the cluster's record before trusting it.
 
 Two hard-won gotchas baked into the script:
 - The compose file's `app` service is `image: budget-app:latest` with **no
