@@ -14,6 +14,7 @@ import {
   listPaychecks,
   listBillLinkDescriptors,
   listPlaidAccounts,
+  listPlaidItems,
   listAllPromoPayments,
   listPromos,
   listStartingBalanceDraftsInRange,
@@ -172,6 +173,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     variableBills,
     billPaymentMarks,
     pendingDraftOutflowCents,
+    plaidItemRows,
   ] = await Promise.all([
     listBills(userId, false),
     listBillPaymentOverridesForUser(userId),
@@ -187,6 +189,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     listVariableBills(userId, false),
     listBillPaymentStatesForUser(userId),
     getPendingDraftOutflow(userId),
+    listPlaidItems(userId),
   ]);
   /**
    * The observed float: the bank's `current − available` and Plaid's pending
@@ -268,11 +271,23 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   >();
   // One-time expenses settled by an explicit split, keyed by expense id.
   const paidExtraById = new Map<string, PaidExtra>();
+  // The issuer behind each card's linked Plaid account ("Capital One" for a
+  // Quicksilver): bank descriptors name the issuer far more often than the
+  // user's nickname for the card (see reconcilePlannedCardPayments).
+  const institutionByItem = new Map(plaidItemRows.map((i) => [i.id, i.institutionName] as const));
+  const itemByAccount = new Map(plaidAccts.map((a) => [a.id, a.itemId] as const));
+  const issuerByCard = new Map(
+    activeCards.map((c) => [
+      c.id,
+      c.plaidAccountId ? institutionByItem.get(itemByAccount.get(c.plaidAccountId) ?? "") ?? null : null,
+    ] as const),
+  );
   const plannedCardPayments: PlannedCardPayment[] = creditCardPaymentOverrides
     .filter((p) => activeCardIds.has(p.cardId) && p.amountCents > 0 && p.trackPosting)
     .map((p) => ({
       cardId: p.cardId,
       cardName: cardNameById.get(p.cardId)!,
+      issuerName: issuerByCard.get(p.cardId) ?? null,
       date: p.dueDate,
       amountCents: p.amountCents,
     }));
