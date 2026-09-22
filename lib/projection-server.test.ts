@@ -1141,6 +1141,59 @@ describe("buildProjection pending posting (money out, not yet posted)", () => {
     expect(after?.pendingPosting.attributedCents).toBe(0);
   });
 
+  it("keeps a sent mark released after its payment ages out of the 45-day window", async () => {
+    // The bug (2026-09-21, Lisette's account): five August bills were marked
+    // sent and their payments posted and were linked. Once those payments
+    // were older than the fixed 45-day reconciliation window, the proof
+    // vanished and the never-expiring sent marks held $1,657 again, driving
+    // the calendar negative. Today is mocked as 2026-05-04, so the window
+    // starts 2026-03-20; the March payment below is outside it.
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00);
+    await updateSettings(user.id, { startingBalanceAsOf: "2026-04-25" });
+    // Quarterly from March, so 03-01 is the only occurrence in play (a monthly
+    // bill would also have a genuinely unconfirmed May occurrence to hold).
+    const bill = await createBill(user.id, {
+      name: "Household Rent",
+      category: "Housing",
+      amountCents: 2000_00,
+      intervalMonths: 3,
+      anchorDate: "2026-03-01",
+      autoPay: true,
+      paidViaCardId: null,
+      notes: null,
+      isActive: true,
+    });
+    await upsertBillPaymentState(user.id, bill!.id, {
+      dueDate: "2026-03-01",
+      state: "sent",
+      amountCents: null,
+      markedDate: "2026-03-01",
+      notes: null,
+    });
+    await upsertPlaidDraft({
+      id: "txn-rent-march",
+      userId: user.id,
+      accountId: "checking",
+      date: "2026-03-02",
+      description: "Household Rent",
+      originalDescription: null,
+      amountCents: 2000_00,
+      plaidCategory: null,
+      merchantName: null,
+      pending: false,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+
+    const projection = await buildProjection(user.id);
+    expect(projection?.pendingPosting.bills).toEqual([]);
+    expect(projection?.pendingPosting.totalHeldCents).toBe(0);
+    expect(projection?.rows.find((r) => r.date === "2026-05-04")?.balanceCents).toBe(10_000_00);
+  });
+
   it("holds the larger of the two when the bank sees more pending than bills explain", async () => {
     // $2,000 bill marked sent, but the bank shows $2,500 pending: the extra
     // $500 is some other unposted spend and still has to come out.
