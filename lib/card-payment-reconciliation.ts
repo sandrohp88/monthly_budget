@@ -14,6 +14,15 @@ export type PlannedCardPayment = {
   issuerName?: string | null;
 };
 
+/**
+ * A posted payment this close to its plan IS the plan: planned amounts are
+ * typed as round figures ($903.00) while the bank posts the real statement
+ * amount ($902.35). Settling it in full stops a few cents sitting "awaiting
+ * post" forever (Lisette's Sam's Club plan, 2026-09-21). Anything further off
+ * is a genuine partial payment and releases only what posted.
+ */
+export const NEAR_AMOUNT_CENTS = 100;
+
 const PAYMENT_WORDING = /\b(payment|pmt|pymt|pymnt|paymnt|autopay|epay)\b/i;
 const TRANSFER_WORDING = /\b(xfer|transfer)\b/i;
 const GENERIC_ISSUER_WORDS = /\b(credit\s*cards?|cards?|bank|n\.?a\.?|financial|services|inc\.?)\b/gi;
@@ -42,7 +51,8 @@ export type CardPaymentReceipt = { cardId: string; date: string; amountCents: nu
 
 /** Posted CHECKING debits only, supplied by the user-scoped balance-account
  * query. A card-side credit or a paid statement cannot prove checking posted.
- * Explicit allocations win; automatic matches require an exact amount, a
+ * Explicit allocations win; automatic matches require the amount (exact, or
+ * within NEAR_AMOUNT_CENTS, which settles the plan in full), a
  * unique pairing within -3/+14 days, and a name: the card nickname with
  * payment wording, or the card's issuer with payment or transfer wording
  * (banks usually describe the issuer: "Capital One Online Pmt" pays a
@@ -57,6 +67,7 @@ export function reconcilePlannedCardPayments(
 ): Map<string, number> {
   const posted = new Map<string, number>();
   const planKeys = new Set(plans.map((p) => cardPaymentKey(p.cardId, p.date)));
+  const planCents = new Map(plans.map((p) => [cardPaymentKey(p.cardId, p.date), p.amountCents] as const));
   const explicitlyAssigned = new Set<string>();
   for (const d of drafts) {
     // A split the bank has since invalidated credits nothing (see splitIsValid);
@@ -70,6 +81,12 @@ export function reconcilePlannedCardPayments(
       posted.set(key, (posted.get(key) ?? 0) + a.amountCents);
     }
   }
+  // An explicit link that covers the plan to within a dollar settles it.
+  for (const key of explicitlyAssigned) {
+    const planned = planCents.get(key) ?? 0;
+    const linked = posted.get(key) ?? 0;
+    if (linked > 0 && Math.abs(planned - linked) <= NEAR_AMOUNT_CENTS) posted.set(key, planned);
+  }
 
   const pairs: Array<{ key: string; draftId: string; cents: number }> = [];
   for (const p of plans) {
@@ -79,7 +96,9 @@ export function reconcilePlannedCardPayments(
     const issuer = issuerVariant(p.issuerName);
     for (const d of drafts) {
       if (excludedDraftIds.has(d.id) || d.linkedBillId || d.allocations?.length) continue;
-      if (d.amountCents !== p.amountCents || d.amountCents <= 0) continue;
+      if (d.amountCents <= 0) continue;
+      const exact = d.amountCents === p.amountCents;
+      if (!exact && Math.abs(d.amountCents - p.amountCents) > NEAR_AMOUNT_CENTS) continue;
       const gap = daysBetween(p.date, d.date);
       if (gap < -3 || gap > 14) continue;
       const paymentWord = PAYMENT_WORDING.test(d.description);
@@ -90,10 +109,12 @@ export function reconcilePlannedCardPayments(
       // A linked card receipt identifies the destination when checking uses
       // an issuer name instead of the user's card nickname. Still require a
       // distinct posted checking debit: the credit leg alone frees no cash.
-      const receipt = cardReceipts.some((r) => r.cardId === p.cardId &&
+      // (Receipts pair two bank-reported amounts, so they stay exact.)
+      const receipt = exact && cardReceipts.some((r) => r.cardId === p.cardId &&
         r.amountCents === d.amountCents && Math.abs(daysBetween(d.date, r.date)) <= 3);
       if (!namedPayment && !receipt) continue;
-      pairs.push({ key, draftId: d.id, cents: d.amountCents });
+      // A near-amount match settles the plan in full (see NEAR_AMOUNT_CENTS).
+      pairs.push({ key, draftId: d.id, cents: p.amountCents });
     }
   }
   for (const pair of pairs) {

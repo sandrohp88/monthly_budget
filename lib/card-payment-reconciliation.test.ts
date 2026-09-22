@@ -33,7 +33,7 @@ describe("reconcilePlannedCardPayments", () => {
   });
   it.each([
     { amountCents: -20000 },
-    { amountCents: 19999 },
+    { amountCents: 19899 }, // $1.01 off: beyond NEAR_AMOUNT_CENTS
     { description: "Other Card Payment" },
     { description: "Test Visa purchase" },
     { date: "2026-08-01" },
@@ -137,10 +137,49 @@ describe("reconcilePlannedCardPayments: issuer names", () => {
     expect(posted.get(key("sc"))).toBe(90_235);
   });
 
-  it("still requires the exact amount", () => {
+  // 2026-09-21: Sam's posted $902.35 against a $903.00 plan and the plan sat
+  // "awaiting post" (first unmatched, then 65 cents short after a manual link).
+  it("settles a plan in full from a named payment within a dollar", () => {
     const posted = reconcilePlannedCardPayments(
       [plan("sc", "Sam's Club ****5885", 90_300, "Sam's Club - Credit Card")],
       [debit("d", "Withdrawal Ach Samsclub Mstrcrd Type: Syf Paymnt", 90_235)],
+    );
+    expect(posted.get(key("sc"))).toBe(90_300);
+  });
+
+  it("settles a plan in full from an explicit link within a dollar", () => {
+    const posted = reconcilePlannedCardPayments(
+      [plan("sc", "Sam's Club ****5885", 90_300)],
+      [{
+        ...debit("d", "Anything at all", 90_235),
+        allocations: [{ targetKind: "card_payment", targetId: "sc", targetDate: "2026-09-05", amountCents: 90_235 }],
+      }],
+    );
+    expect(posted.get(key("sc"))).toBe(90_300);
+  });
+
+  it("keeps a genuine partial payment partial", () => {
+    const linked = reconcilePlannedCardPayments(
+      [plan("sc", "Sam's Club ****5885", 90_300)],
+      [{
+        ...debit("d", "Anything at all", 50_000),
+        allocations: [{ targetKind: "card_payment", targetId: "sc", targetDate: "2026-09-05", amountCents: 50_000 }],
+      }],
+    );
+    expect(linked.get(key("sc"))).toBe(50_000);
+    const auto = reconcilePlannedCardPayments(
+      [plan("sc", "Sam's Club ****5885", 90_300, "Sam's Club - Credit Card")],
+      [debit("d", "Withdrawal Ach Samsclub Mstrcrd Type: Syf Paymnt", 90_199)],
+    );
+    expect(auto.get(key("sc"))).toBeUndefined();
+  });
+
+  it("does not near-match through the receipt route, which pairs two bank amounts", () => {
+    const posted = reconcilePlannedCardPayments(
+      [plan("sc", "Nickname only", 90_300)],
+      [debit("d", "Withdrawal ACH Issuer", 90_235)],
+      new Set(),
+      [{ cardId: "sc", date: "2026-09-08", amountCents: 90_235 }],
     );
     expect(posted.get(key("sc"))).toBeUndefined();
   });
