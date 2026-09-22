@@ -5,6 +5,19 @@ import { SettingsClient } from "./settings-client";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Zones the SERVER can format, which is exactly what settings validation
+ * accepts (isSupportedTimeZone). Built here rather than in the browser so the
+ * options can't drift from the validator or mismatch on hydration. The saved
+ * value is always kept selectable.
+ */
+function supportedTimeZones(current: string): string[] {
+  const zones = new Set(Intl.supportedValuesOf("timeZone"));
+  zones.add("UTC");
+  zones.add(current);
+  return [...zones].sort();
+}
+
 export default async function SettingsPage() {
   const user = await requirePageUser();
   const userId = user.id;
@@ -31,6 +44,7 @@ export default async function SettingsPage() {
       users={users}
       isAdmin={isAdmin}
       initialCategories={categories}
+      timeZones={supportedTimeZones(settings.timezone)}
     />
   );
 }

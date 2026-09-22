@@ -40,6 +40,8 @@ interface Props {
   users: UserSafe[];
   isAdmin: boolean;
   initialCategories: CategoryRow[];
+  /** IANA zones the server accepts; see supportedTimeZones in page.tsx. */
+  timeZones: string[];
 }
 
 export function SettingsClient({
@@ -49,6 +51,7 @@ export function SettingsClient({
   users: initialUsers,
   isAdmin,
   initialCategories,
+  timeZones,
 }: Props) {
   const [startingBalanceCents, setStartingBalance] = React.useState(initial.startingBalanceCents);
   const [startingBalanceAsOf, setStartingBalanceAsOf] = React.useState(initial.startingBalanceAsOf);
@@ -293,7 +296,19 @@ export function SettingsClient({
                 </div>
                 <div className="col-span-2 space-y-1.5">
                   <Label htmlFor="tz">Timezone</Label>
-                  <Input id="tz" required value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+                  <select
+                    id="tz"
+                    required
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                    className="flex h-10 w-full rounded-md border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2 text-[13px] text-[var(--text-0)] hover:border-[var(--border-2)] focus:outline-none focus:border-[var(--mint-dim)] focus:shadow-[0_0_0_3px_var(--mint-glow)]"
+                  >
+                    {timeZones.map((tz) => (
+                      <option key={tz} value={tz}>
+                        {tz.replace(/_/g, " ")}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
               <div className="flex justify-end pt-1">

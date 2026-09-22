@@ -1,11 +1,52 @@
 import { z } from "zod";
 import { isAllowedPushEndpoint, isValidPushKeys } from "./push-endpoint";
 
+/**
+ * True for a real calendar date in YYYY-MM-DD form. The format alone let
+ * "2026-99-99" through, and date math on it produced nonsense downstream
+ * (review 2026-09-21 R08). Leap days are real dates only in leap years.
+ */
+export function isRealIsoDate(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (mo < 1 || mo > 12 || d < 1) return false;
+  return d <= new Date(Date.UTC(y, mo, 0)).getUTCDate();
+}
+
 const isoDate = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+  .refine(isRealIsoDate, "Not a real calendar date");
 
-const cents = z.number().int();
+/**
+ * Largest money amount accepted anywhere, in cents ($10 billion). Far above
+ * any household figure, and small enough that sums of many amounts stay
+ * well inside exact integer arithmetic (Number.MAX_SAFE_INTEGER).
+ */
+export const MAX_ABS_CENTS = 1_000_000_000_000;
+
+const cents = z
+  .number()
+  .int()
+  .min(-MAX_ABS_CENTS, "Amount is too large")
+  .max(MAX_ABS_CENTS, "Amount is too large");
+
+/**
+ * True when this runtime can actually format dates in the zone. A typo such
+ * as "Mars/Olympus" used to be saved and then throw RangeError in todayIso,
+ * breaking every projection page.
+ */
+export function isSupportedTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const timeZone = z.string().min(1).max(64).refine(isSupportedTimeZone, "Unknown timezone");
 
 export const billCreateSchema = z.object({
   name: z.string().min(1).max(80),
@@ -178,7 +219,7 @@ export const settingsUpdateSchema = z.object({
   payFrequencyDays: z.number().int().min(1).max(60),
   projectionMonths: z.number().int().min(1).max(36),
   currency: z.string().length(3),
-  timezone: z.string().min(1),
+  timezone: timeZone,
 });
 
 export const setupSchema = z.object({
@@ -192,7 +233,7 @@ export const setupSchema = z.object({
   payFrequencyDays: z.number().int().min(1).max(60),
   projectionMonths: z.number().int().min(1).max(36),
   currency: z.string().length(3),
-  timezone: z.string().min(1),
+  timezone: timeZone,
 });
 
 export const loginSchema = z.object({
