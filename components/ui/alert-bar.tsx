@@ -30,7 +30,7 @@ export function AlertBar({
     },
     red: {
       wrap: "bg-[var(--red-glow)] border-[color-mix(in_oklch,var(--red)_30%,transparent)]",
-      tag: "bg-[var(--red)] text-[var(--text-0)]",
+      tag: "bg-[var(--red)] text-[var(--bg-0)]",
     },
   }[variant];
 

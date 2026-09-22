@@ -160,7 +160,7 @@ export function PlaidDraftApproveDialog({
                 className={cn(
                   "rounded-sm px-3 py-2 text-2xs font-semibold transition-colors",
                   mode === "promo"
-                    ? "bg-[var(--mint)] text-black"
+                    ? "bg-[var(--mint)] text-[var(--button-primary-fg)]"
                     : "text-[var(--text-2)] hover:text-[var(--text-0)]",
                 )}
               >
@@ -172,7 +172,7 @@ export function PlaidDraftApproveDialog({
                 className={cn(
                   "rounded-sm px-3 py-2 text-2xs font-semibold transition-colors",
                   mode === "expense"
-                    ? "bg-[var(--mint)] text-black"
+                    ? "bg-[var(--mint)] text-[var(--button-primary-fg)]"
                     : "text-[var(--text-2)] hover:text-[var(--text-0)]",
                 )}
               >
@@ -204,8 +204,8 @@ export function PlaidDraftApproveDialog({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Amount</Label>
-                <MoneyInput valueCents={amountCents} onChangeCents={setAmountCents} />
+                <Label htmlFor="plaid-draft-approve-dialog-amount">Amount</Label>
+                <MoneyInput id="plaid-draft-approve-dialog-amount" valueCents={amountCents} onChangeCents={setAmountCents} />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="draft-cat">Category</Label>
@@ -259,8 +259,8 @@ export function PlaidDraftApproveDialog({
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label>Original amount</Label>
-                  <MoneyInput
+                  <Label htmlFor="plaid-draft-approve-dialog-original-amount">Original amount</Label>
+                  <MoneyInput id="plaid-draft-approve-dialog-original-amount"
                     valueCents={promoOriginalCents}
                     onChangeCents={(next) => {
                       setPromoOriginalCents(next);
@@ -269,8 +269,8 @@ export function PlaidDraftApproveDialog({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Remaining balance</Label>
-                  <MoneyInput
+                  <Label htmlFor="plaid-draft-approve-dialog-remaining-balance">Remaining balance</Label>
+                  <MoneyInput id="plaid-draft-approve-dialog-remaining-balance"
                     valueCents={promoRemainingCents}
                     onChangeCents={setPromoRemainingCents}
                   />
@@ -284,8 +284,8 @@ export function PlaidDraftApproveDialog({
               </label>
               {useDesiredPayment && (
                 <div className="space-y-1.5">
-                  <Label>Desired cycle payment</Label>
-                  <MoneyInput
+                  <Label htmlFor="plaid-draft-approve-dialog-desired-cycle-payment">Desired cycle payment</Label>
+                  <MoneyInput id="plaid-draft-approve-dialog-desired-cycle-payment"
                     valueCents={desiredPaymentCents}
                     onChangeCents={setDesiredPaymentCents}
                   />

@@ -242,8 +242,8 @@ export function SettingsClient({
             <form onSubmit={save} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label>Starting balance</Label>
-                  <MoneyInput valueCents={startingBalanceCents} onChangeCents={setStartingBalance} />
+                  <Label htmlFor="settings-starting-balance">Starting balance</Label>
+                  <MoneyInput id="settings-starting-balance" valueCents={startingBalanceCents} onChangeCents={setStartingBalance} />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="startingBalanceAsOf">Starting balance as of</Label>

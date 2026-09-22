@@ -271,6 +271,7 @@ export function TransactionSplitDialog({
                         {selected ? (
                           <div className="w-32 shrink-0">
                             <MoneyInput
+                              aria-label={`Amount toward ${c.label}, due ${c.targetDate}`}
                               valueCents={amounts[c.key] ?? 0}
                               onChangeCents={(v) =>
                                 setAmounts((prev) => ({ ...prev, [c.key]: Math.max(0, v) }))
