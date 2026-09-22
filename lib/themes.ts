@@ -92,7 +92,7 @@ const DARK_TOKENS: ThemeTokens = {
   "olive-dark": "#3D4A2B",
 
   amber: "#f4b860",
-  red: "#e26d5a",
+  red: "#eb7b69",
   "red-glow": "rgba(226, 109, 90, 0.15)",
   success: "#82c979",
   info: "#75a7ff",
@@ -100,7 +100,7 @@ const DARK_TOKENS: ThemeTokens = {
   "text-0": "#eef2f2",
   "text-1": "#c8d0d0",
   "text-2": "#9aa6a6",
-  "text-3": "#647171",
+  "text-3": "#8e9a9a",
 
   "border-raw": "rgba(255, 255, 255, 0.10)",
   "border-2": "rgba(255, 255, 255, 0.16)",
@@ -115,28 +115,28 @@ const LIGHT_TOKENS: ThemeTokens = {
   "bg-card": "#fffdf8",
   "bg-inset": "#ede9df",
 
-  cyan: "#75a7ff",
+  cyan: "#2957a8",
   "cyan-bright": "#9cc1ff",
   "cyan-dim": "#4f7dcc",
-  "cyan-glow": "rgba(117, 167, 255, 0.14)",
+  "cyan-glow": "rgba(41, 87, 168, 0.12)",
 
-  phosphor: "#82c979",
+  phosphor: "#2f6e2a",
   "phosphor-dim": "#5a9b55",
-  "phosphor-glow": "rgba(130, 201, 121, 0.14)",
+  "phosphor-glow": "rgba(47, 110, 42, 0.12)",
 
-  olive: "#5A6B3A",
+  olive: "#5c6634",
   "olive-dark": "#3A4A22",
 
-  amber: "#f4b860",
-  red: "#e26d5a",
-  "red-glow": "rgba(226, 109, 90, 0.14)",
-  success: "#82c979",
-  info: "#75a7ff",
+  amber: "#8f5300",
+  red: "#b3321f",
+  "red-glow": "rgba(179, 50, 31, 0.10)",
+  success: "#2f6e2a",
+  info: "#2957a8",
 
   "text-0": "#1d2426",
   "text-1": "#465154",
-  "text-2": "#69716f",
-  "text-3": "#8d9693",
+  "text-2": "#5b6361",
+  "text-3": "#616967",
 
   "border-raw": "rgba(29, 36, 38, 0.12)",
   "border-2": "rgba(29, 36, 38, 0.18)",

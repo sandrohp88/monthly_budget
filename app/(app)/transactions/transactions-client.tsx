@@ -295,6 +295,7 @@ export function TransactionsClient({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9"
+            aria-label="Search transactions"
             placeholder="search"
           />
         </div>
@@ -643,8 +644,8 @@ function TransactionEditDialog({
               <Input id="txn-date" type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>Amount</Label>
-              <MoneyInput valueCents={amountCents} onChangeCents={setAmountCents} />
+              <Label htmlFor="transactions-amount">Amount</Label>
+              <MoneyInput id="transactions-amount" valueCents={amountCents} onChangeCents={setAmountCents} />
             </div>
           </div>
           <div className="space-y-1.5">
@@ -750,15 +751,15 @@ function TransactionPromoDialog({
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Original amount</Label>
-              <MoneyInput valueCents={originalAmountCents} onChangeCents={(next) => {
+              <Label htmlFor="transactions-original-amount">Original amount</Label>
+              <MoneyInput id="transactions-original-amount" valueCents={originalAmountCents} onChangeCents={(next) => {
                 setOriginalAmountCents(next);
                 setRemainingAmountCents((current) => Math.min(current, next));
               }} />
             </div>
             <div className="space-y-1.5">
-              <Label>Remaining balance</Label>
-              <MoneyInput valueCents={remainingAmountCents} onChangeCents={setRemainingAmountCents} />
+              <Label htmlFor="transactions-remaining-balance">Remaining balance</Label>
+              <MoneyInput id="transactions-remaining-balance" valueCents={remainingAmountCents} onChangeCents={setRemainingAmountCents} />
             </div>
           </div>
           <label className="flex cursor-pointer items-center justify-between rounded-sm border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2">
@@ -767,8 +768,8 @@ function TransactionPromoDialog({
           </label>
           {useDesiredPayment ? (
             <div className="space-y-1.5">
-              <Label>Desired cycle payment</Label>
-              <MoneyInput valueCents={monthlyPaymentCents} onChangeCents={setMonthlyPaymentCents} />
+              <Label htmlFor="transactions-desired-cycle-payment">Desired cycle payment</Label>
+              <MoneyInput id="transactions-desired-cycle-payment" valueCents={monthlyPaymentCents} onChangeCents={setMonthlyPaymentCents} />
             </div>
           ) : null}
           {transaction.originalDescription ? (

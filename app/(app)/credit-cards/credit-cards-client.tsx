@@ -204,7 +204,9 @@ function WalletCardEntry({ data, today }: { data: WalletCard; today: string }) {
           <span
             className={cn(
               "absolute right-2.5 top-2.5 rounded-full px-2 py-0.5 text-2xs font-bold tracking-wide text-white shadow-sm",
-              status === "overdue" ? "bg-[#d13f3f]" : "bg-[#c97a10]",
+              // Fixed colours: the badge sits on card art, not a theme surface. Both
+              // keep white text >=4.5:1 (was 3.35:1 on the amber; review R10).
+              status === "overdue" ? "bg-[#b3321f]" : "bg-[#8f5300]",
             )}
           >
             {status === "overdue" ? "Overdue" : `Due in ${daysLeft}D`}

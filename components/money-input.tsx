@@ -12,14 +12,14 @@ import { dollarsToCents } from "@/lib/money";
  */
 export const MoneyInput = React.forwardRef<
   HTMLInputElement,
-  {
+  /**
+   * Standard input attributes pass through, so callers can wire an `id` to a
+   * `<Label htmlFor>` or give repeated controls a row-specific `aria-label`
+   * (review 2026-09-21 R11: unnamed money inputs).
+   */
+  Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "defaultValue" | "onChange" | "type"> & {
     valueCents: number;
     onChangeCents: (cents: number) => void;
-    name?: string;
-    id?: string;
-    placeholder?: string;
-    disabled?: boolean;
-    className?: string;
   }
 >(({ valueCents, onChangeCents, ...rest }, ref) => {
   const [text, setText] = React.useState<string>(() =>

@@ -191,7 +191,7 @@ export function ScheduleDialog({
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="sched-amount">Amount each payday</Label>
-            <MoneyInput valueCents={amountCents} onChangeCents={setAmountCents} />
+            <MoneyInput id="sched-amount" valueCents={amountCents} onChangeCents={setAmountCents} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="sched-label">Whose paycheck</Label>

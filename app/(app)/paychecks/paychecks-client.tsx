@@ -34,6 +34,15 @@ import { describeCadence, summarizeSequences } from "@/lib/paycheck-schedule";
 import { ScheduleDialog, type ScheduleSeed } from "./schedule-dialog";
 import type { PaycheckRow } from "@/lib/db/schema";
 
+/**
+ * Row identity for the inline editors. The table header alone isn't a
+ * programmatic name, and every row has the same five controls, so each one
+ * says which paycheck it edits (review 2026-09-21 R11).
+ */
+function paycheckRowName(p: { payDate: string; note?: string | null }): string {
+  return p.note ? `paycheck ${p.payDate} (${p.note})` : `paycheck ${p.payDate}`;
+}
+
 export function PaychecksClient({
   initialPaychecks,
   timezone,
@@ -307,6 +316,7 @@ export function PaychecksClient({
                       <TableCell>
                         <Input
                           type="date"
+                          aria-label={`Pay date, ${paycheckRowName(p)}`}
                           value={p.payDate}
                           onChange={(e) => updateRow(p, { payDate: e.target.value })}
                           className="h-8 w-[12rem]"
@@ -315,6 +325,7 @@ export function PaychecksClient({
                       <TableCell className="text-right">
                         <div className="flex justify-end">
                           <MoneyInput
+                            aria-label={`Planned amount, ${paycheckRowName(p)}`}
                             valueCents={p.amountCents}
                             onChangeCents={(c) => updateRow(p, { amountCents: c })}
                             className="h-8 w-32 text-right"
@@ -323,6 +334,7 @@ export function PaychecksClient({
                       </TableCell>
                       <TableCell>
                         <Input
+                          aria-label={`Note, ${paycheckRowName(p)}`}
                           value={p.note ?? ""}
                           onChange={(e) => updateRow(p, { note: e.target.value })}
                           className="h-8"
@@ -332,6 +344,7 @@ export function PaychecksClient({
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Switch
+                            aria-label={`Received, ${paycheckRowName(p)}`}
                             checked={p.actualReceived}
                             onCheckedChange={(v) => updateRow(p, { actualReceived: v })}
                           />
@@ -344,6 +357,7 @@ export function PaychecksClient({
                         {p.actualReceived ? (
                           <div className="flex justify-end">
                             <MoneyInput
+                              aria-label={`Actual amount, ${paycheckRowName(p)}`}
                               valueCents={p.actualAmountCents ?? p.amountCents}
                               onChangeCents={(c) => updateRow(p, { actualAmountCents: c })}
                               className="h-8 w-32 text-right"
@@ -518,8 +532,8 @@ function CreatePaycheckForm({
         />
       </div>
       <div className="space-y-1.5">
-        <Label>AMOUNT ($)</Label>
-        <MoneyInput valueCents={amountCents} onChangeCents={setAmountCents} />
+        <Label htmlFor="paychecks-amount">AMOUNT ($)</Label>
+        <MoneyInput id="paychecks-amount" valueCents={amountCents} onChangeCents={setAmountCents} />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="note">Note</Label>

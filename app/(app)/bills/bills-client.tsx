@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Calculator, Plus, Download, Trash2 } from "lucide-react";
+import { Calculator, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -309,9 +309,6 @@ export function BillsClient({
                 Show archived
               </span>
             </label>
-            <Button variant="outline">
-              <Download className="h-3 w-3" /> Export
-            </Button>
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
               <Plus className="h-3 w-3" /> Add bill
             </Button>
@@ -336,6 +333,7 @@ export function BillsClient({
         ))}
         <div className="ml-auto w-56">
           <Input
+            aria-label="Filter bills"
             placeholder="Filter…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
@@ -785,8 +783,8 @@ function OverrideSection({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Amount</Label>
-              <MoneyInput valueCents={newAmount} onChangeCents={setNewAmount} />
+              <Label htmlFor="bills-amount">Amount</Label>
+              <MoneyInput id="bills-amount" valueCents={newAmount} onChangeCents={setNewAmount} />
             </div>
           </div>
           <div className="space-y-1.5">
@@ -987,8 +985,8 @@ function VariableBillForm({
           />
         </div>
         <div className="space-y-1.5">
-          <Label>Expected amount</Label>
-          <MoneyInput valueCents={amountCents} onChangeCents={setAmountCents} />
+          <Label htmlFor="bills-expected-amount">Expected amount</Label>
+          <MoneyInput id="bills-expected-amount" valueCents={amountCents} onChangeCents={setAmountCents} />
         </div>
         <div className="space-y-1.5">
           <Label>Category</Label>

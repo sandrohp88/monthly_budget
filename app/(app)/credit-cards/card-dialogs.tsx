@@ -266,13 +266,13 @@ export function CardDialog({
           </label>
           {trackCurrentBalance ? (
             <div className="space-y-1.5">
-              <Label>Current balance</Label>
-              <MoneyInput valueCents={currentBalanceCents} onChangeCents={setCurrentBalance} />
+              <Label htmlFor="card-dialogs-current-balance">Current balance</Label>
+              <MoneyInput id="card-dialogs-current-balance" valueCents={currentBalanceCents} onChangeCents={setCurrentBalance} />
             </div>
           ) : null}
           <div className="space-y-1.5">
-            <Label>Credit limit</Label>
-            <MoneyInput valueCents={creditLimitCents} onChangeCents={setCreditLimit} />
+            <Label htmlFor="card-dialogs-credit-limit">Credit limit</Label>
+            <MoneyInput id="card-dialogs-credit-limit" valueCents={creditLimitCents} onChangeCents={setCreditLimit} />
             <div className="text-2xs text-[var(--text-3)]">
               Drives the utilization read on the spending tab. Leave at $0 to skip it — a linked
               card fills this in from the issuer on the next sync.
@@ -399,8 +399,8 @@ export function StatementCreateDialog({
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>Statement balance (pay this to avoid interest)</Label>
-            <MoneyInput valueCents={statementBalanceCents} onChangeCents={setBalance} />
+            <Label htmlFor="card-dialogs-statement-balance">Statement balance (pay this to avoid interest)</Label>
+            <MoneyInput id="card-dialogs-statement-balance" valueCents={statementBalanceCents} onChangeCents={setBalance} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="stmt-notes">Notes</Label>
@@ -529,8 +529,8 @@ export function StatementEditDialog({
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>Statement balance</Label>
-            <MoneyInput valueCents={statementBalanceCents} onChangeCents={setBalance} />
+            <Label htmlFor="card-dialogs-statement-balance-2">Statement balance</Label>
+            <MoneyInput id="card-dialogs-statement-balance-2" valueCents={statementBalanceCents} onChangeCents={setBalance} />
           </div>
           <div className="flex items-center justify-between border-y border-[var(--border-raw)] py-3">
             <Label>Mark as paid</Label>
@@ -540,8 +540,8 @@ export function StatementEditDialog({
             <>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label>Paid amount</Label>
-                  <MoneyInput valueCents={paidAmountCents} onChangeCents={setPaidAmount} />
+                  <Label htmlFor="card-dialogs-paid-amount">Paid amount</Label>
+                  <MoneyInput id="card-dialogs-paid-amount" valueCents={paidAmountCents} onChangeCents={setPaidAmount} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Paid date</Label>
@@ -729,12 +729,12 @@ export function PromoDialog({
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label>Original amount</Label>
-              <MoneyInput valueCents={originalAmountCents} onChangeCents={setOriginalAmount} />
+              <Label htmlFor="card-dialogs-original-amount">Original amount</Label>
+              <MoneyInput id="card-dialogs-original-amount" valueCents={originalAmountCents} onChangeCents={setOriginalAmount} />
             </div>
             <div className="space-y-1.5">
-              <Label>Remaining</Label>
-              <MoneyInput valueCents={remainingAmountCents} onChangeCents={setRemaining} />
+              <Label htmlFor="card-dialogs-remaining">Remaining</Label>
+              <MoneyInput id="card-dialogs-remaining" valueCents={remainingAmountCents} onChangeCents={setRemaining} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
@@ -770,8 +770,8 @@ export function PromoDialog({
           </label>
           {overrideMonthly ? (
             <div className="space-y-1.5">
-              <Label>Desired monthly payment</Label>
-              <MoneyInput valueCents={monthlyPaymentCents} onChangeCents={setMonthlyPayment} />
+              <Label htmlFor="card-dialogs-desired-monthly-payment">Desired monthly payment</Label>
+              <MoneyInput id="card-dialogs-desired-monthly-payment" valueCents={monthlyPaymentCents} onChangeCents={setMonthlyPayment} />
             </div>
           ) : null}
           <div className="rounded-sm border border-[var(--cyan-dim,var(--border-raw))] bg-[var(--bg-2)] px-3 py-2 text-2xs text-[var(--text-2)]">
@@ -1332,7 +1332,7 @@ export function PromoScheduleSheet({
                 <span className="text-right">Remaining after</span>
                 <span className="w-6"></span>
               </div>
-              {rowsWithRunning.map((r) => {
+              {rowsWithRunning.map((r, idx) => {
                 const overdraw = r.runningAfter < 0;
                 return (
                   <div
@@ -1341,17 +1341,20 @@ export function PromoScheduleSheet({
                   >
                     <Input
                       type="date"
+                      aria-label={`Payment date, row ${idx + 1}`}
                       value={r.dueDate}
                       onChange={(e) => updateRow(r.key, { dueDate: e.target.value })}
                       className="h-8 text-[11px]"
                     />
                     <MoneyInput
+                      aria-label={`Payment amount, row ${idx + 1}`}
                       valueCents={r.amountCents}
                       onChangeCents={(v) => updateRow(r.key, { amountCents: v })}
                     />
                     <Input
                       placeholder="optional"
                       maxLength={500}
+                      aria-label={`Note, row ${idx + 1}`}
                       value={r.note ?? ""}
                       onChange={(e) =>
                         updateRow(r.key, { note: e.target.value || null })
@@ -1371,6 +1374,7 @@ export function PromoScheduleSheet({
                       variant="ghost"
                       onClick={() => deleteRow(r.key)}
                       title="Remove"
+                      aria-label={`Remove row ${idx + 1}`}
                     >
                       <Trash2 className="h-3 w-3 text-[var(--red)]" />
                     </Button>

@@ -94,32 +94,32 @@
     --bg-card: #fffdf8;
     --bg-inset: #ede9df;
 
-    --mint: #50d6c9;
-    --mint-bright: #68eee2;
+    --mint: #0b665f;
+    --mint-bright: #0a5c55;
     --mint-dim: #3baea5;
-    --mint-glow: rgba(80, 214, 201, 0.16);
+    --mint-glow: rgba(11, 102, 95, 0.14);
 
-    --cyan: #75a7ff;
+    --cyan: #2957a8;
     --cyan-bright: #9cc1ff;
     --cyan-dim: #4f7dcc;
-    --cyan-glow: rgba(117, 167, 255, 0.14);
+    --cyan-glow: rgba(41, 87, 168, 0.12);
 
-    --phosphor: #82c979;
+    --phosphor: #2f6e2a;
     --phosphor-dim: #5a9b55;
-    --phosphor-glow: rgba(130, 201, 121, 0.14);
+    --phosphor-glow: rgba(47, 110, 42, 0.12);
 
-    --olive: #6f7a3f;
+    --olive: #5c6634;
 
-    --amber: #f4b860;
-    --red: #e26d5a;
-    --red-glow: rgba(226, 109, 90, 0.14);
-    --success: #82c979;
-    --info: #75a7ff;
+    --amber: #8f5300;
+    --red: #b3321f;
+    --red-glow: rgba(179, 50, 31, 0.10);
+    --success: #2f6e2a;
+    --info: #2957a8;
 
     --text-0: #1d2426;
     --text-1: #465154;
-    --text-2: #69716f;
-    --text-3: #8d9693;
+    --text-2: #5b6361;
+    --text-3: #616967;
     --text-4: #b7bdb9;
 
     --border-raw: rgba(29, 36, 38, 0.12);
@@ -134,7 +134,7 @@
     --shadow-lg: 0 24px 60px rgba(16, 19, 22, 0.16);
 
     --header-glass: rgba(244, 241, 235, 0.84);
-    --button-primary-fg: #101316;
+    --button-primary-fg: #fffdf8;
 
     --background: 40 29% 94%;
     --foreground: 190 13% 13%;
@@ -142,20 +142,20 @@
     --card-foreground: 190 13% 13%;
     --popover: 43 64% 99%;
     --popover-foreground: 190 13% 13%;
-    --primary: 175 62% 58%;
-    --primary-foreground: 210 16% 7%;
+    --primary: 175 81% 22%;
+    --primary-foreground: 43 100% 99%;
     --secondary: 42 39% 95%;
     --secondary-foreground: 190 8% 30%;
     --muted: 42 32% 93%;
     --muted-foreground: 160 4% 43%;
-    --accent: 175 62% 58%;
-    --accent-foreground: 210 16% 7%;
+    --accent: 175 81% 22%;
+    --accent-foreground: 43 100% 99%;
     --destructive: 8 70% 62%;
     --destructive-foreground: 210 16% 7%;
     --warning: 36 85% 67%;
     --border: 37 19% 84%;
     --input: 37 19% 84%;
-    --ring: 175 62% 58%;
+    --ring: 175 81% 22%;
   }
 
   /* ── DARK — slate, teal-mint primary ──────────────────────────────────── */
@@ -187,7 +187,7 @@
     --olive: #a3b072;
 
     --amber: #f4b860;
-    --red: #e26d5a;
+    --red: #eb7b69;
     --red-glow: rgba(226, 109, 90, 0.15);
     --success: #82c979;
     --info: #75a7ff;
@@ -195,7 +195,7 @@
     --text-0: #eef2f2;
     --text-1: #c8d0d0;
     --text-2: #9aa6a6;
-    --text-3: #647171;
+    --text-3: #8e9a9a; /* >=4.6:1 on every dark surface; was 3.4-3.7:1 (R10) */
     --text-4: #465154;
 
     --border-raw: rgba(255, 255, 255, 0.1);
@@ -246,18 +246,18 @@
     --bg-card: #fffcf6;
     --bg-inset: #efe5d6;
 
-    --mint: #2d7d63;
+    --mint: #1f6650;
     --mint-bright: #256b54;
     --mint-dim: #9bc8b7;
     --mint-glow: rgba(45, 125, 99, 0.12);
 
     --cyan: #5b75aa;
-    --olive: #6f7a3f;
+    --olive: #5c6634;
 
     --text-0: #211d16;
     --text-1: #5e574b;
-    --text-2: #7b7366;
-    --text-3: #a0988a;
+    --text-2: #645d51;
+    --text-3: #6b6457;
 
     --border-raw: #e7dccb;
     --border-2: #d1c2ad;
@@ -295,7 +295,7 @@
     --text-0: #f3f1ff;
     --text-1: #c9c7dd;
     --text-2: #9b99b2;
-    --text-3: #6d6c83;
+    --text-3: #9594ad;
     --text-4: #4a496a;
 
     --border-raw: #2b3043;
@@ -326,6 +326,14 @@
     --border: 230 22% 22%;
     --input: 230 22% 22%;
     --ring: 227 60% 62%;
+
+    /* A dark theme must set its own status accents: otherwise it inherits the
+       light (:root) ones, which are tuned for paper and fail on indigo. */
+    --amber: #f4b860;
+    --red: #e87a68;
+    --red-glow: rgba(232, 122, 104, 0.15);
+    --success: #82c979;
+    --info: #75a7ff;
   }
 
   /* ── OLIVE — khaki paper (light mode) ─────────────────────────────────── */
@@ -340,18 +348,18 @@
     --bg-card: #ffffff;
     --bg-inset: #e8ecdf;
 
-    --mint: #5b7b52;
+    --mint: #46653f;
     --mint-bright: #476440;
     --mint-dim: #a9bda2;
     --mint-glow: rgba(91, 123, 82, 0.12);
 
     --cyan: #617aa3;
-    --olive: #5b7b52;
+    --olive: #46653f;
 
     --text-0: #1f211b;
     --text-1: #585d4e;
-    --text-2: #737967;
-    --text-3: #999f8f;
+    --text-2: #5b6151;
+    --text-3: #626858;
 
     --border-raw: #e0e5d7;
     --border-2: #c8d0bc;
