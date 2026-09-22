@@ -280,18 +280,25 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   let unattributedPendingCents = 0;
   let answeredOccurrences: ProjectionBundle["pendingPosting"]["answered"] = [];
   if (linked) {
+    // The reconciliation window must reach every claim that can hold cash.
+    // Tracked card plans already widen it. A `sent` bill mark must too:
+    // findHeldOccurrences scans back to a mark however old it is, releasing
+    // the hold only when a posted payment proves the occurrence paid. If that
+    // payment has aged out of a fixed 45-day window, the proof vanishes and
+    // the hold is re-applied, debiting money that left weeks ago. That is
+    // how five August bills (all paid and linked) started holding $1,657 of
+    // Lisette's balance again in mid-September (2026-09-21).
+    const reconcileFrom = [
+      ...plannedCardPayments.map((p) => p.date),
+      ...billPaymentMarks
+        .filter((m) => m.state === "sent")
+        .flatMap((m) => [m.dueDate, m.markedDate]),
+    ].reduce((start, d) => {
+      const from = addDaysIso(d, -3);
+      return from < start ? from : start;
+    }, addDaysIso(today, -RECONCILE_LOOKBACK_DAYS));
     const [rawDrafts, linkDescriptors, allocationRows, cardReceipts] = await Promise.all([
-      listStartingBalanceDraftsInRange(
-        userId,
-        plannedCardPayments.reduce(
-          (start, p) => {
-            const from = addDaysIso(p.date, -3);
-            return from < start ? from : start;
-          },
-          addDaysIso(today, -RECONCILE_LOOKBACK_DAYS),
-        ),
-        today,
-      ),
+      listStartingBalanceDraftsInRange(userId, reconcileFrom, today),
       listBillLinkDescriptors(userId),
       listDraftAllocationsForUser(userId),
       listCardPaymentReceipts(userId),
