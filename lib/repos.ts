@@ -3059,8 +3059,9 @@ export async function getNetWorthComponents(userId: string): Promise<NetWorthCom
  *
  * Plaid items / accounts / drafts are intentionally NOT exported — the
  * access tokens are encrypted with a per-deployment PLAID_ENCRYPTION_KEY,
- * and the institution session is single-use. After restore the user
- * relinks each institution.
+ * and the institution session is single-use. After a restore on a NEW install
+ * the user relinks each institution; on the same install, cards keep their
+ * links to still-connected accounts (planPlaidLinkRestore).
  */
 export async function exportAll(userId: string) {
   const db = getDb();
@@ -3155,6 +3156,7 @@ export async function previewImport(
   if (payload.categories === undefined) {
     warnings.push("Backup has no categories; current categories are kept.");
   }
+  warnings.push(...planPlaidLinkRestore(getDb(), userId, payload.creditCards).dropped);
   return {
     schemaVersion: payload.schemaVersion,
     exportedAt: payload.exportedAt,
@@ -3264,10 +3266,10 @@ async function validateImportGraph(
  *   - Foreign keys inside the payload (statements → cards, overrides →
  *     bills/cards, etc.) MUST resolve to a row inside the same payload.
  *     Cross-user references are rejected before any write fires.
- *   - Plaid items / accounts / drafts are intentionally not touched —
- *     re-linking is how the user gets live data back, and exposing those
- *     IDs in a backup would let one user's import overwrite another's
- *     Plaid linkage.
+ *   - Plaid items / accounts / drafts are intentionally not touched. A
+ *     card's link to one of them survives only while that account is still
+ *     this user's and active (planPlaidLinkRestore), so a backup can never
+ *     claim another user's account.
  */
 /**
  * Detect bills in an import payload that match existing bills by composite key
@@ -3289,6 +3291,67 @@ export function detectDuplicateBills(
     }
   }
   return warnings;
+}
+
+type ImportTx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+/** What a restore does with each backed-up card's Plaid link. */
+export type PlaidLinkRestorePlan = {
+  /** cardId → the Plaid account it stays linked to. Cards not listed restore unlinked. */
+  keep: Map<string, string>;
+  /** One line per link the restore drops, for the preview. */
+  dropped: string[];
+};
+
+/**
+ * Decide which backed-up card→Plaid links survive a restore.
+ *
+ * Plaid items and accounts are never part of a backup and a restore never
+ * touches them, so on the SAME install a card's link is still valid. Dropping
+ * every link (the old behaviour) silently cut linked cards off from
+ * statements, payment matching and classification — including when the user
+ * re-imported the automatic pre-import snapshot to undo a restore (review
+ * 2026-09-24 C02). A link is kept only when:
+ *
+ *   - the account belongs to THIS user and its item is still active — so a
+ *     backup from another install or another user can never claim an account;
+ *   - no other card in the backup claims the same account — the unique index
+ *     allows one card per account, and guessing which one is meant is worse
+ *     than asking the user to re-link.
+ */
+export function planPlaidLinkRestore(
+  db: ReturnType<typeof getDb> | ImportTx,
+  userId: string,
+  cards: BackupImportInput["creditCards"],
+): PlaidLinkRestorePlan {
+  const keep = new Map<string, string>();
+  const dropped: string[] = [];
+  const claimed = (cards ?? []).filter((c) => c.plaidAccountId);
+  if (claimed.length === 0) return { keep, dropped };
+
+  const active = new Set(
+    db
+      .select({ id: plaidAccounts.id })
+      .from(plaidAccounts)
+      .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.itemId))
+      .where(and(eq(plaidAccounts.userId, userId), eq(plaidItems.isActive, true)))
+      .all()
+      .map((a) => a.id),
+  );
+  const claims = new Map<string, number>();
+  for (const c of claimed) claims.set(c.plaidAccountId!, (claims.get(c.plaidAccountId!) ?? 0) + 1);
+
+  for (const c of claimed) {
+    const accountId = c.plaidAccountId!;
+    if (!active.has(accountId)) {
+      dropped.push(`Card "${c.name}" restores without its bank link: that account is not connected here.`);
+    } else if ((claims.get(accountId) ?? 0) > 1) {
+      dropped.push(`Card "${c.name}" restores without its bank link: another card in the backup claims the same account.`);
+    } else {
+      keep.set(c.id, accountId);
+    }
+  }
+  return { keep, dropped };
 }
 
 export async function importAll(userId: string, payload: BackupImportInput): Promise<void> {
@@ -3324,7 +3387,7 @@ export async function importAll(userId: string, payload: BackupImportInput): Pro
  * insert error rolls back the deletes above.
  */
 function importInsideTransaction(
-  tx: Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0],
+  tx: ImportTx,
   userId: string,
   payload: BackupImportInput,
 ): void {
@@ -3356,9 +3419,10 @@ function importInsideTransaction(
 
   // Insert in dependency order (parents before children). Cards first so
   // bills.paidViaCardId / extras.paidViaCardId / statements.cardId all
-  // resolve. Plaid account links are nulled because the Plaid items aren't
-  // exported — restoring on a fresh deployment with a different
-  // PLAID_ENCRYPTION_KEY would otherwise leave dangling references.
+  // resolve. A card keeps its Plaid link only while that account is still
+  // this user's and active (planPlaidLinkRestore); otherwise it restores
+  // unlinked, e.g. on a fresh install whose Plaid items were never imported.
+  const plaidLinks = planPlaidLinkRestore(tx, userId, payload.creditCards);
   for (const card of payload.creditCards ?? []) {
     tx.insert(creditCards).values({
       id: card.id,
@@ -3375,7 +3439,7 @@ function importInsideTransaction(
       autoPay: card.autoPay ?? false,
       notes: card.notes ?? null,
       isActive: card.isActive ?? true,
-      plaidAccountId: null,
+      plaidAccountId: plaidLinks.keep.get(card.id) ?? null,
     }).run();
   }
 
