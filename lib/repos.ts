@@ -1975,28 +1975,55 @@ export async function markItemTransactionsRefreshed(id: string, at: number): Pro
 
 export async function deactivatePlaidItem(userId: string, id: string): Promise<void> {
   const db = getDb();
-  // SQLite ALTER TABLE can't add an FK with ON DELETE SET NULL, so we
-  // explicitly null `plaid_account_id` on any credit cards linked to this
-  // item's accounts before deactivating. This keeps the card row intact —
-  // the user just goes back to manual cycle-day management.
-  const accts = await db
-    .select({ id: plaidAccounts.id })
-    .from(plaidAccounts)
-    .where(eq(plaidAccounts.itemId, id))
-    .all();
-  if (accts.length > 0) {
-    const ids = accts.map((a) => a.id);
-    await db
-      .update(creditCards)
-      .set({ plaidAccountId: null, updatedAt: Date.now() })
-      .where(and(eq(creditCards.userId, userId), inArray(creditCards.plaidAccountId, ids)))
+  // One transaction: a removed item must stop feeding every total at once.
+  //
+  //   - Linked cards go back to manual cycle-day management. SQLite ALTER
+  //     TABLE can't add an FK with ON DELETE SET NULL, so this is explicit.
+  //   - Its accounts stop anchoring the starting balance. The balance queries
+  //     also ignore inactive items; clearing the flag keeps the stored state
+  //     honest (review 2026-09-24 C01: a removed bank's frozen balance kept
+  //     feeding the projection and doubled it after a re-link).
+  //   - Its PENDING drafts are dismissed: nothing will ever post or remove
+  //     them now, so they would hold cash forever. Posted history stays as
+  //     an audit trail.
+  db.transaction((tx) => {
+    const item = tx
+      .select({ id: plaidItems.id })
+      .from(plaidItems)
+      .where(and(eq(plaidItems.userId, userId), eq(plaidItems.id, id)))
+      .get();
+    if (!item) return;
+    const ids = tx
+      .select({ id: plaidAccounts.id })
+      .from(plaidAccounts)
+      .where(and(eq(plaidAccounts.userId, userId), eq(plaidAccounts.itemId, id)))
+      .all()
+      .map((a) => a.id);
+    if (ids.length > 0) {
+      tx.update(creditCards)
+        .set({ plaidAccountId: null, updatedAt: Date.now() })
+        .where(and(eq(creditCards.userId, userId), inArray(creditCards.plaidAccountId, ids)))
+        .run();
+      tx.update(plaidAccounts)
+        .set({ useAsStartingBalance: false, updatedAt: Date.now() })
+        .where(and(eq(plaidAccounts.userId, userId), inArray(plaidAccounts.id, ids)))
+        .run();
+      tx.update(plaidTransactionDrafts)
+        .set({ status: "dismissed" })
+        .where(
+          and(
+            eq(plaidTransactionDrafts.userId, userId),
+            inArray(plaidTransactionDrafts.accountId, ids),
+            eq(plaidTransactionDrafts.pending, true),
+          ),
+        )
+        .run();
+    }
+    tx.update(plaidItems)
+      .set({ isActive: false })
+      .where(and(eq(plaidItems.userId, userId), eq(plaidItems.id, id)))
       .run();
-  }
-  await db
-    .update(plaidItems)
-    .set({ isActive: false })
-    .where(and(eq(plaidItems.userId, userId), eq(plaidItems.id, id)))
-    .run();
+  });
 }
 
 export async function listPlaidAccounts(userId: string): Promise<PlaidAccountRow[]> {
@@ -2900,10 +2927,14 @@ export async function getLinkedBalanceSnapshot(
       availableBalanceCents: plaidAccounts.availableBalanceCents,
     })
     .from(plaidAccounts)
+    // A removed item's accounts keep their last balance forever; they must
+    // not anchor the projection (review 2026-09-24 C01).
+    .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.itemId))
     .where(
       and(
         eq(plaidAccounts.userId, userId),
         eq(plaidAccounts.useAsStartingBalance, true),
+        eq(plaidItems.isActive, true),
       ),
     )
     .all();
@@ -2946,12 +2977,15 @@ export async function getPendingDraftOutflow(userId: string): Promise<number> {
     .select({ amountCents: plaidTransactionDrafts.amountCents })
     .from(plaidTransactionDrafts)
     .innerJoin(plaidAccounts, eq(plaidTransactionDrafts.accountId, plaidAccounts.id))
+    // A removed item never posts or removes its pending rows again.
+    .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.itemId))
     .where(
       and(
         eq(plaidTransactionDrafts.userId, userId),
         eq(plaidTransactionDrafts.pending, true),
         ne(plaidTransactionDrafts.status, "dismissed" as const),
         eq(plaidAccounts.useAsStartingBalance, true),
+        eq(plaidItems.isActive, true),
       ),
     )
     .all();
@@ -2987,7 +3021,15 @@ export async function getNetWorthComponents(userId: string): Promise<NetWorthCom
       balanceCents: plaidAccounts.balanceCents,
     })
     .from(plaidAccounts)
-    .where(and(eq(plaidAccounts.userId, userId), eq(plaidAccounts.syncEnabled, true)))
+    // Removed items' balances are frozen, not current — leave them out.
+    .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.itemId))
+    .where(
+      and(
+        eq(plaidAccounts.userId, userId),
+        eq(plaidAccounts.syncEnabled, true),
+        eq(plaidItems.isActive, true),
+      ),
+    )
     .all();
   const depositoryBalanceCents = allAccounts
     .filter((a) => a.type === "depository")
