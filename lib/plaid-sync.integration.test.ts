@@ -2433,3 +2433,93 @@ describe("live balance refresh (the stale-cache regression)", () => {
     expect(acct?.availableBalanceCents).toBe(350_00);
   });
 });
+
+// Review 2026-09-24 C04: the Sync buttons, the webhook and card linking can
+// start overlapping passes. With better-sqlite3 each check-then-write already
+// runs without yielding, so the feared duplicate promo did not reproduce (the
+// first test passes on the pre-lock code too; it stays as a guard). What the
+// lock does change: passes no longer run over the same cursor at once.
+describe("overlapping syncs", () => {
+  async function seedLinkedCard(userId: string) {
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins_store", institutionName: "Store Card",
+      accessTokenEnc: token.enc, accessTokenIv: token.iv, accessTokenTag: token.tag,
+      cursor: null, lastSyncedAt: null, isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_store", itemId: item.id, userId, name: "Store Card", mask: "4321",
+      type: "credit", subtype: "credit card", balanceCents: 0, updatedAt: Date.now(),
+    });
+    return createCreditCard(userId, {
+      name: "Store Card", statementDay: 1, dueDay: 25, autoPay: false, isActive: true,
+      plaidAccountId: "acct_store",
+    });
+  }
+
+  const financedPurchase = {
+    transaction_id: "txn_tv",
+    account_id: "acct_store",
+    pending: false,
+    date: TODAY,
+    name: "TV - no interest if paid in full by 12/31/2027",
+    original_description: "TV - no interest if paid in full by 12/31/2027",
+    amount: 899.99,
+    personal_finance_category: { primary: "GENERAL_MERCHANDISE" },
+    merchant_name: "Electronics Store",
+  };
+
+  it("two overlapping syncs create one promo for one financed purchase", async () => {
+    const user = await makeUser();
+    const card = await seedLinkedCard(user.id);
+    // A slow Plaid round-trip gives the second pass every chance to interleave.
+    __plaidMock.transactionsSync.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return {
+        data: { added: [financedPurchase], modified: [], removed: [], next_cursor: "c1", has_more: false, accounts: [] },
+      };
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    await Promise.all([syncPlaidTransactions(user.id), syncPlaidTransactions(user.id)]);
+
+    const promos = await listPromosForCard(user.id, card.id);
+    expect(promos).toHaveLength(1);
+    expect(promos[0]?.originalAmountCents).toBe(899_99);
+    expect((await getPlaidDraft(user.id, "txn_tv"))?.linkedPromoId).toBe(promos[0]?.id);
+  });
+
+  it("serializes a user's syncs: the second starts after the first finishes", async () => {
+    const user = await makeUser();
+    await seedLinkedCard(user.id);
+    const events: string[] = [];
+    let n = 0;
+    __plaidMock.transactionsSync.mockImplementation(async () => {
+      const run = ++n;
+      events.push(`start ${run}`);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      events.push(`end ${run}`);
+      return { data: { added: [], modified: [], removed: [], next_cursor: `c${run}`, has_more: false, accounts: [] } };
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    await Promise.all([syncPlaidTransactions(user.id), syncPlaidTransactions(user.id)]);
+
+    expect(events).toEqual(["start 1", "end 1", "start 2", "end 2"]);
+  });
+
+  it("a failed sync doesn't block the next one", async () => {
+    const user = await makeUser();
+    await seedLinkedCard(user.id);
+    __plaidMock.transactionsSync.mockRejectedValueOnce(new Error("plaid down"));
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: { added: [financedPurchase], modified: [], removed: [], next_cursor: "c1", has_more: false, accounts: [] },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    await syncPlaidTransactions(user.id); // per-item failure is logged, not thrown
+    await syncPlaidTransactions(user.id);
+
+    expect((await getPlaidDraft(user.id, "txn_tv"))?.linkedPromoId).toBeTruthy();
+  });
+});

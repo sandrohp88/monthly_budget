@@ -31,6 +31,16 @@ import {
   // credit cards
   createCreditCard,
   createPromo,
+  createPromoForDraft,
+  approveDraftAsExpense,
+  dismissPendingDraft,
+  applyPromoReconcile,
+  applyPaycheckPlan,
+  createPaycheck,
+  listPaychecks,
+  listExtras,
+  // Aliased: another open PR imports getPlaidDraft here too.
+  getPlaidDraft as readDraft,
   getCreditCard,
   listCreditCards,
   listPromos,
@@ -46,6 +56,10 @@ import {
   listPlaidDrafts,
   updatePlaidDraftStatus,
   getPrimaryLinkedBalance,
+  getLinkedBalanceSnapshot,
+  getPendingDraftOutflow,
+  listPlaidItems,
+  getPlaidDraft,
   updatePlaidAccount,
   // new (under test)
   setCreditCardPlaidLink,
@@ -836,6 +850,113 @@ describe("repos / deactivatePlaidItem", () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// Removed bank connections (review 2026-09-24 C01). A removed item's accounts
+// keep their last balance forever; before the fix they still anchored the
+// projection, held their pending cash forever, and a re-link of the same bank
+// (which gets new account ids) roughly doubled the starting balance.
+// ────────────────────────────────────────────────────────────────────────────
+describe("repos / removed Plaid items stop feeding balances", () => {
+  async function linkChecking(userId: string, accountId: string, balanceCents: number) {
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins_bank", institutionName: "Bank",
+      accessTokenEnc: "00", accessTokenIv: "00", accessTokenTag: "00",
+      cursor: null, lastSyncedAt: null, isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: accountId, itemId: item.id, userId, name: "Checking",
+      mask: "0001", type: "depository", subtype: "checking",
+      balanceCents, availableBalanceCents: balanceCents, updatedAt: Date.now(),
+    });
+    await updatePlaidAccount(userId, accountId, { useAsStartingBalance: true });
+    return item.id;
+  }
+
+  async function pendingDebit(userId: string, accountId: string, id: string, amountCents: number) {
+    await upsertPlaidDraft({
+      id, userId, accountId, date: "2026-09-20",
+      description: "Pending card swipe", amountCents,
+      plaidCategory: "GENERAL_MERCHANDISE", merchantName: null, pending: true,
+      status: "approved", linkedExpenseId: null,
+    });
+  }
+
+  it("a removed bank no longer anchors the starting balance", async () => {
+    const user = await makeUser();
+    const itemId = await linkChecking(user.id, "old_checking", 1_000_00);
+    expect((await getLinkedBalanceSnapshot(user.id))?.balanceCents).toBe(1_000_00);
+
+    await deactivatePlaidItem(user.id, itemId);
+
+    expect(await listPlaidItems(user.id)).toHaveLength(0);
+    expect(await getLinkedBalanceSnapshot(user.id)).toBeNull();
+    expect(await getPrimaryLinkedBalance(user.id)).toBeNull();
+  });
+
+  it("re-linking the same bank counts only the new account, not old + new", async () => {
+    const user = await makeUser();
+    const oldItem = await linkChecking(user.id, "old_checking", 1_000_00);
+    await deactivatePlaidItem(user.id, oldItem);
+    // Plaid issues fresh account ids for a new Item.
+    await linkChecking(user.id, "new_checking", 1_050_00);
+
+    expect((await getLinkedBalanceSnapshot(user.id))?.balanceCents).toBe(1_050_00);
+  });
+
+  it("a removed bank's pending debits stop holding cash", async () => {
+    const user = await makeUser();
+    const itemId = await linkChecking(user.id, "old_checking", 1_000_00);
+    await pendingDebit(user.id, "old_checking", "txn_pending", 40_00);
+    expect(await getPendingDraftOutflow(user.id)).toBe(40_00);
+
+    await deactivatePlaidItem(user.id, itemId);
+
+    expect(await getPendingDraftOutflow(user.id)).toBe(0);
+    // listPlaidDrafts hides removed items' rows, so read the row directly.
+    expect((await getPlaidDraft(user.id, "txn_pending"))?.status).toBe("dismissed");
+  });
+
+  it("removal clears the account flag and keeps posted history", async () => {
+    const user = await makeUser();
+    const itemId = await linkChecking(user.id, "old_checking", 1_000_00);
+    await upsertPlaidDraft({
+      id: "txn_posted", userId: user.id, accountId: "old_checking", date: "2026-09-19",
+      description: "Grocery", amountCents: 25_00,
+      plaidCategory: "FOOD_AND_DRINK", merchantName: null, pending: false,
+      status: "approved", linkedExpenseId: null,
+    });
+
+    await deactivatePlaidItem(user.id, itemId);
+
+    const [account] = await listPlaidAccountsByItem(itemId);
+    expect(account?.useAsStartingBalance).toBe(false);
+    expect((await getPlaidDraft(user.id, "txn_posted"))?.status).toBe("approved");
+  });
+
+  it("a removed bank's balance is left out of net worth", async () => {
+    const user = await makeUser();
+    const itemId = await linkChecking(user.id, "old_checking", 1_000_00);
+    expect((await getNetWorthComponents(user.id)).depositoryBalanceCents).toBe(1_000_00);
+
+    await deactivatePlaidItem(user.id, itemId);
+
+    expect((await getNetWorthComponents(user.id)).depositoryBalanceCents).toBe(0);
+  });
+
+  it("does nothing when the item belongs to another user", async () => {
+    const owner = await makeUser("owner@x.com");
+    const other = await makeUser("other@x.com");
+    const itemId = await linkChecking(owner.id, "owner_checking", 1_000_00);
+    await pendingDebit(owner.id, "owner_checking", "txn_owner", 10_00);
+
+    await deactivatePlaidItem(other.id, itemId);
+
+    expect(await listPlaidItems(owner.id)).toHaveLength(1);
+    expect((await getLinkedBalanceSnapshot(owner.id))?.balanceCents).toBe(1_000_00);
+    expect(await getPendingDraftOutflow(owner.id)).toBe(10_00);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // draft allocations — one transaction, several obligations
 // ────────────────────────────────────────────────────────────────────────────
 describe("repos / draft allocations", () => {
@@ -1238,5 +1359,90 @@ describe("repos / statement paid transitions", () => {
     });
     await deletePushSubscriptionById(sub.id);
     expect(await listPushSubscriptions(userId)).toHaveLength(0);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Atomic multi-step writes (review 2026-09-24 C11): all or nothing, and the
+// "already actioned?" check is part of the write itself.
+// ────────────────────────────────────────────────────────────────────────────
+describe("repos / atomic multi-step writes", () => {
+  async function setup() {
+    const user = await makeUser();
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins", institutionName: "T",
+      accessTokenEnc: "00", accessTokenIv: "00", accessTokenTag: "00",
+      cursor: null, lastSyncedAt: null, isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_card", itemId: item.id, userId: user.id, name: "Card", mask: null,
+      type: "credit", subtype: "credit card", balanceCents: 0, updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Card", statementDay: 1, dueDay: 21, autoPay: false, isActive: true, plaidAccountId: "acct_card",
+    });
+    await upsertPlaidDraft({
+      id: "txn_1", userId: user.id, accountId: "acct_card", date: "2026-09-01",
+      description: "Sofa", amountCents: 1_200_00, plaidCategory: "HOME", merchantName: "Sofa Co",
+      pending: false, status: "pending_review", linkedExpenseId: null,
+    });
+    return { userId: user.id, cardId: card.id };
+  }
+  const promoData = {
+    description: "Sofa", originalAmountCents: 1_200_00, remainingAmountCents: 1_200_00,
+    startDate: "2026-09-01", endDate: "2027-09-01", monthlyPaymentCents: null, notes: null, isActive: true,
+  };
+
+  it("createPromoForDraft links once; a second call writes nothing", async () => {
+    const { userId, cardId } = await setup();
+    const first = createPromoForDraft(userId, cardId, "txn_1", promoData);
+    const second = createPromoForDraft(userId, cardId, "txn_1", promoData);
+    expect(first).not.toBeNull();
+    expect(second).toBeNull();
+    expect(await listPromos(userId, false)).toHaveLength(1);
+    expect((await readDraft(userId, "txn_1"))?.linkedPromoId).toBe(first!.id);
+  });
+
+  it("approveDraftAsExpense creates one expense; a repeat or a dismissed draft gets null", async () => {
+    const { userId } = await setup();
+    const expense = { date: "2026-09-01", description: "Sofa", amountCents: 1_200_00, category: "Other", notes: null };
+    expect(approveDraftAsExpense(userId, "txn_1", expense)).not.toBeNull();
+    expect(approveDraftAsExpense(userId, "txn_1", expense)).toBeNull();
+    expect(await listExtras(userId)).toHaveLength(1);
+    expect(dismissPendingDraft(userId, "txn_1")).toBe(false);
+    expect((await readDraft(userId, "txn_1"))?.status).toBe("approved");
+  });
+
+  it("applyPromoReconcile rolls every change back when one fails", async () => {
+    const { userId, cardId } = await setup();
+    const existing = await createPromo(userId, cardId, { ...promoData, description: "Old" });
+    expect(() =>
+      applyPromoReconcile(userId, cardId, {
+        updates: [{ promoId: existing.id, patch: { remainingAmountCents: 1 } }],
+        // endDate is NOT NULL: this insert fails after the update ran.
+        creates: [{ ...promoData, endDate: null as unknown as string }],
+        archiveIds: [],
+      }),
+    ).toThrow();
+    const promos = await listPromos(userId, false);
+    expect(promos).toHaveLength(1);
+    expect(promos[0]?.remainingAmountCents).toBe(1_200_00);
+  });
+
+  it("applyPaycheckPlan rolls back a half-applied run", async () => {
+    const user = await makeUser();
+    const kept = await createPaycheck(user.id, { payDate: "2026-10-01", amountCents: 2_000_00, note: null });
+    expect(() =>
+      applyPaycheckPlan(
+        user.id,
+        [
+          { action: "add", payDate: "2026-10-15", amountCents: 2_000_00 },
+          { action: "move", id: kept.id, payDate: null as unknown as string, fromPayDate: "2026-10-01", amountCents: 2_000_00 },
+        ],
+        null,
+      ),
+    ).toThrow();
+    const rows = await listPaychecks(user.id);
+    expect(rows.map((p) => p.payDate)).toEqual(["2026-10-01"]);
   });
 });
