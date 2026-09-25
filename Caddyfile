@@ -5,6 +5,20 @@
 #   tls you@example.com
 # and point a public DNS A record at this server.
 
+# Real client IP behind a tunnel (review 2026-09-24 C07). With a proxy such as
+# cloudflared in front of Caddy, the peer Caddy sees is that proxy for every
+# visitor. Trust ONLY that proxy's address, and take the client from the
+# header it sets; {client_ip} below is then the visitor, and the app reads it
+# when CLIENT_IP_HEADER=X-Real-IP (see .env.example). Requests from any other
+# peer ignore these headers, so a client can't spoof them. Default: loopback
+# only (no tunnel). Production's host-owned Caddyfile sets the tunnel host.
+{
+	servers {
+		trusted_proxies static {$TRUSTED_PROXIES:127.0.0.1/32}
+		client_ip_headers CF-Connecting-IP X-Forwarded-For
+	}
+}
+
 {$DOMAIN:budget.local} {
 	tls internal
 	encode zstd gzip
@@ -20,8 +34,9 @@
 	request_header -X-Forwarded-Proto
 
 	reverse_proxy app:3000 {
-		# Make Next see the real client IP (single trusted hop = Caddy itself).
-		header_up X-Real-IP {http.request.remote.host}
+		# The resolved client (see the global trusted_proxies above); without
+		# a trusted proxy in front this is simply the socket peer.
+		header_up X-Real-IP {client_ip}
 	}
 
 	header {
