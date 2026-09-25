@@ -44,7 +44,7 @@ export async function DELETE(_req: Request, ctx: Ctx) {
   const usage = await categoryUsageCount(auth.userId, target.name);
   if (usage > 0) {
     return jsonError(
-      `cannot delete: ${usage} bill${usage === 1 ? "" : "s"}/expense${usage === 1 ? "" : "s"} still use "${target.name}"`,
+      `cannot delete: ${usage} bill${usage === 1 ? "" : "s"} or expense${usage === 1 ? "" : "s"} (including variable bills) still use "${target.name}"`,
       409,
     );
   }

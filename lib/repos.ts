@@ -1288,16 +1288,33 @@ export async function updateCategory(
   if (data.kind !== undefined) set.kind = data.kind;
   if (data.budgetAmountCents !== undefined) set.budgetAmountCents = data.budgetAmountCents;
   if (Object.keys(set).length === 0) return undefined;
-  await db
-    .update(categories)
-    .set(set)
-    .where(and(eq(categories.userId, userId), eq(categories.id, id)))
-    .run();
-  return db
-    .select()
-    .from(categories)
-    .where(and(eq(categories.userId, userId), eq(categories.id, id)))
-    .get();
+  const where = and(eq(categories.userId, userId), eq(categories.id, id));
+  // Bills, variable bills and one-time expenses store the category NAME, so a
+  // rename must carry them along in the same transaction. Otherwise the
+  // renamed category shows $0 spent, the spend sits under a name no category
+  // has, and the in-use check lets the category be deleted (review
+  // 2026-09-24 C06).
+  db.transaction((tx) => {
+    const current = tx.select({ name: categories.name }).from(categories).where(where).get();
+    if (!current) return;
+    tx.update(categories).set(set).where(where).run();
+    if (data.name === undefined || data.name === current.name) return;
+    const from = current.name;
+    const to = data.name;
+    tx.update(bills)
+      .set({ category: to, updatedAt: Date.now() })
+      .where(and(eq(bills.userId, userId), eq(bills.category, from)))
+      .run();
+    tx.update(variableBills)
+      .set({ category: to, updatedAt: Date.now() })
+      .where(and(eq(variableBills.userId, userId), eq(variableBills.category, from)))
+      .run();
+    tx.update(oneTimeExpenses)
+      .set({ category: to })
+      .where(and(eq(oneTimeExpenses.userId, userId), eq(oneTimeExpenses.category, from)))
+      .run();
+  });
+  return db.select().from(categories).where(where).get();
 }
 
 export type CategoryUtilization = {
@@ -1404,7 +1421,14 @@ export async function categoryUsageCount(userId: string, name: string): Promise<
     .from(oneTimeExpenses)
     .where(and(eq(oneTimeExpenses.userId, userId), eq(oneTimeExpenses.category, name)))
     .all();
-  return billCount.length + extraCount.length;
+  // Variable bills use categories too; missing them let an in-use category
+  // be deleted.
+  const variableBillCount = await db
+    .select({ id: variableBills.id })
+    .from(variableBills)
+    .where(and(eq(variableBills.userId, userId), eq(variableBills.category, name)))
+    .all();
+  return billCount.length + extraCount.length + variableBillCount.length;
 }
 
 // ── assets ───────────────────────────────────────────────────────────────────
