@@ -82,6 +82,9 @@ cp .env.example .env
 # Edit .env: set AUTH_SECRET (required), TZ, and either leave DOMAIN blank
 # (LAN mode, https://budget.local) or set it to a real domain for Let's Encrypt.
 
+# Caddy reads its config from a directory mount (see docker-compose.yml).
+mkdir -p caddy-etc && cp Caddyfile caddy-etc/
+
 docker compose up -d --build
 ```
 

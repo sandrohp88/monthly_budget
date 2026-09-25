@@ -23,6 +23,7 @@ DEPLOYED_REVISION
 # certificates and config out of the build context.
 caddy_data
 caddy_config
+caddy-etc
 Caddyfile*
 *.crt
 *.key
