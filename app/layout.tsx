@@ -1,20 +1,26 @@
 import type { Metadata, Viewport } from "next";
-import { JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import localFont from "next/font/local";
 import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
 
-const mono = JetBrains_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+// Self-hosted (app/fonts, SIL OFL 1.1, Latin variable files from Fontsource).
+// next/font/google downloaded these at BUILD time, and a flaky Google Fonts
+// response failed CI and could fail a production `docker build`.
+const mono = localFont({
+  src: "./fonts/JetBrainsMono-latin-wght.woff2",
+  weight: "100 800",
   variable: "--font-mono",
   display: "swap",
+  fallback: ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"],
+  adjustFontFallback: false,
 });
 
-const ui = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
+const ui = localFont({
+  src: "./fonts/PlusJakartaSans-latin-wght.woff2",
+  weight: "200 800",
   variable: "--font-ui",
   display: "swap",
+  fallback: ["system-ui", "sans-serif"],
 });
 
 export const metadata: Metadata = {
