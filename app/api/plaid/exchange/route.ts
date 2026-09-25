@@ -9,8 +9,9 @@ import {
   listPlaidAccountsByItem,
   getCreditCardByPlaidAccountId,
   createCreditCard,
+  deactivatePlaidItem,
 } from "@/lib/repos";
-import { syncCreditCardLiabilitiesForItem } from "@/lib/plaid-sync";
+import { syncCreditCardLiabilitiesForItem, withUserSyncLock } from "@/lib/plaid-sync";
 import { log } from "@/lib/log";
 
 export async function POST(req: Request) {
@@ -20,6 +21,10 @@ export async function POST(req: Request) {
   const body = await readJson(req, plaidExchangeSchema);
   if (body instanceof NextResponse) return body;
 
+  // Set once the item exists at Plaid, so a later failure can undo it instead
+  // of leaving an active item with no accounts (review 2026-09-24 C11).
+  let accessToken: string | null = null;
+  let itemId: string | null = null;
   try {
     const plaid = getPlaidClient();
 
@@ -27,7 +32,7 @@ export async function POST(req: Request) {
     const exchangeRes = await plaid.itemPublicTokenExchange({
       public_token: body.publicToken,
     });
-    const accessToken = exchangeRes.data.access_token;
+    accessToken = exchangeRes.data.access_token;
 
     // Encrypt before storing.
     const { enc, iv, tag } = encryptToken(accessToken);
@@ -45,6 +50,7 @@ export async function POST(req: Request) {
       isActive: true,
       plaidItemId: exchangeRes.data.item_id,
     });
+    itemId = item.id;
 
     // Immediately fetch accounts so the user sees them right away.
     const accountsRes = await plaid.accountsGet({ access_token: accessToken });
@@ -95,8 +101,11 @@ export async function POST(req: Request) {
     // days + most recent statement before the user sees the page. Non-fatal —
     // the next manual sync will catch up if the bank doesn't support it or
     // Plaid times out here.
+    const token = accessToken;
     try {
-      await syncCreditCardLiabilitiesForItem(auth.userId, item.id, accessToken);
+      await withUserSyncLock(auth.userId, () =>
+        syncCreditCardLiabilitiesForItem(auth.userId, item.id, token),
+      );
     } catch (err) {
       log.warn(`exchange: liabilities pre-fetch skipped: ${(err as Error).message}`);
     }
@@ -104,6 +113,19 @@ export async function POST(req: Request) {
     const accounts = await listPlaidAccountsByItem(item.id);
     return NextResponse.json({ item, accounts }, { status: 201 });
   } catch (err) {
+    // Undo a half-linked item: revoke it at Plaid (so it isn't billed or left
+    // live) and deactivate it here. Best-effort — the original error is what
+    // the caller needs to see.
+    if (accessToken) {
+      await getPlaidClient()
+        .itemRemove({ access_token: accessToken })
+        .catch((e: Error) => log.warn(`exchange: cleanup itemRemove failed: ${e.message}`));
+    }
+    if (itemId) {
+      await deactivatePlaidItem(auth.userId, itemId).catch((e: Error) =>
+        log.warn(`exchange: cleanup deactivate failed: ${e.message}`),
+      );
+    }
     return jsonError(`Token exchange failed: ${(err as Error).message}`);
   }
 }
