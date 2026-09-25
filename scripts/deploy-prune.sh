@@ -12,11 +12,13 @@
 #   .deployed-files    files the PREVIOUS deploy shipped (absent the first time)
 #
 # First run (no .deployed-files): nothing is deleted unless PRUNE_UNTRACKED=1.
-# It lists files present here that this deploy doesn't ship, so the owner can
-# review them first. Host-owned paths are never deleted in either mode.
+# It lists files under the app's source folders that this deploy doesn't
+# ship, so the owner can review them first. Host-owned paths are never
+# deleted in either mode.
 #
 # On success .deploy-manifest becomes .deployed-files for the next deploy.
 set -euo pipefail
+export LC_ALL=C # comm needs both lists sorted the same way
 
 PRUNE_UNTRACKED=${PRUNE_UNTRACKED:-0}
 
@@ -25,13 +27,27 @@ if [ ! -f .deploy-manifest ]; then
   exit 1
 fi
 
-# Paths that belong to the host, not to git, whatever a list says.
+# Paths that belong to the host, not to git, whatever a list says. The
+# deploy directory is ALSO the shared LXC-125 Caddy's home: caddy_data/ holds
+# its internal CA (including the private root key) and the certificates of
+# other homelab sites, and Caddyfile.bak* are hand-made rollback copies.
 host_owned() {
   case "$1" in
     data | data/* | backups | backups/* | node_modules/* | .git/* | .next/*) return 0 ;;
-    .env* | Caddyfile | docker-compose.yml) return 0 ;;
+    caddy_data | caddy_data/* | caddy_config | caddy_config/*) return 0 ;;
+    .env* | Caddyfile* | docker-compose.yml* | *.crt | *.key | *.pem) return 0 ;;
     DEPLOYED_REVISION | .deployed-files | .deploy-manifest) return 0 ;;
     /* | *..*) return 0 ;; # never leave the deploy directory
+    *) return 1 ;;
+  esac
+}
+
+# The first run has no previous list, so it can only compare the directory
+# with the archive. Only the app's own source folders are candidates there;
+# anything else on the host (Caddy state, notes, tool leftovers) is left alone.
+app_source() {
+  case "$1" in
+    app/* | components/* | lib/* | public/* | scripts/* | tests/*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -64,7 +80,8 @@ else
     -not -path './.git/*' -not -path './.next/*' | sed 's|^\./||' | sort >"$work/host"
   : >"$work/stale"
   while IFS= read -r f; do
-    host_owned "$f" || echo "$f" >>"$work/stale"
+    if host_owned "$f" || ! app_source "$f"; then continue; fi
+    echo "$f" >>"$work/stale"
   done < <(comm -23 "$work/host" "$work/new")
   if [ ! -s "$work/stale" ]; then
     echo "    (none)"
