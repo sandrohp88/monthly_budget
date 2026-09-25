@@ -39,7 +39,8 @@ import {
   createPaycheck,
   listPaychecks,
   listExtras,
-  getPlaidDraft,
+  // Aliased: another open PR imports getPlaidDraft here too.
+  getPlaidDraft as readDraft,
   getCreditCard,
   listCreditCards,
   listPromos,
@@ -1288,7 +1289,7 @@ describe("repos / atomic multi-step writes", () => {
     expect(first).not.toBeNull();
     expect(second).toBeNull();
     expect(await listPromos(userId, false)).toHaveLength(1);
-    expect((await getPlaidDraft(userId, "txn_1"))?.linkedPromoId).toBe(first!.id);
+    expect((await readDraft(userId, "txn_1"))?.linkedPromoId).toBe(first!.id);
   });
 
   it("approveDraftAsExpense creates one expense; a repeat or a dismissed draft gets null", async () => {
@@ -1298,7 +1299,7 @@ describe("repos / atomic multi-step writes", () => {
     expect(approveDraftAsExpense(userId, "txn_1", expense)).toBeNull();
     expect(await listExtras(userId)).toHaveLength(1);
     expect(dismissPendingDraft(userId, "txn_1")).toBe(false);
-    expect((await getPlaidDraft(userId, "txn_1"))?.status).toBe("approved");
+    expect((await readDraft(userId, "txn_1"))?.status).toBe("approved");
   });
 
   it("applyPromoReconcile rolls every change back when one fails", async () => {
