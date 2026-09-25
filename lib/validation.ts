@@ -754,6 +754,9 @@ const importCreditCardSchema = z.object({
   autoPay: z.boolean().optional(),
   notes: optionalNotes,
   isActive: z.boolean().optional(),
+  /** Kept on restore only while it still names this user's active Plaid
+   *  account (see planPlaidLinkRestore in lib/repos.ts). */
+  plaidAccountId: z.string().min(1).max(128).nullable().optional(),
 });
 
 const importCreditCardStatementSchema = z.object({
