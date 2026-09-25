@@ -44,6 +44,8 @@ export type VerifyResult = { ok: true } | { ok: false; reason: string };
 
 /** Plaid signs with a 5-minute freshness window; reject anything older. */
 const MAX_TOKEN_AGE_SECONDS = 5 * 60;
+/** Tolerated clock difference for an `iat` slightly ahead of ours. */
+const MAX_CLOCK_SKEW_SECONDS = 60;
 
 function b64urlJson(part: string): unknown | null {
   try {
@@ -81,6 +83,11 @@ export async function verifyPlaidWebhook(opts: {
 
   const jwk = await opts.getKey(header.kid);
   if (!jwk) return { ok: false, reason: `no verification key for kid "${header.kid}"` };
+  // Plaid retires a key by setting expired_at (unix seconds); a token signed
+  // with a retired key must not verify (review 2026-09-24 C12).
+  if (jwk.expired_at != null && jwk.expired_at * 1000 <= (opts.nowMs ?? Date.now())) {
+    return { ok: false, reason: `verification key "${header.kid}" has expired` };
+  }
 
   let publicKey;
   try {
@@ -112,6 +119,10 @@ export async function verifyPlaidWebhook(opts: {
   if (typeof payload.iat !== "number" || nowSec - payload.iat > MAX_TOKEN_AGE_SECONDS) {
     return { ok: false, reason: "token issued too long ago" };
   }
+  // A token from the future would stay "fresh" well past the 5-minute window.
+  if (payload.iat - nowSec > MAX_CLOCK_SKEW_SECONDS) {
+    return { ok: false, reason: "token issued in the future" };
+  }
 
   const actual = createHash("sha256").update(opts.rawBody, "utf8").digest("hex");
   const claimed = String(payload.request_body_sha256 ?? "");
@@ -131,16 +142,42 @@ export async function verifyPlaidWebhook(opts: {
  */
 const keyCache = new Map<string, PlaidWebhookJwk>();
 
-export async function getPlaidWebhookKey(kid: string): Promise<PlaidWebhookJwk | null> {
+/**
+ * kid → when a failed lookup may be retried. The webhook route is
+ * unauthenticated, so without this every request carrying a made-up kid cost
+ * one Plaid API call (review 2026-09-24 C12). Bounded so random kids can't
+ * grow it without limit.
+ */
+const missCache = new Map<string, number>();
+const MISS_TTL_MS = 5 * 60 * 1000;
+const MAX_MISSES = 1000;
+
+export async function getPlaidWebhookKey(
+  kid: string,
+  deps: { fetchKey?: (kid: string) => Promise<PlaidWebhookJwk>; nowMs?: number } = {},
+): Promise<PlaidWebhookJwk | null> {
   const cached = keyCache.get(kid);
   if (cached) return cached;
+  const now = deps.nowMs ?? Date.now();
+  const retryAt = missCache.get(kid);
+  if (retryAt !== undefined) {
+    if (retryAt > now) return null;
+    missCache.delete(kid);
+  }
   try {
-    const plaid = getPlaidClient();
-    const resp = await plaid.webhookVerificationKeyGet({ key_id: kid });
-    const key = resp.data.key as PlaidWebhookJwk;
+    const fetchKey =
+      deps.fetchKey ??
+      (async (id: string) =>
+        (await getPlaidClient().webhookVerificationKeyGet({ key_id: id })).data.key as PlaidWebhookJwk);
+    const key = await fetchKey(kid);
     keyCache.set(kid, key);
     return key;
   } catch (err) {
+    if (missCache.size >= MAX_MISSES) {
+      const oldest = missCache.keys().next().value;
+      if (oldest !== undefined) missCache.delete(oldest);
+    }
+    missCache.set(kid, now + MISS_TTL_MS);
     log.warn(`plaid-webhook: verification key fetch failed for kid ${kid}: ${(err as Error).message}`);
     return null;
   }

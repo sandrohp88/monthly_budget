@@ -9,7 +9,8 @@ vi.mock("./auth", () => ({
 
 import { __resetDbCacheForTests, getDb, runMigrations } from "./db/client";
 import { users } from "./db/schema";
-import { createOwnerAndDefaults, OwnerAlreadyExistsError } from "./repos";
+import { createMember, createOwnerAndDefaults, getSettings, OwnerAlreadyExistsError } from "./repos";
+import { todayIso } from "./dates";
 
 let dbDir: string;
 beforeEach(() => {
@@ -95,5 +96,24 @@ describe("createOwnerAndDefaults / race safety", () => {
 
     const all = await getDb().select().from(users).all();
     expect(all).toHaveLength(1);
+  });
+});
+
+// Review 2026-09-24 C13: members used to get America/New_York and a UTC date.
+describe("createMember / household timezone", () => {
+  it("gives a new member the household's timezone and today's date there", async () => {
+    const member = await createMember(
+      { email: "partner@example.com", displayName: "Partner", password: "long-enough-pw" },
+      { timezone: "Pacific/Honolulu" },
+    );
+    const settings = await getSettings(member.id);
+    expect(settings?.timezone).toBe("Pacific/Honolulu");
+    expect(settings?.startingBalanceAsOf).toBe(todayIso("Pacific/Honolulu"));
+    expect(settings?.firstPaydayDate).toBe(todayIso("Pacific/Honolulu"));
+  });
+
+  it("falls back to the default zone when none is given", async () => {
+    const member = await createMember({ email: "m@example.com", displayName: "M", password: "long-enough-pw" });
+    expect((await getSettings(member.id))?.timezone).toBe("America/New_York");
   });
 });

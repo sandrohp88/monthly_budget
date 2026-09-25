@@ -9,19 +9,36 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { MoneyInput } from "@/components/money-input";
+import { DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
+
+function browserTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || DEFAULT_TIMEZONE;
+}
 
 export function SetupForm() {
   const router = useRouter();
-  const today = new Date().toISOString().slice(0, 10);
+  // Server-rendered defaults use UTC (the server can't know the browser's
+  // zone), so the first client render matches them.
+  const utcToday = todayIso("UTC");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [displayName, setDisplayName] = React.useState("");
   const [startingBalanceCents, setStartingBalanceCents] = React.useState(0);
-  const [startingBalanceAsOf, setStartingBalanceAsOf] = React.useState(today);
+  const [startingBalanceAsOf, setStartingBalanceAsOf] = React.useState(utcToday);
   const [defaultPaycheckCents, setDefaultPaycheckCents] = React.useState(0);
-  const [firstPaydayDate, setFirstPaydayDate] = React.useState(today);
+  const [firstPaydayDate, setFirstPaydayDate] = React.useState(utcToday);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+
+  // Then move untouched defaults to today in the browser's zone — the zone
+  // the form submits as the account timezone. Left on UTC, they read as
+  // tomorrow every evening in the Americas (review 2026-09-24 C13).
+  React.useEffect(() => {
+    const localToday = todayIso(browserTimezone());
+    if (localToday === utcToday) return;
+    setStartingBalanceAsOf((v) => (v === utcToday ? localToday : v));
+    setFirstPaydayDate((v) => (v === utcToday ? localToday : v));
+  }, [utcToday]);
 
   return (
     <div className="w-full max-w-lg">
@@ -72,7 +89,7 @@ export function SetupForm() {
                   payFrequencyDays: 14,
                   projectionMonths: 6,
                   currency: "USD",
-                  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York",
+                  timezone: browserTimezone(),
                 }),
               });
               if (!res.ok) {

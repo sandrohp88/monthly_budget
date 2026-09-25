@@ -20,6 +20,7 @@ vi.mock("./plaid-client", () => ({ getPlaidClient: vi.fn() }));
 vi.mock("./plaid-crypto", () => ({ decryptToken: vi.fn() }));
 
 import {
+  getPlaidWebhookKey,
   handlePlaidWebhook,
   verifyPlaidWebhook,
   type PlaidWebhookJwk,
@@ -263,5 +264,58 @@ describe("handlePlaidWebhook", () => {
     const third = await handlePlaidWebhook(payload, deps);
     expect(third).toEqual({ action: "sync-started", itemId: "local-item-1" });
     expect(sync).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Review 2026-09-24 C12.
+describe("webhook key hygiene", () => {
+  it("rejects a token signed with a key Plaid has expired", async () => {
+    const now = Date.now();
+    const expired = { ...jwk, expired_at: Math.floor(now / 1000) - 60 };
+    const token = signToken({ body: BODY });
+    await expect(
+      verifyPlaidWebhook({ rawBody: BODY, token, getKey: async () => expired, nowMs: now }),
+    ).resolves.toMatchObject({ ok: false, reason: expect.stringMatching(/expired/) });
+  });
+
+  it("still accepts a key whose expiry is in the future", async () => {
+    const now = Date.now();
+    const expiring = { ...jwk, expired_at: Math.floor(now / 1000) + 3600 };
+    const token = signToken({ body: BODY });
+    await expect(
+      verifyPlaidWebhook({ rawBody: BODY, token, getKey: async () => expiring, nowMs: now }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("rejects a token issued in the future, allowing a minute of clock skew", async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const skewed = signToken({ body: BODY, iat: nowSec + 30 });
+    await expect(verifyPlaidWebhook({ rawBody: BODY, token: skewed, getKey })).resolves.toEqual({ ok: true });
+    const future = signToken({ body: BODY, iat: nowSec + 3600 });
+    await expect(verifyPlaidWebhook({ rawBody: BODY, token: future, getKey })).resolves.toMatchObject({
+      ok: false,
+      reason: "token issued in the future",
+    });
+  });
+
+  it("asks Plaid about an unknown kid once, then again only after five minutes", async () => {
+    const fetchKey = vi.fn(async () => {
+      throw new Error("INVALID_KEY_ID");
+    });
+    const kid = `made-up-${Math.random()}`;
+    const t0 = 1_800_000_000_000;
+    expect(await getPlaidWebhookKey(kid, { fetchKey, nowMs: t0 })).toBeNull();
+    expect(await getPlaidWebhookKey(kid, { fetchKey, nowMs: t0 + 60_000 })).toBeNull();
+    expect(fetchKey).toHaveBeenCalledTimes(1);
+    expect(await getPlaidWebhookKey(kid, { fetchKey, nowMs: t0 + 5 * 60_000 + 1 })).toBeNull();
+    expect(fetchKey).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches a found key", async () => {
+    const fetchKey = vi.fn(async () => jwk);
+    const kid = `real-${Math.random()}`;
+    expect(await getPlaidWebhookKey(kid, { fetchKey })).toEqual(jwk);
+    expect(await getPlaidWebhookKey(kid, { fetchKey })).toEqual(jwk);
+    expect(fetchKey).toHaveBeenCalledTimes(1);
   });
 });

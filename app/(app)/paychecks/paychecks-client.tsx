@@ -465,6 +465,7 @@ export function PaychecksClient({
             <DialogTitle>Add paycheck</DialogTitle>
           </DialogHeader>
           <CreatePaycheckForm
+            today={today}
             onCancel={() => setCreateOpen(false)}
             onCreated={(p) => {
               setItems((prev) => [...prev, p].sort((a, b) => a.payDate.localeCompare(b.payDate)));
@@ -486,13 +487,16 @@ export function PaychecksClient({
 }
 
 function CreatePaycheckForm({
+  today,
   onCancel,
   onCreated,
 }: {
+  /** Today in the user's timezone. UTC would default to tomorrow every
+   *  evening in the Americas (review 2026-09-24 C13). */
+  today: string;
   onCancel: () => void;
   onCreated: (p: PaycheckRow) => void;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
   const [payDate, setPayDate] = React.useState(today);
   const [amountCents, setAmountCents] = React.useState(0);
   const [note, setNote] = React.useState("");

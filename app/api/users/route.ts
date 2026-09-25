@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { createUserSchema } from "@/lib/validation";
-import { createMember, listUsers, findUserByEmail } from "@/lib/repos";
+import { createMember, getSettings, listUsers, findUserByEmail } from "@/lib/repos";
 import { readJson, jsonError } from "@/lib/api";
 
 export async function GET() {
@@ -17,14 +17,16 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    await requireAdmin();
+    const adminId = await requireAdmin();
     const data = await readJson(req, createUserSchema);
     if (data instanceof NextResponse) return data;
 
     const existing = await findUserByEmail(data.email);
     if (existing) return jsonError("email already in use", 409);
 
-    const user = await createMember(data);
+    // Same household, same timezone as the admin adding them.
+    const adminSettings = await getSettings(adminId);
+    const user = await createMember(data, { timezone: adminSettings?.timezone });
     return NextResponse.json(user, { status: 201 });
   } catch (e) {
     const msg = (e as Error).message;
