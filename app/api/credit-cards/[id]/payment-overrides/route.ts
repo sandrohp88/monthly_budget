@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError, readJson } from "@/lib/api";
 import {
-  deleteCreditCardPaymentOverride,
+  applyCardPaymentOps,
+  CardPaymentConflictError,
   getCreditCard,
   upsertCreditCardPaymentOverride,
 } from "@/lib/repos";
@@ -42,6 +43,17 @@ export async function DELETE(req: Request, ctx: Ctx) {
     return jsonError("dueDate is required", 400);
   }
 
-  await deleteCreditCardPaymentOverride(auth.userId, id, dueDate);
+  // Same path as the calendar's batch endpoint, so cancelling a plan that a
+  // bank transaction is linked to needs the same confirmation (`?unlink=1`).
+  try {
+    applyCardPaymentOps(auth.userId, [{ op: "delete", cardId: id, dueDate }], {
+      unlinkAllocations: url.searchParams.get("unlink") === "1",
+    });
+  } catch (e) {
+    if (e instanceof CardPaymentConflictError && e.code) {
+      return NextResponse.json({ error: e.message, code: e.code }, { status: 409 });
+    }
+    throw e;
+  }
   return NextResponse.json({ ok: true });
 }

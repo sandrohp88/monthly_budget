@@ -21,7 +21,17 @@ import {
 import { newId } from "./ids";
 import { buildProjection } from "./projection-server";
 import { snapshotDir, writePreImportSnapshot } from "./backup-snapshot";
-import { importAll, exportAll, previewImport, createBill, createCreditCard, upsertCreditCardPaymentOverride } from "./repos";
+import {
+  importAll,
+  exportAll,
+  previewImport,
+  createBill,
+  createCreditCard,
+  createPlaidItem,
+  getCreditCard,
+  upsertCreditCardPaymentOverride,
+  upsertPlaidAccount,
+} from "./repos";
 import { BACKUP_SCHEMA_VERSION, backupImportSchema, type BackupImportInput } from "./validation";
 import { and, eq } from "drizzle-orm";
 
@@ -467,5 +477,95 @@ describe("backup import / pre-import snapshot", () => {
     expect(kept).toEqual(names.slice(2));
     const saved = JSON.parse(fs.readFileSync(path.join(snapshotDir(), kept[0]!), "utf8"));
     expect(backupImportSchema.safeParse(saved).success).toBe(true);
+  });
+});
+
+// Review 2026-09-24 C02: a restore on the same install used to write
+// plaidAccountId = null on every card, cutting linked cards off from
+// statements, payment matching and classification — including when the user
+// re-imported the pre-import snapshot to undo a restore.
+describe("backup import / Plaid card links", () => {
+  async function linkedCard(userId: string, opts: { accountId: string; itemActive?: boolean; name?: string }) {
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins", institutionName: "Bank",
+      accessTokenEnc: "00", accessTokenIv: "00", accessTokenTag: "00",
+      cursor: null, lastSyncedAt: null, isActive: opts.itemActive ?? true,
+    });
+    await upsertPlaidAccount({
+      id: opts.accountId, itemId: item.id, userId, name: "Card account",
+      mask: "1111", type: "credit", subtype: "credit card",
+      balanceCents: 0, updatedAt: Date.now(),
+    });
+    return createCreditCard(userId, {
+      name: opts.name ?? "Visa", statementDay: 1, dueDay: 21, autoPay: false, isActive: true,
+      plaidAccountId: opts.accountId,
+    });
+  }
+
+  const roundTrip = async (userId: string) =>
+    backupImportSchema.parse(JSON.parse(JSON.stringify(await exportAll(userId))));
+
+  it("export → import on the same install keeps a card's link", async () => {
+    const user = await makeUser("links@x.com");
+    const card = await linkedCard(user.id, { accountId: "acct_visa" });
+    const payload = await roundTrip(user.id);
+
+    const preview = await previewImport(user.id, payload);
+    expect(preview.warnings.join(" ")).not.toMatch(/bank link/);
+
+    await importAll(user.id, payload);
+    expect((await getCreditCard(user.id, card.id))?.plaidAccountId).toBe("acct_visa");
+  });
+
+  it("restoring the pre-import snapshot keeps links", async () => {
+    const user = await makeUser("undo@x.com");
+    const card = await linkedCard(user.id, { accountId: "acct_undo" });
+    const name = await writePreImportSnapshot(user.id);
+    const snapshot = backupImportSchema.parse(
+      JSON.parse(fs.readFileSync(path.join(snapshotDir(), name), "utf8")),
+    );
+    await importAll(user.id, snapshot);
+    expect((await getCreditCard(user.id, card.id))?.plaidAccountId).toBe("acct_undo");
+  });
+
+  it("drops, with a warning, a link to an account that is not this user's", async () => {
+    const owner = await makeUser("owner@x.com");
+    const other = await makeUser("other@x.com");
+    await linkedCard(owner.id, { accountId: "acct_owner" });
+    const payload = envelope({
+      creditCards: [{ id: "card_x", name: "Borrowed", statementDay: 1, dueDay: 21, plaidAccountId: "acct_owner" }],
+    });
+
+    const preview = await previewImport(other.id, payload);
+    expect(preview.warnings).toContain(
+      'Card "Borrowed" restores without its bank link: that account is not connected here.',
+    );
+    await importAll(other.id, payload);
+    expect((await getCreditCard(other.id, "card_x"))?.plaidAccountId).toBeNull();
+  });
+
+  it("drops a link to a removed bank", async () => {
+    const user = await makeUser("removed@x.com");
+    const card = await linkedCard(user.id, { accountId: "acct_gone", itemActive: false });
+    const payload = await roundTrip(user.id);
+    expect((await previewImport(user.id, payload)).warnings.join(" ")).toMatch(/Visa.*not connected here/);
+    await importAll(user.id, payload);
+    expect((await getCreditCard(user.id, card.id))?.plaidAccountId).toBeNull();
+  });
+
+  it("drops both links, never crashing, when two cards claim one account", async () => {
+    const user = await makeUser("dupe@x.com");
+    await linkedCard(user.id, { accountId: "acct_shared" });
+    const payload = envelope({
+      creditCards: [
+        { id: "card_a", name: "A", statementDay: 1, dueDay: 21, plaidAccountId: "acct_shared" },
+        { id: "card_b", name: "B", statementDay: 1, dueDay: 21, plaidAccountId: "acct_shared" },
+      ],
+    });
+    const preview = await previewImport(user.id, payload);
+    expect(preview.warnings.filter((w) => w.includes("another card in the backup"))).toHaveLength(2);
+    await importAll(user.id, payload);
+    expect((await getCreditCard(user.id, "card_a"))?.plaidAccountId).toBeNull();
+    expect((await getCreditCard(user.id, "card_b"))?.plaidAccountId).toBeNull();
   });
 });

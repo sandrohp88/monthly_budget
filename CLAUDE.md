@@ -75,7 +75,7 @@ npx playwright test        # E2E happy-path (rare; builds + spins localhost:3000
 | Styles | **Tailwind v4** (`@theme` syntax) | Atomic, paired with shadcn-style primitives |
 | Charts | **Recharts** | Composable, restyled with mint palette |
 | Testing | **Vitest** (engine) + **Playwright** (E2E) | Pure functions get unit; happy paths get E2E |
-| Runtime | **Node 20** in Alpine, served by **tini** | Standalone Next build for minimal image |
+| Runtime | **Node 22** in Alpine (matches CI and `.nvmrc`), served by **tini** | Standalone Next build for minimal image |
 | Reverse proxy | **Caddy 2** with `tls internal` | Auto-cert from internal CA for the LAN domain |
 
 ---
@@ -466,6 +466,7 @@ If anything matches that isn't intentional (`.env.example` placeholders are OK),
 - **Server**: **LXC 125 `budget`** (`10.10.88.25`) on the proxmox cluster (pve-7050) — migrated off `plex`
 - **Deploy directory**: `/opt/budget`
 - **Public URL**: **`https://budget.sherrera.dev`** via the **`bluefalls-public` Cloudflare Tunnel**, whose connector moved to **LXC 139 `bluefalls-edge`** on 2026-07-06 (it originally ran in LXC 125). Path: tunnel (LXC 139) → `https://10.10.88.25` (LXC 125 Caddy) → loopback app. **Tunnel-only**: the loopback app rejects other Host headers, so the old `budget.bluefalls.home` LAN vhost was dropped by design. See `Z:\llm-wiki\wiki\projects\bluefalls-edge\index.md`.
+- **Client IP for rate limits**: behind the tunnel, the peer the LXC-125 Caddy sees is cloudflared on LXC 139 (`10.10.88.39`) for every visitor, so without extra config every visitor shares one login/setup/webhook bucket. To fix that, the host-owned Caddyfile needs `trusted_proxies static 10.10.88.39/32` plus `client_ip_headers CF-Connecting-IP` in its global `servers` block and `header_up X-Real-IP {client_ip}` on the budget vhost, and `.env` needs `CLIENT_IP_HEADER=X-Real-IP`. The repo `Caddyfile` shows the pattern. Enable `CLIENT_IP_HEADER` only after Caddy overwrites that header; otherwise clients could pick their own bucket.
 - **Containers**: `budget-app` (loopback `:3000`, healthcheck `/api/health`) + `budget-backup` (VACUUM cron). The LXC-125 Caddy at `/opt/budget/Caddyfile` fronts budget for the tunnel hop AND the other `*.bluefalls.home` LAN vhosts — never rebuild/restart it casually.
 - Full host detail: `Z:\llm-wiki\wiki\entities\proxmox-cluster.md`
 

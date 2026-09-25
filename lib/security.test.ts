@@ -46,6 +46,42 @@ describe("clientIp / trusted-proxy semantics", () => {
     expect(clientIp(req)).toBe("7.7.7.7");
   });
 
+  // Review 2026-09-24 C07: behind Cloudflare → cloudflared → Caddy, the
+  // rightmost x-forwarded-for hop is cloudflared for every visitor.
+  it("uses CLIENT_IP_HEADER, set by the edge proxy, over the proxy hop", () => {
+    process.env.TRUST_PROXY_HOPS = "1";
+    process.env.CLIENT_IP_HEADER = "X-Real-IP";
+    const a = makeReq({ headers: { "x-forwarded-for": "10.10.88.39", "x-real-ip": "203.0.113.7" } });
+    const b = makeReq({ headers: { "x-forwarded-for": "10.10.88.39", "x-real-ip": "198.51.100.9" } });
+    expect(clientIp(a)).toBe("203.0.113.7");
+    expect(clientIp(b)).toBe("198.51.100.9");
+  });
+
+  it("without CLIENT_IP_HEADER, keeps the proxy-hop behavior (opt-in only)", () => {
+    process.env.TRUST_PROXY_HOPS = "1";
+    delete process.env.CLIENT_IP_HEADER;
+    const req = makeReq({ headers: { "x-forwarded-for": "10.10.88.39", "x-real-ip": "203.0.113.7" } });
+    expect(clientIp(req)).toBe("10.10.88.39");
+  });
+
+  it("falls back to the proxy hop when the named header is missing", () => {
+    process.env.TRUST_PROXY_HOPS = "1";
+    process.env.CLIENT_IP_HEADER = "x-real-ip";
+    const req = makeReq({ headers: { "x-forwarded-for": "10.10.88.39" } });
+    expect(clientIp(req)).toBe("10.10.88.39");
+  });
+
+  it("ignores CLIENT_IP_HEADER when no proxy is trusted, or when it isn't a header name", () => {
+    process.env.TRUST_PROXY_HOPS = "0";
+    process.env.CLIENT_IP_HEADER = "x-real-ip";
+    expect(clientIp(makeReq({ headers: { "x-real-ip": "203.0.113.7" } }))).toBe("unknown");
+    process.env.TRUST_PROXY_HOPS = "1";
+    process.env.CLIENT_IP_HEADER = "x-real-ip: evil";
+    expect(clientIp(makeReq({ headers: { "x-forwarded-for": "10.10.88.39", "x-real-ip": "1.1.1.1" } }))).toBe(
+      "10.10.88.39",
+    );
+  });
+
   it("ignores x-real-ip when TRUST_PROXY_HOPS=0", () => {
     process.env.TRUST_PROXY_HOPS = "0";
     const req = makeReq({ headers: { "x-real-ip": "7.7.7.7" } });

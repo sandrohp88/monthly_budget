@@ -56,6 +56,10 @@ import {
   listPlaidDrafts,
   updatePlaidDraftStatus,
   getPrimaryLinkedBalance,
+  getLinkedBalanceSnapshot,
+  getPendingDraftOutflow,
+  listPlaidItems,
+  getPlaidDraft,
   updatePlaidAccount,
   // new (under test)
   setCreditCardPlaidLink,
@@ -842,6 +846,113 @@ describe("repos / deactivatePlaidItem", () => {
     });
     await deactivatePlaidItem(userA.id, item.id);
     expect((await getCreditCard(userB.id, cardB.id))?.plaidAccountId).toBe("some_other_acct");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Removed bank connections (review 2026-09-24 C01). A removed item's accounts
+// keep their last balance forever; before the fix they still anchored the
+// projection, held their pending cash forever, and a re-link of the same bank
+// (which gets new account ids) roughly doubled the starting balance.
+// ────────────────────────────────────────────────────────────────────────────
+describe("repos / removed Plaid items stop feeding balances", () => {
+  async function linkChecking(userId: string, accountId: string, balanceCents: number) {
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins_bank", institutionName: "Bank",
+      accessTokenEnc: "00", accessTokenIv: "00", accessTokenTag: "00",
+      cursor: null, lastSyncedAt: null, isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: accountId, itemId: item.id, userId, name: "Checking",
+      mask: "0001", type: "depository", subtype: "checking",
+      balanceCents, availableBalanceCents: balanceCents, updatedAt: Date.now(),
+    });
+    await updatePlaidAccount(userId, accountId, { useAsStartingBalance: true });
+    return item.id;
+  }
+
+  async function pendingDebit(userId: string, accountId: string, id: string, amountCents: number) {
+    await upsertPlaidDraft({
+      id, userId, accountId, date: "2026-09-20",
+      description: "Pending card swipe", amountCents,
+      plaidCategory: "GENERAL_MERCHANDISE", merchantName: null, pending: true,
+      status: "approved", linkedExpenseId: null,
+    });
+  }
+
+  it("a removed bank no longer anchors the starting balance", async () => {
+    const user = await makeUser();
+    const itemId = await linkChecking(user.id, "old_checking", 1_000_00);
+    expect((await getLinkedBalanceSnapshot(user.id))?.balanceCents).toBe(1_000_00);
+
+    await deactivatePlaidItem(user.id, itemId);
+
+    expect(await listPlaidItems(user.id)).toHaveLength(0);
+    expect(await getLinkedBalanceSnapshot(user.id)).toBeNull();
+    expect(await getPrimaryLinkedBalance(user.id)).toBeNull();
+  });
+
+  it("re-linking the same bank counts only the new account, not old + new", async () => {
+    const user = await makeUser();
+    const oldItem = await linkChecking(user.id, "old_checking", 1_000_00);
+    await deactivatePlaidItem(user.id, oldItem);
+    // Plaid issues fresh account ids for a new Item.
+    await linkChecking(user.id, "new_checking", 1_050_00);
+
+    expect((await getLinkedBalanceSnapshot(user.id))?.balanceCents).toBe(1_050_00);
+  });
+
+  it("a removed bank's pending debits stop holding cash", async () => {
+    const user = await makeUser();
+    const itemId = await linkChecking(user.id, "old_checking", 1_000_00);
+    await pendingDebit(user.id, "old_checking", "txn_pending", 40_00);
+    expect(await getPendingDraftOutflow(user.id)).toBe(40_00);
+
+    await deactivatePlaidItem(user.id, itemId);
+
+    expect(await getPendingDraftOutflow(user.id)).toBe(0);
+    // listPlaidDrafts hides removed items' rows, so read the row directly.
+    expect((await getPlaidDraft(user.id, "txn_pending"))?.status).toBe("dismissed");
+  });
+
+  it("removal clears the account flag and keeps posted history", async () => {
+    const user = await makeUser();
+    const itemId = await linkChecking(user.id, "old_checking", 1_000_00);
+    await upsertPlaidDraft({
+      id: "txn_posted", userId: user.id, accountId: "old_checking", date: "2026-09-19",
+      description: "Grocery", amountCents: 25_00,
+      plaidCategory: "FOOD_AND_DRINK", merchantName: null, pending: false,
+      status: "approved", linkedExpenseId: null,
+    });
+
+    await deactivatePlaidItem(user.id, itemId);
+
+    const [account] = await listPlaidAccountsByItem(itemId);
+    expect(account?.useAsStartingBalance).toBe(false);
+    expect((await getPlaidDraft(user.id, "txn_posted"))?.status).toBe("approved");
+  });
+
+  it("a removed bank's balance is left out of net worth", async () => {
+    const user = await makeUser();
+    const itemId = await linkChecking(user.id, "old_checking", 1_000_00);
+    expect((await getNetWorthComponents(user.id)).depositoryBalanceCents).toBe(1_000_00);
+
+    await deactivatePlaidItem(user.id, itemId);
+
+    expect((await getNetWorthComponents(user.id)).depositoryBalanceCents).toBe(0);
+  });
+
+  it("does nothing when the item belongs to another user", async () => {
+    const owner = await makeUser("owner@x.com");
+    const other = await makeUser("other@x.com");
+    const itemId = await linkChecking(owner.id, "owner_checking", 1_000_00);
+    await pendingDebit(owner.id, "owner_checking", "txn_owner", 10_00);
+
+    await deactivatePlaidItem(other.id, itemId);
+
+    expect(await listPlaidItems(owner.id)).toHaveLength(1);
+    expect((await getLinkedBalanceSnapshot(owner.id))?.balanceCents).toBe(1_000_00);
+    expect(await getPendingDraftOutflow(owner.id)).toBe(10_00);
   });
 });
 
