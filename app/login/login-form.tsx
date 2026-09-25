@@ -8,6 +8,7 @@ import { CardSubTag } from "@/components/ui/page-head";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { safeNextPath } from "@/lib/safe-redirect";
 
 export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
   const router = useRouter();
@@ -62,7 +63,9 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
                 setError("Invalid credentials or rate-limited.");
                 return;
               }
-              router.push(callbackUrl || "/");
+              // The page already sanitised this; check again at the point of
+              // navigation so a future caller can't reintroduce the redirect.
+              router.push(safeNextPath(callbackUrl));
               router.refresh();
             }}
           >
