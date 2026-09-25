@@ -11,10 +11,10 @@
 #   .deploy-manifest   files THIS deploy ships (inside the archive)
 #   .deployed-files    files the PREVIOUS deploy shipped (absent the first time)
 #
-# First run (no .deployed-files): nothing is deleted unless PRUNE_UNTRACKED=1.
-# It lists files under the app's source folders that this deploy doesn't
-# ship, so the owner can review them first. Host-owned paths are never
-# deleted in either mode.
+# Every run also lists files under the app's source folders that this deploy
+# doesn't ship and no previous list accounts for. Those are deleted only with
+# PRUNE_UNTRACKED=1, after the owner has reviewed the list. Host-owned paths
+# are never deleted in either case.
 #
 # On success .deploy-manifest becomes .deployed-files for the next deploy.
 set -euo pipefail
@@ -42,9 +42,9 @@ host_owned() {
   esac
 }
 
-# The first run has no previous list, so it can only compare the directory
-# with the archive. Only the app's own source folders are candidates there;
-# anything else on the host (Caddy state, notes, tool leftovers) is left alone.
+# The untracked check compares the directory with the archive. Only the app's
+# own source folders are candidates there; anything else on the host (Caddy
+# state, notes, tool leftovers) is left alone.
 app_source() {
   case "$1" in
     app/* | components/* | lib/* | public/* | scripts/* | tests/*) return 0 ;;
@@ -70,28 +70,32 @@ remove_listed() {
   echo "  $count file(s) removed"
 }
 
+# 1. Files the previous deploy shipped that this one doesn't.
 if [ -f .deployed-files ]; then
   sort -u .deployed-files >"$work/old"
   comm -23 "$work/old" "$work/new" >"$work/gone"
   remove_listed "$work/gone"
-else
-  echo "  first deploy with a manifest: files here that this deploy does not ship:"
-  find . -type f -not -path './data/*' -not -path './backups/*' -not -path './node_modules/*' \
-    -not -path './.git/*' -not -path './.next/*' | sed 's|^\./||' | sort >"$work/host"
-  : >"$work/stale"
-  while IFS= read -r f; do
-    if host_owned "$f" || ! app_source "$f"; then continue; fi
-    echo "$f" >>"$work/stale"
-  done < <(comm -23 "$work/host" "$work/new")
-  if [ ! -s "$work/stale" ]; then
-    echo "    (none)"
+fi
+
+# 2. App source files present here that this deploy doesn't ship and no list
+# accounts for: leftovers from before manifests existed, or anything copied in
+# by hand. Checked on EVERY deploy, not only the first — an earlier version
+# only looked when .deployed-files was missing, so once the first (listing)
+# run had written it, PRUNE_UNTRACKED=1 could never act (2026-09-25).
+find . -type f -not -path './data/*' -not -path './backups/*' -not -path './node_modules/*' \
+  -not -path './.git/*' -not -path './.next/*' | sed 's|^\./||' | sort >"$work/host"
+: >"$work/stale"
+while IFS= read -r f; do
+  if host_owned "$f" || ! app_source "$f"; then continue; fi
+  echo "$f" >>"$work/stale"
+done < <(comm -23 "$work/host" "$work/new")
+if [ -s "$work/stale" ]; then
+  echo "  app source files here that this deploy does not ship:"
+  sed 's/^/    /' "$work/stale"
+  if [ "$PRUNE_UNTRACKED" = "1" ]; then
+    remove_listed "$work/stale"
   else
-    sed 's/^/    /' "$work/stale"
-    if [ "$PRUNE_UNTRACKED" = "1" ]; then
-      remove_listed "$work/stale"
-    else
-      echo "  NOT deleted. Review the list, then rerun the deploy with PRUNE_UNTRACKED=1 to delete them."
-    fi
+    echo "  NOT deleted. Review the list, then rerun the deploy with PRUNE_UNTRACKED=1 to delete them."
   fi
 fi
 

@@ -491,11 +491,12 @@ unknown pve-7050 host key against the cluster's record before trusting it.
 `.deploy-manifest` (the archive's file list), and `scripts/deploy-prune.sh` deletes files the
 previous deploy listed (`/opt/budget/.deployed-files`) that this one doesn't. Host-owned paths
 (`data/`, `backups/`, `.env*`, `Caddyfile*`, `docker-compose.yml`, and the shared Caddy's `caddy_data/`,
-`caddy_config/` and `*.crt`/`*.key`, which include its internal CA's private key) are never deleted. The first
-run only considers the app's source folders (`app/`, `components/`, `lib/`, `public/`, `scripts/`, `tests/`). The first
-deploy with the manifest only *lists* stale files; rerun with `PRUNE_UNTRACKED=1
-scripts/deploy-lxc125.sh` after reading that list. `redeploy.py` doesn't do this, so prefer
-`deploy-lxc125.sh`.
+`caddy_config/` and `*.crt`/`*.key`, which include its internal CA's private key) are never deleted.
+
+Every deploy also *lists* app source files (`app/`, `components/`, `lib/`, `public/`, `scripts/`,
+`tests/`) on the host that the archive doesn't ship and no previous list accounts for. After reading
+that list, `PRUNE_UNTRACKED=1 scripts/deploy-lxc125.sh` deletes them. `redeploy.py` doesn't do any of
+this, so prefer `deploy-lxc125.sh`.
 
 Two hard-won gotchas baked into the script:
 - The compose file's `app` service is `image: budget-app:latest` with **no
