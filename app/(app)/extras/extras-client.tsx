@@ -258,6 +258,7 @@ export function ExtrasClient({
             <DialogTitle>Add expense</DialogTitle>
           </DialogHeader>
           <CreateExtraForm
+            today={today}
             categories={categoriesState}
             creditCards={creditCards}
             onCategoryAdded={(c) => setCategoriesState((prev) => [...prev, c])}
@@ -298,19 +299,21 @@ function Tab({
 }
 
 function CreateExtraForm({
+  today,
   categories,
   creditCards,
   onCancel,
   onCreated,
   onCategoryAdded,
 }: {
+  /** Today in the user's timezone, not UTC (review 2026-09-24 C13). */
+  today: string;
   categories: ReadonlyArray<string>;
   creditCards: CreditCardRow[];
   onCancel: () => void;
   onCreated: (e: OneTimeExpenseRow) => void;
   onCategoryAdded?: (name: string) => void;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
   const [date, setDate] = React.useState(today);
   const [description, setDescription] = React.useState("");
   const [amountCents, setAmountCents] = React.useState(0);

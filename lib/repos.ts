@@ -1,5 +1,5 @@
 import { looksLikeCardPayment, looksLikeReversal } from "./plaid-transaction-kind";
-import { addDaysIso, todayIso } from "./dates";
+import { addDaysIso, DEFAULT_TIMEZONE, todayIso } from "./dates";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
@@ -126,14 +126,23 @@ export async function getUserById(id: string): Promise<UserRow | undefined> {
   return db.select().from(users).where(eq(users.id, id)).get();
 }
 
-export async function createMember(input: {
-  email: string;
-  displayName: string;
-  password: string;
-  role?: "admin" | "member";
-}): Promise<UserSafe> {
+export async function createMember(
+  input: {
+    email: string;
+    displayName: string;
+    password: string;
+    role?: "admin" | "member";
+  },
+  /** The household's timezone (the creating admin's). */
+  opts: { timezone?: string } = {},
+): Promise<UserSafe> {
   const db = getDb();
   const userId = newId();
+  // A member belongs to the same household as the admin who adds them: same
+  // timezone, and "today" means today there, not in UTC (review 2026-09-24
+  // C13 — this used to hard-code America/New_York and a UTC date).
+  const timezone = opts.timezone ?? DEFAULT_TIMEZONE;
+  const today = todayIso(timezone);
   const passwordHash = await hashPassword(input.password);
   await db
     .insert(users)
@@ -153,13 +162,13 @@ export async function createMember(input: {
       id: newId(),
       userId,
       startingBalanceCents: 0,
-      startingBalanceAsOf: new Date().toISOString().slice(0, 10),
+      startingBalanceAsOf: today,
       defaultPaycheckCents: 0,
-      firstPaydayDate: new Date().toISOString().slice(0, 10),
+      firstPaydayDate: today,
       payFrequencyDays: 14,
       projectionMonths: 6,
       currency: "USD",
-      timezone: "America/New_York",
+      timezone,
     })
     .run();
 
