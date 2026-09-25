@@ -23,8 +23,9 @@
 #      the app service. Caddy is untouched.
 #   5. Waits for public /api/health and prints recent app logs.
 #
-# The first deploy after deploy-prune.sh was added only LISTS stale files on
-# the host and deletes nothing. After reviewing that list:
+# Every deploy also LISTS app source files on the host that the archive
+# doesn't ship (leftovers from before manifests, or copied in by hand) and
+# deletes none of them. After reviewing that list:
 #
 #   PRUNE_UNTRACKED=1 scripts/deploy-lxc125.sh
 #
