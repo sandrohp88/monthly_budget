@@ -165,6 +165,8 @@ export const cardPaymentOpSchema = z.discriminatedUnion("op", [
 
 export const cardPaymentBatchSchema = z.object({
   ops: z.array(cardPaymentOpSchema).min(1).max(10),
+  /** Confirmed by the user: drop bank-transaction links the change strands. */
+  unlinkAllocations: z.boolean().optional(),
 });
 
 export type CardPaymentOp = z.infer<typeof cardPaymentOpSchema>;

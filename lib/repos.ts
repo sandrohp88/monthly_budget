@@ -1,6 +1,6 @@
 import { looksLikeCardPayment, looksLikeReversal } from "./plaid-transaction-kind";
 import { addDaysIso, todayIso } from "./dates";
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
   interestSavingCashDueCents,
@@ -71,7 +71,7 @@ import {
   type VariableBillRow,
 } from "./db/schema";
 import { newId } from "./ids";
-import { splitIsValid } from "./bill-reconciliation";
+import { enumerateBillOccurrences, splitIsValid } from "./bill-reconciliation";
 import { hashPassword } from "./auth";
 import { calculateMonthlyHistoryAverage } from "./variable-bills";
 import { log } from "./log";
@@ -809,7 +809,19 @@ export async function deleteCreditCardPaymentOverride(
 }
 
 /** A batch op that can't be applied as the caller expected. Maps to 409. */
-export class CardPaymentConflictError extends Error {}
+export class CardPaymentConflictError extends Error {
+  constructor(
+    message: string,
+    /** `linked_payment`: the change would strand a bank-transaction link; the
+     *  caller may confirm and retry with `unlinkAllocations`. */
+    readonly code?: "linked_payment",
+  ) {
+    super(message);
+  }
+}
+
+export const LINKED_PAYMENT_MESSAGE =
+  "This payment is linked to a bank transaction. Removing it also removes that link.";
 
 /**
  * Apply a calendar card-payment change as ONE transaction: every op or none.
@@ -821,8 +833,22 @@ export class CardPaymentConflictError extends Error {}
  *   - `put` onto an existing row requires `replace` (collision policy);
  *   - `delete` with `mustExist` requires the row (stale-state check).
  * Ops apply in order, so delete-then-put on the same date is a clean move.
+ *
+ * Bank-transaction links (`draft_allocations` of kind card_payment) are keyed
+ * by (card, date), so they must follow the plan (review 2026-09-24 C05). A
+ * link left on a date with no payment credits nothing, while the draft stays
+ * out of automatic matching — the plan would hold its cash as "awaiting
+ * post" after the money had already left. So, per card, after the ops:
+ *   - links on a date this batch emptied move to the batch's ONE new payment
+ *     date (a move), merging with any link the same draft already has there;
+ *   - with no single new date, the batch is refused (`linked_payment`)
+ *     unless `unlinkAllocations` says to drop those links.
  */
-export function applyCardPaymentOps(userId: string, ops: CardPaymentOp[]): void {
+export function applyCardPaymentOps(
+  userId: string,
+  ops: CardPaymentOp[],
+  opts: { unlinkAllocations?: boolean } = {},
+): void {
   const db = getDb();
   db.transaction((tx) => {
     const owned = new Set(
@@ -876,7 +902,94 @@ export function applyCardPaymentOps(userId: string, ops: CardPaymentOp[]): void 
         })
         .run();
     }
+    carryCardPaymentLinks(tx, userId, ops, opts.unlinkAllocations === true);
   });
+}
+
+/** See applyCardPaymentOps: move or drop the links a batch would strand. */
+type DbTx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+function carryCardPaymentLinks(
+  tx: DbTx,
+  userId: string,
+  ops: CardPaymentOp[],
+  unlink: boolean,
+): void {
+  const touched = new Map<string, Set<string>>();
+  const putDates = new Map<string, Set<string>>();
+  for (const op of ops) {
+    if (!touched.has(op.cardId)) touched.set(op.cardId, new Set());
+    touched.get(op.cardId)!.add(op.dueDate);
+    if (op.op === "put" && op.amountCents > 0) {
+      if (!putDates.has(op.cardId)) putDates.set(op.cardId, new Set());
+      putDates.get(op.cardId)!.add(op.dueDate);
+    }
+  }
+
+  for (const [cardId, dates] of touched) {
+    const live = new Set(
+      tx
+        .select({ dueDate: creditCardPaymentOverrides.dueDate })
+        .from(creditCardPaymentOverrides)
+        .where(
+          and(
+            eq(creditCardPaymentOverrides.userId, userId),
+            eq(creditCardPaymentOverrides.cardId, cardId),
+            inArray(creditCardPaymentOverrides.dueDate, [...dates]),
+            gt(creditCardPaymentOverrides.amountCents, 0),
+          ),
+        )
+        .all()
+        .map((r) => r.dueDate),
+    );
+    const stranded = tx
+      .select()
+      .from(draftAllocations)
+      .where(
+        and(
+          eq(draftAllocations.userId, userId),
+          eq(draftAllocations.targetKind, "card_payment"),
+          eq(draftAllocations.targetId, cardId),
+          inArray(draftAllocations.targetDate, [...dates]),
+        ),
+      )
+      .all()
+      .filter((a) => !live.has(a.targetDate));
+    if (stranded.length === 0) continue;
+
+    const newDates = [...(putDates.get(cardId) ?? [])].filter((d) => live.has(d));
+    if (newDates.length === 1 && !unlink) {
+      const to = newDates[0]!;
+      for (const a of stranded) {
+        const existing = tx
+          .select()
+          .from(draftAllocations)
+          .where(
+            and(
+              eq(draftAllocations.draftId, a.draftId),
+              eq(draftAllocations.targetKind, "card_payment"),
+              eq(draftAllocations.targetId, cardId),
+              eq(draftAllocations.targetDate, to),
+            ),
+          )
+          .get();
+        if (existing) {
+          tx.update(draftAllocations)
+            .set({ amountCents: existing.amountCents + a.amountCents })
+            .where(eq(draftAllocations.id, existing.id))
+            .run();
+          tx.delete(draftAllocations).where(eq(draftAllocations.id, a.id)).run();
+        } else {
+          tx.update(draftAllocations).set({ targetDate: to }).where(eq(draftAllocations.id, a.id)).run();
+        }
+      }
+      continue;
+    }
+    if (!unlink) throw new CardPaymentConflictError(LINKED_PAYMENT_MESSAGE, "linked_payment");
+    tx.delete(draftAllocations)
+      .where(inArray(draftAllocations.id, stranded.map((a) => a.id)))
+      .run();
+  }
 }
 
 export async function listPaychecks(userId: string, includeArchived = false): Promise<PaycheckRow[]> {
@@ -2857,6 +2970,64 @@ export async function findInvalidSplitDraftIds(
     byDraft.set(r.draftId, d);
   }
   return new Set([...byDraft].filter(([, d]) => !splitIsValid(d)).map(([id]) => id));
+}
+
+/**
+ * Drafts whose split points at an obligation that no longer exists as linked:
+ * a card payment that was moved or removed, a bill whose schedule no longer
+ * has that due date (or the bill was archived), or an archived one-time
+ * expense. Such a portion credits nothing and the draft stays out of
+ * automatic matching, so the Transactions page flags it for relinking
+ * (review 2026-09-24 C05).
+ */
+export async function findOrphanedAllocationDraftIds(userId: string): Promise<Set<string>> {
+  const db = getDb();
+  const rows = db
+    .select()
+    .from(draftAllocations)
+    .where(eq(draftAllocations.userId, userId))
+    .all();
+  if (rows.length === 0) return new Set();
+
+  const plans = new Set(
+    db
+      .select({ cardId: creditCardPaymentOverrides.cardId, dueDate: creditCardPaymentOverrides.dueDate })
+      .from(creditCardPaymentOverrides)
+      .where(and(eq(creditCardPaymentOverrides.userId, userId), gt(creditCardPaymentOverrides.amountCents, 0)))
+      .all()
+      .map((p) => `${p.cardId}:${p.dueDate}`),
+  );
+  const billById = new Map(
+    db
+      .select()
+      .from(bills)
+      .where(and(eq(bills.userId, userId), eq(bills.isActive, true)))
+      .all()
+      .map((b) => [b.id, b] as const),
+  );
+  const activeExtras = new Set(
+    db
+      .select({ id: oneTimeExpenses.id })
+      .from(oneTimeExpenses)
+      .where(and(eq(oneTimeExpenses.userId, userId), eq(oneTimeExpenses.isActive, true)))
+      .all()
+      .map((e) => e.id),
+  );
+
+  const orphaned = new Set<string>();
+  for (const a of rows) {
+    const live =
+      a.targetKind === "card_payment"
+        ? plans.has(`${a.targetId}:${a.targetDate}`)
+        : a.targetKind === "bill"
+          ? (() => {
+              const bill = billById.get(a.targetId);
+              return !!bill && enumerateBillOccurrences(bill, a.targetDate, a.targetDate).length > 0;
+            })()
+          : activeExtras.has(a.targetId);
+    if (!live) orphaned.add(a.draftId);
+  }
+  return orphaned;
 }
 
 /**
