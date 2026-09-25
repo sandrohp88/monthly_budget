@@ -34,7 +34,7 @@ fi
 host_owned() {
   case "$1" in
     data | data/* | backups | backups/* | node_modules/* | .git/* | .next/*) return 0 ;;
-    caddy_data | caddy_data/* | caddy_config | caddy_config/*) return 0 ;;
+    caddy_data | caddy_data/* | caddy_config | caddy_config/* | caddy-etc | caddy-etc/*) return 0 ;;
     .env* | Caddyfile* | docker-compose.yml* | *.crt | *.key | *.pem) return 0 ;;
     DEPLOYED_REVISION | .deployed-files | .deploy-manifest) return 0 ;;
     /* | *..*) return 0 ;; # never leave the deploy directory

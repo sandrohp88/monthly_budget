@@ -37,7 +37,12 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Mount a DIRECTORY holding the Caddyfile (production: ./caddy-etc). A
+      # single-file bind pins the inode at container start, so a Caddyfile
+      # replaced on the host (tar extract, most editors) silently stops
+      # reaching Caddy. That happened on LXC 125 (2026-09-06 → 09-25).
+      # Fresh install: mkdir caddy-etc && cp Caddyfile caddy-etc/
+      - ./caddy-etc:/etc/caddy:ro
       - caddy_data:/data
       - caddy_config:/config
 
@@ -52,14 +57,16 @@ services:
     volumes:
       - ./data:/data:ro
       - ./backups:/backups
-      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      # A directory, not the single file: a single-file bind pins the file's
+      # inode at container start, and every deploy replaces scripts/backup.sh.
+      - ./scripts:/opt/budget-scripts:ro
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         apk add --no-cache sqlite tzdata > /dev/null
         cp -n /usr/share/zoneinfo/$$TZ /etc/localtime || true
         echo "$$TZ" > /etc/timezone
-        echo "0 3 * * * /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1" > /etc/crontabs/root
+        echo "0 3 * * * sh /opt/budget-scripts/backup.sh >> /var/log/backup.log 2>&1" > /etc/crontabs/root
         crond -f -l 8
 
 volumes:
