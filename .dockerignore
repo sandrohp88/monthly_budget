@@ -19,3 +19,11 @@ README.md
 .deploy-manifest
 .deployed-files
 DEPLOYED_REVISION
+# The deploy directory is also the shared Caddy's home: keep its CA keys,
+# certificates and config out of the build context.
+caddy_data
+caddy_config
+Caddyfile*
+*.crt
+*.key
+*.pem
