@@ -1149,16 +1149,22 @@ export async function settlePaycheckWithDraft(
   if (existing.actualReceived || existing.settledByDraftId != null) return null;
 
   const db = getDb();
-  await db
-    .update(paychecks)
-    .set({
-      actualReceived: true,
-      actualAmountCents: input.amountCents,
-      actualDate: input.date,
-      settledByDraftId: input.draftId,
-    })
-    .where(and(eq(paychecks.userId, userId), eq(paychecks.id, input.paycheckId)))
-    .run();
+  try {
+    await db
+      .update(paychecks)
+      .set({
+        actualReceived: true,
+        actualAmountCents: input.amountCents,
+        actualDate: input.date,
+        settledByDraftId: input.draftId,
+      })
+      .where(and(eq(paychecks.userId, userId), eq(paychecks.id, input.paycheckId)))
+      .run();
+  } catch (e) {
+    // Another path consumed this draft since the check above: nothing settled.
+    if (isUniqueViolation(e)) return null;
+    throw e;
+  }
   return (await getPaycheck(userId, input.paycheckId)) ?? null;
 }
 
@@ -1648,6 +1654,11 @@ export async function getStatementSettledByDraft(
   return row?.statement;
 }
 
+/** better-sqlite3's error for a UNIQUE index hit (a consume-once gate). */
+function isUniqueViolation(e: unknown): boolean {
+  return (e as { code?: string } | null)?.code === "SQLITE_CONSTRAINT_UNIQUE";
+}
+
 /**
  * Consume a payment draft against the card's statements — the ONLY path that
  * may mark a statement paid from a Plaid draft. One atomic decision per call:
@@ -1730,11 +1741,15 @@ export async function settleStatementWithDraft(
       (amountMatches(s.paidAmountCents) || matchesDue(s)),
   );
   if (accounted) {
-    await db
-      .update(creditCardStatements)
-      .set({ settledByDraftId: input.draftId })
-      .where(eq(creditCardStatements.id, accounted.id))
-      .run();
+    try {
+      await db
+        .update(creditCardStatements)
+        .set({ settledByDraftId: input.draftId })
+        .where(eq(creditCardStatements.id, accounted.id))
+        .run();
+    } catch (e) {
+      if (!isUniqueViolation(e)) throw e;
+    }
     return null;
   }
 
@@ -1746,15 +1761,24 @@ export async function settleStatementWithDraft(
   });
   if (!match) return null;
 
-  await db
-    .update(creditCardStatements)
-    .set({
-      paidAmountCents: input.paymentCents,
-      paidDate: input.date,
-      settledByDraftId: input.draftId,
-    })
-    .where(eq(creditCardStatements.id, match.id))
-    .run();
+  // Settle only if the statement is still open: a pass that raced us may
+  // have paid it (or consumed this draft) since `stmts` was read.
+  let settled;
+  try {
+    settled = await db
+      .update(creditCardStatements)
+      .set({
+        paidAmountCents: input.paymentCents,
+        paidDate: input.date,
+        settledByDraftId: input.draftId,
+      })
+      .where(and(eq(creditCardStatements.id, match.id), isNull(creditCardStatements.paidAmountCents)))
+      .run();
+  } catch (e) {
+    if (isUniqueViolation(e)) return null;
+    throw e;
+  }
+  if (settled.changes === 0) return null;
   return {
     ...match,
     cardId: input.cardId,
@@ -3322,6 +3346,7 @@ export async function exportAll(userId: string) {
 }
 
 import { BACKUP_SCHEMA_VERSION, type BackupImportInput, type CardPaymentOp } from "./validation";
+import type { PaycheckPlanEntry } from "./paycheck-schedule";
 
 /** Rows per collection: what a restore would delete vs. insert. */
 export type ImportPreview = {
@@ -3920,4 +3945,180 @@ export async function markPushSubscriptionNotified(
     .update(pushSubscriptions)
     .set({ lastDigest: digest, lastNotifiedAt: notifiedAt })
     .where(eq(pushSubscriptions.id, id));
+}
+
+// ── atomic multi-step writes (review 2026-09-24 C04 / C11) ─────────────────
+//
+// Each of these used to be a run of awaited writes in a route or in sync. A
+// failure part-way left half the change behind, and two overlapping requests
+// could both pass an "already done?" check that sat in a different await
+// from the write it guarded. Here the check is part of the write, inside one
+// synchronous better-sqlite3 transaction.
+
+type WriteTx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+/** Thrown inside a transaction to roll it back without an error surfacing. */
+class NothingToDo extends Error {}
+
+function inTransaction<T>(fn: (tx: WriteTx) => T): T | null {
+  try {
+    return getDb().transaction(fn);
+  } catch (e) {
+    if (e instanceof NothingToDo) return null;
+    throw e;
+  }
+}
+
+type NewPromoData = Omit<NewCreditCardPromo, "id" | "userId" | "cardId" | "createdAt" | "updatedAt">;
+
+/**
+ * Create a promo AND claim the transaction it came from, or do neither.
+ * The claim is `linked_promo_id IS NULL` in the UPDATE itself, so a second
+ * caller (an overlapping sync, a double-click) finds nothing to claim and its
+ * promo insert rolls back. Returns null when the draft was already linked.
+ */
+export function createPromoForDraft(
+  userId: string,
+  cardId: string,
+  draftId: string,
+  data: NewPromoData,
+): CreditCardPromoRow | null {
+  return inTransaction((tx) => {
+    const id = newId();
+    tx.insert(creditCardPromos).values({ id, userId, cardId, ...data }).run();
+    const claimed = tx
+      .update(plaidTransactionDrafts)
+      .set({ status: "approved", linkedPromoId: id })
+      .where(
+        and(
+          eq(plaidTransactionDrafts.userId, userId),
+          eq(plaidTransactionDrafts.id, draftId),
+          isNull(plaidTransactionDrafts.linkedPromoId),
+        ),
+      )
+      .run();
+    if (claimed.changes === 0) throw new NothingToDo();
+    return tx
+      .select()
+      .from(creditCardPromos)
+      .where(eq(creditCardPromos.id, id))
+      .get()!;
+  });
+}
+
+/**
+ * Approve a draft that awaits review into a one-time expense, or do nothing
+ * when it was already actioned. Returns null in that case.
+ */
+export function approveDraftAsExpense(
+  userId: string,
+  draftId: string,
+  data: Omit<NewOneTimeExpense, "id" | "userId" | "createdAt">,
+): OneTimeExpenseRow | null {
+  return inTransaction((tx) => {
+    const id = newId();
+    tx.insert(oneTimeExpenses).values({ id, userId, ...data }).run();
+    const claimed = tx
+      .update(plaidTransactionDrafts)
+      .set({ status: "approved", linkedExpenseId: id })
+      .where(
+        and(
+          eq(plaidTransactionDrafts.userId, userId),
+          eq(plaidTransactionDrafts.id, draftId),
+          eq(plaidTransactionDrafts.status, "pending_review" as const),
+        ),
+      )
+      .run();
+    if (claimed.changes === 0) throw new NothingToDo();
+    return tx.select().from(oneTimeExpenses).where(eq(oneTimeExpenses.id, id)).get()!;
+  });
+}
+
+/** Dismiss a draft awaiting review. False when it was already actioned. */
+export function dismissPendingDraft(userId: string, draftId: string): boolean {
+  const result = getDb()
+    .update(plaidTransactionDrafts)
+    .set({ status: "dismissed" })
+    .where(
+      and(
+        eq(plaidTransactionDrafts.userId, userId),
+        eq(plaidTransactionDrafts.id, draftId),
+        eq(plaidTransactionDrafts.status, "pending_review" as const),
+      ),
+    )
+    .run();
+  return result.changes > 0;
+}
+
+/** A pasted issuer promo list, already planned against the card's promos. */
+export type PromoReconcileChanges = {
+  updates: Array<{ promoId: string; patch: Partial<Omit<CreditCardPromoRow, "id" | "userId" | "cardId" | "createdAt">> }>;
+  creates: NewPromoData[];
+  archiveIds: string[];
+};
+
+/** Apply a promo-list reconcile to one card in a single transaction. */
+export function applyPromoReconcile(
+  userId: string,
+  cardId: string,
+  changes: PromoReconcileChanges,
+): void {
+  const now = Date.now();
+  getDb().transaction((tx) => {
+    for (const { promoId, patch } of changes.updates) {
+      tx.update(creditCardPromos)
+        .set({ ...patch, updatedAt: now })
+        .where(
+          and(
+            eq(creditCardPromos.userId, userId),
+            eq(creditCardPromos.cardId, cardId),
+            eq(creditCardPromos.id, promoId),
+          ),
+        )
+        .run();
+    }
+    for (const data of changes.creates) {
+      tx.insert(creditCardPromos).values({ id: newId(), userId, cardId, ...data }).run();
+    }
+    for (const promoId of changes.archiveIds) {
+      // Same as archivePromo: an archived promo carries no remaining balance.
+      tx.update(creditCardPromos)
+        .set({ isActive: false, remainingAmountCents: 0, updatedAt: now })
+        .where(
+          and(
+            eq(creditCardPromos.userId, userId),
+            eq(creditCardPromos.cardId, cardId),
+            eq(creditCardPromos.id, promoId),
+          ),
+        )
+        .run();
+    }
+  });
+}
+
+/**
+ * Apply a planned paycheck run in a single transaction. `remove` archives,
+ * exactly like deletePaycheck (and releases the draft that settled the row).
+ */
+export function applyPaycheckPlan(
+  userId: string,
+  entries: ReadonlyArray<PaycheckPlanEntry>,
+  note: string | null,
+): void {
+  getDb().transaction((tx) => {
+    for (const entry of entries) {
+      if (entry.action === "add") {
+        tx.insert(paychecks)
+          .values({ id: newId(), userId, payDate: entry.payDate, amountCents: entry.amountCents, note })
+          .run();
+        continue;
+      }
+      const where = and(eq(paychecks.userId, userId), eq(paychecks.id, entry.id));
+      if (entry.action === "remove") {
+        tx.update(paychecks).set({ isActive: false, settledByDraftId: null }).where(where).run();
+      } else {
+        tx.update(paychecks).set({ payDate: entry.payDate, amountCents: entry.amountCents }).where(where).run();
+      }
+    }
+  });
 }

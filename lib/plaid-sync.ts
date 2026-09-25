@@ -16,8 +16,7 @@ import {
   markItemBalanceRefreshed,
   markItemTransactionsRefreshed,
   getCreditCardByPlaidAccountId,
-  createPromo,
-  updatePlaidDraftStatus,
+  createPromoForDraft,
   updateCardCycleDays,
   updateCreditCard,
   upsertCreditCardStatementByDate,
@@ -129,7 +128,9 @@ async function autoCreatePromoFromTransaction(input: {
   ]);
   if (!card || !draft || draft.linkedPromoId) return;
 
-  const promo = await createPromo(input.userId, card.id, {
+  // Creates the promo only if it can also claim the draft — a second pass
+  // over the same transaction (overlapping sync) gets null and writes nothing.
+  createPromoForDraft(input.userId, card.id, input.transactionId, {
     description: input.merchantName ?? input.description,
     originalAmountCents: input.amountCents,
     remainingAmountCents: input.amountCents,
@@ -138,10 +139,6 @@ async function autoCreatePromoFromTransaction(input: {
     monthlyPaymentCents: null,
     notes: input.originalDescription ?? null,
     isActive: true,
-  });
-  await updatePlaidDraftStatus(input.userId, input.transactionId, {
-    status: "approved",
-    linkedPromoId: promo.id,
   });
 }
 
@@ -377,7 +374,9 @@ async function seedPayPalSpecialFinancingPromos(
     if (purchase.linkedPromoId) continue; // already seeded — never rewrite
     if (purchase.endDate < latestDraftDate) continue; // promo window already over
 
-    const promo = await createPromo(userId, card.id, {
+    // `linkedPromoId` above comes from a list read earlier in the sync; the
+    // claim inside createPromoForDraft is what actually prevents a duplicate.
+    createPromoForDraft(userId, card.id, purchase.id, {
       description: purchase.merchantName ?? purchase.description,
       originalAmountCents: purchase.amountCents,
       remainingAmountCents: purchase.amountCents,
@@ -386,10 +385,6 @@ async function seedPayPalSpecialFinancingPromos(
       monthlyPaymentCents: null,
       notes: `Auto-created from PayPal special financing transaction ${purchase.id}`,
       isActive: true,
-    });
-    await updatePlaidDraftStatus(userId, purchase.id, {
-      status: "approved",
-      linkedPromoId: promo.id,
     });
   }
 }
@@ -483,7 +478,40 @@ async function supersedePendingPredecessor(
   await deletePlaidDraft(userId, predecessorId);
 }
 
+const lockGlobals = globalThis as typeof globalThis & {
+  __financeOsSyncLocks?: Map<string, Promise<unknown>>;
+};
+
+/**
+ * Run `fn` after every earlier sync-lock holder for this user has finished.
+ *
+ * Syncs arrive from two Sync buttons, the Plaid webhook, and card linking.
+ * Two passes over the same cursor at once each see a transaction as not yet
+ * actioned and act on it twice (review 2026-09-24 C04). One process serves
+ * the app, so an in-process queue per user is enough. It lives on
+ * globalThis so dev hot reloads share it. Never call a locked function from
+ * inside `fn` for the same user; it would wait on itself.
+ */
+export function withUserSyncLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const locks = (lockGlobals.__financeOsSyncLocks ??= new Map());
+  const previous = locks.get(userId) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(fn);
+  const tail = run.catch(() => undefined);
+  locks.set(userId, tail);
+  void tail.then(() => {
+    if (locks.get(userId) === tail) locks.delete(userId);
+  });
+  return run;
+}
+
 export async function syncPlaidTransactions(
+  userId: string,
+  filterItemId?: string,
+): Promise<SyncResult> {
+  return withUserSyncLock(userId, () => syncPlaidTransactionsUnlocked(userId, filterItemId));
+}
+
+async function syncPlaidTransactionsUnlocked(
   userId: string,
   filterItemId?: string,
 ): Promise<SyncResult> {
