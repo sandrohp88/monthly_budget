@@ -46,3 +46,35 @@ jobs:
           path: test-results/
           retention-days: 7
           if-no-files-found: ignore
+
+  # Build the production image exactly as the deploy does, start it, and wait
+  # for its health check. Catches base-image / native-module breakage (e.g. a
+  # Node upgrade that better-sqlite3 or argon2 can't build on Alpine) before a
+  # deploy rather than during one.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t budget-app:ci .
+      - name: Start the image and wait for /api/health
+        run: |
+          docker run -d --name budget-ci -p 3000:3000 \
+            -e DATABASE_URL=file:/data/budget.db \
+            -e AUTH_SECRET=test-secret-test-secret-test-secret-test \
+            -e AUTH_URL=http://localhost:3000 \
+            budget-app:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/api/health; then echo; break; fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/api/health
+          # First page render runs migrations against a fresh DB through the
+          # native sqlite binding; the login page must come back (200 or a
+          # redirect to /setup), not a 500.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: localhost:3000' http://localhost:3000/login)
+          echo "/login -> $code"
+          case "$code" in 200|307|308) ;; *) docker logs budget-ci; exit 1 ;; esac
+          [ "$(docker inspect -f '{{.Config.User}}' budget-ci)" = "node" ]
+      - if: always()
+        run: docker logs budget-ci || true
