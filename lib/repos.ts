@@ -1,6 +1,6 @@
 import { looksLikeCardPayment, looksLikeReversal } from "./plaid-transaction-kind";
 import { addDaysIso, todayIso } from "./dates";
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
   interestSavingCashDueCents,
@@ -71,7 +71,7 @@ import {
   type VariableBillRow,
 } from "./db/schema";
 import { newId } from "./ids";
-import { splitIsValid } from "./bill-reconciliation";
+import { enumerateBillOccurrences, splitIsValid } from "./bill-reconciliation";
 import { hashPassword } from "./auth";
 import { calculateMonthlyHistoryAverage } from "./variable-bills";
 import { log } from "./log";
@@ -819,7 +819,19 @@ export async function deleteCreditCardPaymentOverride(
 }
 
 /** A batch op that can't be applied as the caller expected. Maps to 409. */
-export class CardPaymentConflictError extends Error {}
+export class CardPaymentConflictError extends Error {
+  constructor(
+    message: string,
+    /** `linked_payment`: the change would strand a bank-transaction link; the
+     *  caller may confirm and retry with `unlinkAllocations`. */
+    readonly code?: "linked_payment",
+  ) {
+    super(message);
+  }
+}
+
+export const LINKED_PAYMENT_MESSAGE =
+  "This payment is linked to a bank transaction. Removing it also removes that link.";
 
 /**
  * Apply a calendar card-payment change as ONE transaction: every op or none.
@@ -831,8 +843,22 @@ export class CardPaymentConflictError extends Error {}
  *   - `put` onto an existing row requires `replace` (collision policy);
  *   - `delete` with `mustExist` requires the row (stale-state check).
  * Ops apply in order, so delete-then-put on the same date is a clean move.
+ *
+ * Bank-transaction links (`draft_allocations` of kind card_payment) are keyed
+ * by (card, date), so they must follow the plan (review 2026-09-24 C05). A
+ * link left on a date with no payment credits nothing, while the draft stays
+ * out of automatic matching — the plan would hold its cash as "awaiting
+ * post" after the money had already left. So, per card, after the ops:
+ *   - links on a date this batch emptied move to the batch's ONE new payment
+ *     date (a move), merging with any link the same draft already has there;
+ *   - with no single new date, the batch is refused (`linked_payment`)
+ *     unless `unlinkAllocations` says to drop those links.
  */
-export function applyCardPaymentOps(userId: string, ops: CardPaymentOp[]): void {
+export function applyCardPaymentOps(
+  userId: string,
+  ops: CardPaymentOp[],
+  opts: { unlinkAllocations?: boolean } = {},
+): void {
   const db = getDb();
   db.transaction((tx) => {
     const owned = new Set(
@@ -886,7 +912,94 @@ export function applyCardPaymentOps(userId: string, ops: CardPaymentOp[]): void 
         })
         .run();
     }
+    carryCardPaymentLinks(tx, userId, ops, opts.unlinkAllocations === true);
   });
+}
+
+/** See applyCardPaymentOps: move or drop the links a batch would strand. */
+type DbTx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+function carryCardPaymentLinks(
+  tx: DbTx,
+  userId: string,
+  ops: CardPaymentOp[],
+  unlink: boolean,
+): void {
+  const touched = new Map<string, Set<string>>();
+  const putDates = new Map<string, Set<string>>();
+  for (const op of ops) {
+    if (!touched.has(op.cardId)) touched.set(op.cardId, new Set());
+    touched.get(op.cardId)!.add(op.dueDate);
+    if (op.op === "put" && op.amountCents > 0) {
+      if (!putDates.has(op.cardId)) putDates.set(op.cardId, new Set());
+      putDates.get(op.cardId)!.add(op.dueDate);
+    }
+  }
+
+  for (const [cardId, dates] of touched) {
+    const live = new Set(
+      tx
+        .select({ dueDate: creditCardPaymentOverrides.dueDate })
+        .from(creditCardPaymentOverrides)
+        .where(
+          and(
+            eq(creditCardPaymentOverrides.userId, userId),
+            eq(creditCardPaymentOverrides.cardId, cardId),
+            inArray(creditCardPaymentOverrides.dueDate, [...dates]),
+            gt(creditCardPaymentOverrides.amountCents, 0),
+          ),
+        )
+        .all()
+        .map((r) => r.dueDate),
+    );
+    const stranded = tx
+      .select()
+      .from(draftAllocations)
+      .where(
+        and(
+          eq(draftAllocations.userId, userId),
+          eq(draftAllocations.targetKind, "card_payment"),
+          eq(draftAllocations.targetId, cardId),
+          inArray(draftAllocations.targetDate, [...dates]),
+        ),
+      )
+      .all()
+      .filter((a) => !live.has(a.targetDate));
+    if (stranded.length === 0) continue;
+
+    const newDates = [...(putDates.get(cardId) ?? [])].filter((d) => live.has(d));
+    if (newDates.length === 1 && !unlink) {
+      const to = newDates[0]!;
+      for (const a of stranded) {
+        const existing = tx
+          .select()
+          .from(draftAllocations)
+          .where(
+            and(
+              eq(draftAllocations.draftId, a.draftId),
+              eq(draftAllocations.targetKind, "card_payment"),
+              eq(draftAllocations.targetId, cardId),
+              eq(draftAllocations.targetDate, to),
+            ),
+          )
+          .get();
+        if (existing) {
+          tx.update(draftAllocations)
+            .set({ amountCents: existing.amountCents + a.amountCents })
+            .where(eq(draftAllocations.id, existing.id))
+            .run();
+          tx.delete(draftAllocations).where(eq(draftAllocations.id, a.id)).run();
+        } else {
+          tx.update(draftAllocations).set({ targetDate: to }).where(eq(draftAllocations.id, a.id)).run();
+        }
+      }
+      continue;
+    }
+    if (!unlink) throw new CardPaymentConflictError(LINKED_PAYMENT_MESSAGE, "linked_payment");
+    tx.delete(draftAllocations)
+      .where(inArray(draftAllocations.id, stranded.map((a) => a.id)))
+      .run();
+  }
 }
 
 export async function listPaychecks(userId: string, includeArchived = false): Promise<PaycheckRow[]> {
@@ -1046,16 +1159,22 @@ export async function settlePaycheckWithDraft(
   if (existing.actualReceived || existing.settledByDraftId != null) return null;
 
   const db = getDb();
-  await db
-    .update(paychecks)
-    .set({
-      actualReceived: true,
-      actualAmountCents: input.amountCents,
-      actualDate: input.date,
-      settledByDraftId: input.draftId,
-    })
-    .where(and(eq(paychecks.userId, userId), eq(paychecks.id, input.paycheckId)))
-    .run();
+  try {
+    await db
+      .update(paychecks)
+      .set({
+        actualReceived: true,
+        actualAmountCents: input.amountCents,
+        actualDate: input.date,
+        settledByDraftId: input.draftId,
+      })
+      .where(and(eq(paychecks.userId, userId), eq(paychecks.id, input.paycheckId)))
+      .run();
+  } catch (e) {
+    // Another path consumed this draft since the check above: nothing settled.
+    if (isUniqueViolation(e)) return null;
+    throw e;
+  }
   return (await getPaycheck(userId, input.paycheckId)) ?? null;
 }
 
@@ -1179,16 +1298,33 @@ export async function updateCategory(
   if (data.kind !== undefined) set.kind = data.kind;
   if (data.budgetAmountCents !== undefined) set.budgetAmountCents = data.budgetAmountCents;
   if (Object.keys(set).length === 0) return undefined;
-  await db
-    .update(categories)
-    .set(set)
-    .where(and(eq(categories.userId, userId), eq(categories.id, id)))
-    .run();
-  return db
-    .select()
-    .from(categories)
-    .where(and(eq(categories.userId, userId), eq(categories.id, id)))
-    .get();
+  const where = and(eq(categories.userId, userId), eq(categories.id, id));
+  // Bills, variable bills and one-time expenses store the category NAME, so a
+  // rename must carry them along in the same transaction. Otherwise the
+  // renamed category shows $0 spent, the spend sits under a name no category
+  // has, and the in-use check lets the category be deleted (review
+  // 2026-09-24 C06).
+  db.transaction((tx) => {
+    const current = tx.select({ name: categories.name }).from(categories).where(where).get();
+    if (!current) return;
+    tx.update(categories).set(set).where(where).run();
+    if (data.name === undefined || data.name === current.name) return;
+    const from = current.name;
+    const to = data.name;
+    tx.update(bills)
+      .set({ category: to, updatedAt: Date.now() })
+      .where(and(eq(bills.userId, userId), eq(bills.category, from)))
+      .run();
+    tx.update(variableBills)
+      .set({ category: to, updatedAt: Date.now() })
+      .where(and(eq(variableBills.userId, userId), eq(variableBills.category, from)))
+      .run();
+    tx.update(oneTimeExpenses)
+      .set({ category: to })
+      .where(and(eq(oneTimeExpenses.userId, userId), eq(oneTimeExpenses.category, from)))
+      .run();
+  });
+  return db.select().from(categories).where(where).get();
 }
 
 export type CategoryUtilization = {
@@ -1295,7 +1431,14 @@ export async function categoryUsageCount(userId: string, name: string): Promise<
     .from(oneTimeExpenses)
     .where(and(eq(oneTimeExpenses.userId, userId), eq(oneTimeExpenses.category, name)))
     .all();
-  return billCount.length + extraCount.length;
+  // Variable bills use categories too; missing them let an in-use category
+  // be deleted.
+  const variableBillCount = await db
+    .select({ id: variableBills.id })
+    .from(variableBills)
+    .where(and(eq(variableBills.userId, userId), eq(variableBills.category, name)))
+    .all();
+  return billCount.length + extraCount.length + variableBillCount.length;
 }
 
 // ── assets ───────────────────────────────────────────────────────────────────
@@ -1545,6 +1688,11 @@ export async function getStatementSettledByDraft(
   return row?.statement;
 }
 
+/** better-sqlite3's error for a UNIQUE index hit (a consume-once gate). */
+function isUniqueViolation(e: unknown): boolean {
+  return (e as { code?: string } | null)?.code === "SQLITE_CONSTRAINT_UNIQUE";
+}
+
 /**
  * Consume a payment draft against the card's statements — the ONLY path that
  * may mark a statement paid from a Plaid draft. One atomic decision per call:
@@ -1627,11 +1775,15 @@ export async function settleStatementWithDraft(
       (amountMatches(s.paidAmountCents) || matchesDue(s)),
   );
   if (accounted) {
-    await db
-      .update(creditCardStatements)
-      .set({ settledByDraftId: input.draftId })
-      .where(eq(creditCardStatements.id, accounted.id))
-      .run();
+    try {
+      await db
+        .update(creditCardStatements)
+        .set({ settledByDraftId: input.draftId })
+        .where(eq(creditCardStatements.id, accounted.id))
+        .run();
+    } catch (e) {
+      if (!isUniqueViolation(e)) throw e;
+    }
     return null;
   }
 
@@ -1643,15 +1795,24 @@ export async function settleStatementWithDraft(
   });
   if (!match) return null;
 
-  await db
-    .update(creditCardStatements)
-    .set({
-      paidAmountCents: input.paymentCents,
-      paidDate: input.date,
-      settledByDraftId: input.draftId,
-    })
-    .where(eq(creditCardStatements.id, match.id))
-    .run();
+  // Settle only if the statement is still open: a pass that raced us may
+  // have paid it (or consumed this draft) since `stmts` was read.
+  let settled;
+  try {
+    settled = await db
+      .update(creditCardStatements)
+      .set({
+        paidAmountCents: input.paymentCents,
+        paidDate: input.date,
+        settledByDraftId: input.draftId,
+      })
+      .where(and(eq(creditCardStatements.id, match.id), isNull(creditCardStatements.paidAmountCents)))
+      .run();
+  } catch (e) {
+    if (isUniqueViolation(e)) return null;
+    throw e;
+  }
+  if (settled.changes === 0) return null;
   return {
     ...match,
     cardId: input.cardId,
@@ -1985,28 +2146,55 @@ export async function markItemTransactionsRefreshed(id: string, at: number): Pro
 
 export async function deactivatePlaidItem(userId: string, id: string): Promise<void> {
   const db = getDb();
-  // SQLite ALTER TABLE can't add an FK with ON DELETE SET NULL, so we
-  // explicitly null `plaid_account_id` on any credit cards linked to this
-  // item's accounts before deactivating. This keeps the card row intact —
-  // the user just goes back to manual cycle-day management.
-  const accts = await db
-    .select({ id: plaidAccounts.id })
-    .from(plaidAccounts)
-    .where(eq(plaidAccounts.itemId, id))
-    .all();
-  if (accts.length > 0) {
-    const ids = accts.map((a) => a.id);
-    await db
-      .update(creditCards)
-      .set({ plaidAccountId: null, updatedAt: Date.now() })
-      .where(and(eq(creditCards.userId, userId), inArray(creditCards.plaidAccountId, ids)))
+  // One transaction: a removed item must stop feeding every total at once.
+  //
+  //   - Linked cards go back to manual cycle-day management. SQLite ALTER
+  //     TABLE can't add an FK with ON DELETE SET NULL, so this is explicit.
+  //   - Its accounts stop anchoring the starting balance. The balance queries
+  //     also ignore inactive items; clearing the flag keeps the stored state
+  //     honest (review 2026-09-24 C01: a removed bank's frozen balance kept
+  //     feeding the projection and doubled it after a re-link).
+  //   - Its PENDING drafts are dismissed: nothing will ever post or remove
+  //     them now, so they would hold cash forever. Posted history stays as
+  //     an audit trail.
+  db.transaction((tx) => {
+    const item = tx
+      .select({ id: plaidItems.id })
+      .from(plaidItems)
+      .where(and(eq(plaidItems.userId, userId), eq(plaidItems.id, id)))
+      .get();
+    if (!item) return;
+    const ids = tx
+      .select({ id: plaidAccounts.id })
+      .from(plaidAccounts)
+      .where(and(eq(plaidAccounts.userId, userId), eq(plaidAccounts.itemId, id)))
+      .all()
+      .map((a) => a.id);
+    if (ids.length > 0) {
+      tx.update(creditCards)
+        .set({ plaidAccountId: null, updatedAt: Date.now() })
+        .where(and(eq(creditCards.userId, userId), inArray(creditCards.plaidAccountId, ids)))
+        .run();
+      tx.update(plaidAccounts)
+        .set({ useAsStartingBalance: false, updatedAt: Date.now() })
+        .where(and(eq(plaidAccounts.userId, userId), inArray(plaidAccounts.id, ids)))
+        .run();
+      tx.update(plaidTransactionDrafts)
+        .set({ status: "dismissed" })
+        .where(
+          and(
+            eq(plaidTransactionDrafts.userId, userId),
+            inArray(plaidTransactionDrafts.accountId, ids),
+            eq(plaidTransactionDrafts.pending, true),
+          ),
+        )
+        .run();
+    }
+    tx.update(plaidItems)
+      .set({ isActive: false })
+      .where(and(eq(plaidItems.userId, userId), eq(plaidItems.id, id)))
       .run();
-  }
-  await db
-    .update(plaidItems)
-    .set({ isActive: false })
-    .where(and(eq(plaidItems.userId, userId), eq(plaidItems.id, id)))
-    .run();
+  });
 }
 
 export async function listPlaidAccounts(userId: string): Promise<PlaidAccountRow[]> {
@@ -2843,6 +3031,64 @@ export async function findInvalidSplitDraftIds(
 }
 
 /**
+ * Drafts whose split points at an obligation that no longer exists as linked:
+ * a card payment that was moved or removed, a bill whose schedule no longer
+ * has that due date (or the bill was archived), or an archived one-time
+ * expense. Such a portion credits nothing and the draft stays out of
+ * automatic matching, so the Transactions page flags it for relinking
+ * (review 2026-09-24 C05).
+ */
+export async function findOrphanedAllocationDraftIds(userId: string): Promise<Set<string>> {
+  const db = getDb();
+  const rows = db
+    .select()
+    .from(draftAllocations)
+    .where(eq(draftAllocations.userId, userId))
+    .all();
+  if (rows.length === 0) return new Set();
+
+  const plans = new Set(
+    db
+      .select({ cardId: creditCardPaymentOverrides.cardId, dueDate: creditCardPaymentOverrides.dueDate })
+      .from(creditCardPaymentOverrides)
+      .where(and(eq(creditCardPaymentOverrides.userId, userId), gt(creditCardPaymentOverrides.amountCents, 0)))
+      .all()
+      .map((p) => `${p.cardId}:${p.dueDate}`),
+  );
+  const billById = new Map(
+    db
+      .select()
+      .from(bills)
+      .where(and(eq(bills.userId, userId), eq(bills.isActive, true)))
+      .all()
+      .map((b) => [b.id, b] as const),
+  );
+  const activeExtras = new Set(
+    db
+      .select({ id: oneTimeExpenses.id })
+      .from(oneTimeExpenses)
+      .where(and(eq(oneTimeExpenses.userId, userId), eq(oneTimeExpenses.isActive, true)))
+      .all()
+      .map((e) => e.id),
+  );
+
+  const orphaned = new Set<string>();
+  for (const a of rows) {
+    const live =
+      a.targetKind === "card_payment"
+        ? plans.has(`${a.targetId}:${a.targetDate}`)
+        : a.targetKind === "bill"
+          ? (() => {
+              const bill = billById.get(a.targetId);
+              return !!bill && enumerateBillOccurrences(bill, a.targetDate, a.targetDate).length > 0;
+            })()
+          : activeExtras.has(a.targetId);
+    if (!live) orphaned.add(a.draftId);
+  }
+  return orphaned;
+}
+
+/**
  * Reopen the paycheck a now-removed deposit had auto-settled, mirroring how a
  * removed card payment reopens its statement. Without this the paycheck
  * stays "received" on the strength of a deposit that no longer exists.
@@ -2910,10 +3156,14 @@ export async function getLinkedBalanceSnapshot(
       availableBalanceCents: plaidAccounts.availableBalanceCents,
     })
     .from(plaidAccounts)
+    // A removed item's accounts keep their last balance forever; they must
+    // not anchor the projection (review 2026-09-24 C01).
+    .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.itemId))
     .where(
       and(
         eq(plaidAccounts.userId, userId),
         eq(plaidAccounts.useAsStartingBalance, true),
+        eq(plaidItems.isActive, true),
       ),
     )
     .all();
@@ -2956,12 +3206,15 @@ export async function getPendingDraftOutflow(userId: string): Promise<number> {
     .select({ amountCents: plaidTransactionDrafts.amountCents })
     .from(plaidTransactionDrafts)
     .innerJoin(plaidAccounts, eq(plaidTransactionDrafts.accountId, plaidAccounts.id))
+    // A removed item never posts or removes its pending rows again.
+    .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.itemId))
     .where(
       and(
         eq(plaidTransactionDrafts.userId, userId),
         eq(plaidTransactionDrafts.pending, true),
         ne(plaidTransactionDrafts.status, "dismissed" as const),
         eq(plaidAccounts.useAsStartingBalance, true),
+        eq(plaidItems.isActive, true),
       ),
     )
     .all();
@@ -2997,7 +3250,15 @@ export async function getNetWorthComponents(userId: string): Promise<NetWorthCom
       balanceCents: plaidAccounts.balanceCents,
     })
     .from(plaidAccounts)
-    .where(and(eq(plaidAccounts.userId, userId), eq(plaidAccounts.syncEnabled, true)))
+    // Removed items' balances are frozen, not current — leave them out.
+    .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.itemId))
+    .where(
+      and(
+        eq(plaidAccounts.userId, userId),
+        eq(plaidAccounts.syncEnabled, true),
+        eq(plaidItems.isActive, true),
+      ),
+    )
     .all();
   const depositoryBalanceCents = allAccounts
     .filter((a) => a.type === "depository")
@@ -3069,8 +3330,9 @@ export async function getNetWorthComponents(userId: string): Promise<NetWorthCom
  *
  * Plaid items / accounts / drafts are intentionally NOT exported — the
  * access tokens are encrypted with a per-deployment PLAID_ENCRYPTION_KEY,
- * and the institution session is single-use. After restore the user
- * relinks each institution.
+ * and the institution session is single-use. After a restore on a NEW install
+ * the user relinks each institution; on the same install, cards keep their
+ * links to still-connected accounts (planPlaidLinkRestore).
  */
 export async function exportAll(userId: string) {
   const db = getDb();
@@ -3118,6 +3380,7 @@ export async function exportAll(userId: string) {
 }
 
 import { BACKUP_SCHEMA_VERSION, type BackupImportInput, type CardPaymentOp } from "./validation";
+import type { PaycheckPlanEntry } from "./paycheck-schedule";
 
 /** Rows per collection: what a restore would delete vs. insert. */
 export type ImportPreview = {
@@ -3165,6 +3428,7 @@ export async function previewImport(
   if (payload.categories === undefined) {
     warnings.push("Backup has no categories; current categories are kept.");
   }
+  warnings.push(...planPlaidLinkRestore(getDb(), userId, payload.creditCards).dropped);
   return {
     schemaVersion: payload.schemaVersion,
     exportedAt: payload.exportedAt,
@@ -3274,10 +3538,10 @@ async function validateImportGraph(
  *   - Foreign keys inside the payload (statements → cards, overrides →
  *     bills/cards, etc.) MUST resolve to a row inside the same payload.
  *     Cross-user references are rejected before any write fires.
- *   - Plaid items / accounts / drafts are intentionally not touched —
- *     re-linking is how the user gets live data back, and exposing those
- *     IDs in a backup would let one user's import overwrite another's
- *     Plaid linkage.
+ *   - Plaid items / accounts / drafts are intentionally not touched. A
+ *     card's link to one of them survives only while that account is still
+ *     this user's and active (planPlaidLinkRestore), so a backup can never
+ *     claim another user's account.
  */
 /**
  * Detect bills in an import payload that match existing bills by composite key
@@ -3299,6 +3563,67 @@ export function detectDuplicateBills(
     }
   }
   return warnings;
+}
+
+type ImportTx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+/** What a restore does with each backed-up card's Plaid link. */
+export type PlaidLinkRestorePlan = {
+  /** cardId → the Plaid account it stays linked to. Cards not listed restore unlinked. */
+  keep: Map<string, string>;
+  /** One line per link the restore drops, for the preview. */
+  dropped: string[];
+};
+
+/**
+ * Decide which backed-up card→Plaid links survive a restore.
+ *
+ * Plaid items and accounts are never part of a backup and a restore never
+ * touches them, so on the SAME install a card's link is still valid. Dropping
+ * every link (the old behaviour) silently cut linked cards off from
+ * statements, payment matching and classification — including when the user
+ * re-imported the automatic pre-import snapshot to undo a restore (review
+ * 2026-09-24 C02). A link is kept only when:
+ *
+ *   - the account belongs to THIS user and its item is still active — so a
+ *     backup from another install or another user can never claim an account;
+ *   - no other card in the backup claims the same account — the unique index
+ *     allows one card per account, and guessing which one is meant is worse
+ *     than asking the user to re-link.
+ */
+export function planPlaidLinkRestore(
+  db: ReturnType<typeof getDb> | ImportTx,
+  userId: string,
+  cards: BackupImportInput["creditCards"],
+): PlaidLinkRestorePlan {
+  const keep = new Map<string, string>();
+  const dropped: string[] = [];
+  const claimed = (cards ?? []).filter((c) => c.plaidAccountId);
+  if (claimed.length === 0) return { keep, dropped };
+
+  const active = new Set(
+    db
+      .select({ id: plaidAccounts.id })
+      .from(plaidAccounts)
+      .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.itemId))
+      .where(and(eq(plaidAccounts.userId, userId), eq(plaidItems.isActive, true)))
+      .all()
+      .map((a) => a.id),
+  );
+  const claims = new Map<string, number>();
+  for (const c of claimed) claims.set(c.plaidAccountId!, (claims.get(c.plaidAccountId!) ?? 0) + 1);
+
+  for (const c of claimed) {
+    const accountId = c.plaidAccountId!;
+    if (!active.has(accountId)) {
+      dropped.push(`Card "${c.name}" restores without its bank link: that account is not connected here.`);
+    } else if ((claims.get(accountId) ?? 0) > 1) {
+      dropped.push(`Card "${c.name}" restores without its bank link: another card in the backup claims the same account.`);
+    } else {
+      keep.set(c.id, accountId);
+    }
+  }
+  return { keep, dropped };
 }
 
 export async function importAll(userId: string, payload: BackupImportInput): Promise<void> {
@@ -3334,7 +3659,7 @@ export async function importAll(userId: string, payload: BackupImportInput): Pro
  * insert error rolls back the deletes above.
  */
 function importInsideTransaction(
-  tx: Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0],
+  tx: ImportTx,
   userId: string,
   payload: BackupImportInput,
 ): void {
@@ -3366,9 +3691,10 @@ function importInsideTransaction(
 
   // Insert in dependency order (parents before children). Cards first so
   // bills.paidViaCardId / extras.paidViaCardId / statements.cardId all
-  // resolve. Plaid account links are nulled because the Plaid items aren't
-  // exported — restoring on a fresh deployment with a different
-  // PLAID_ENCRYPTION_KEY would otherwise leave dangling references.
+  // resolve. A card keeps its Plaid link only while that account is still
+  // this user's and active (planPlaidLinkRestore); otherwise it restores
+  // unlinked, e.g. on a fresh install whose Plaid items were never imported.
+  const plaidLinks = planPlaidLinkRestore(tx, userId, payload.creditCards);
   for (const card of payload.creditCards ?? []) {
     tx.insert(creditCards).values({
       id: card.id,
@@ -3385,7 +3711,7 @@ function importInsideTransaction(
       autoPay: card.autoPay ?? false,
       notes: card.notes ?? null,
       isActive: card.isActive ?? true,
-      plaidAccountId: null,
+      plaidAccountId: plaidLinks.keep.get(card.id) ?? null,
     }).run();
   }
 
@@ -3653,4 +3979,180 @@ export async function markPushSubscriptionNotified(
     .update(pushSubscriptions)
     .set({ lastDigest: digest, lastNotifiedAt: notifiedAt })
     .where(eq(pushSubscriptions.id, id));
+}
+
+// ── atomic multi-step writes (review 2026-09-24 C04 / C11) ─────────────────
+//
+// Each of these used to be a run of awaited writes in a route or in sync. A
+// failure part-way left half the change behind, and two overlapping requests
+// could both pass an "already done?" check that sat in a different await
+// from the write it guarded. Here the check is part of the write, inside one
+// synchronous better-sqlite3 transaction.
+
+type WriteTx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+/** Thrown inside a transaction to roll it back without an error surfacing. */
+class NothingToDo extends Error {}
+
+function inTransaction<T>(fn: (tx: WriteTx) => T): T | null {
+  try {
+    return getDb().transaction(fn);
+  } catch (e) {
+    if (e instanceof NothingToDo) return null;
+    throw e;
+  }
+}
+
+type NewPromoData = Omit<NewCreditCardPromo, "id" | "userId" | "cardId" | "createdAt" | "updatedAt">;
+
+/**
+ * Create a promo AND claim the transaction it came from, or do neither.
+ * The claim is `linked_promo_id IS NULL` in the UPDATE itself, so a second
+ * caller (an overlapping sync, a double-click) finds nothing to claim and its
+ * promo insert rolls back. Returns null when the draft was already linked.
+ */
+export function createPromoForDraft(
+  userId: string,
+  cardId: string,
+  draftId: string,
+  data: NewPromoData,
+): CreditCardPromoRow | null {
+  return inTransaction((tx) => {
+    const id = newId();
+    tx.insert(creditCardPromos).values({ id, userId, cardId, ...data }).run();
+    const claimed = tx
+      .update(plaidTransactionDrafts)
+      .set({ status: "approved", linkedPromoId: id })
+      .where(
+        and(
+          eq(plaidTransactionDrafts.userId, userId),
+          eq(plaidTransactionDrafts.id, draftId),
+          isNull(plaidTransactionDrafts.linkedPromoId),
+        ),
+      )
+      .run();
+    if (claimed.changes === 0) throw new NothingToDo();
+    return tx
+      .select()
+      .from(creditCardPromos)
+      .where(eq(creditCardPromos.id, id))
+      .get()!;
+  });
+}
+
+/**
+ * Approve a draft that awaits review into a one-time expense, or do nothing
+ * when it was already actioned. Returns null in that case.
+ */
+export function approveDraftAsExpense(
+  userId: string,
+  draftId: string,
+  data: Omit<NewOneTimeExpense, "id" | "userId" | "createdAt">,
+): OneTimeExpenseRow | null {
+  return inTransaction((tx) => {
+    const id = newId();
+    tx.insert(oneTimeExpenses).values({ id, userId, ...data }).run();
+    const claimed = tx
+      .update(plaidTransactionDrafts)
+      .set({ status: "approved", linkedExpenseId: id })
+      .where(
+        and(
+          eq(plaidTransactionDrafts.userId, userId),
+          eq(plaidTransactionDrafts.id, draftId),
+          eq(plaidTransactionDrafts.status, "pending_review" as const),
+        ),
+      )
+      .run();
+    if (claimed.changes === 0) throw new NothingToDo();
+    return tx.select().from(oneTimeExpenses).where(eq(oneTimeExpenses.id, id)).get()!;
+  });
+}
+
+/** Dismiss a draft awaiting review. False when it was already actioned. */
+export function dismissPendingDraft(userId: string, draftId: string): boolean {
+  const result = getDb()
+    .update(plaidTransactionDrafts)
+    .set({ status: "dismissed" })
+    .where(
+      and(
+        eq(plaidTransactionDrafts.userId, userId),
+        eq(plaidTransactionDrafts.id, draftId),
+        eq(plaidTransactionDrafts.status, "pending_review" as const),
+      ),
+    )
+    .run();
+  return result.changes > 0;
+}
+
+/** A pasted issuer promo list, already planned against the card's promos. */
+export type PromoReconcileChanges = {
+  updates: Array<{ promoId: string; patch: Partial<Omit<CreditCardPromoRow, "id" | "userId" | "cardId" | "createdAt">> }>;
+  creates: NewPromoData[];
+  archiveIds: string[];
+};
+
+/** Apply a promo-list reconcile to one card in a single transaction. */
+export function applyPromoReconcile(
+  userId: string,
+  cardId: string,
+  changes: PromoReconcileChanges,
+): void {
+  const now = Date.now();
+  getDb().transaction((tx) => {
+    for (const { promoId, patch } of changes.updates) {
+      tx.update(creditCardPromos)
+        .set({ ...patch, updatedAt: now })
+        .where(
+          and(
+            eq(creditCardPromos.userId, userId),
+            eq(creditCardPromos.cardId, cardId),
+            eq(creditCardPromos.id, promoId),
+          ),
+        )
+        .run();
+    }
+    for (const data of changes.creates) {
+      tx.insert(creditCardPromos).values({ id: newId(), userId, cardId, ...data }).run();
+    }
+    for (const promoId of changes.archiveIds) {
+      // Same as archivePromo: an archived promo carries no remaining balance.
+      tx.update(creditCardPromos)
+        .set({ isActive: false, remainingAmountCents: 0, updatedAt: now })
+        .where(
+          and(
+            eq(creditCardPromos.userId, userId),
+            eq(creditCardPromos.cardId, cardId),
+            eq(creditCardPromos.id, promoId),
+          ),
+        )
+        .run();
+    }
+  });
+}
+
+/**
+ * Apply a planned paycheck run in a single transaction. `remove` archives,
+ * exactly like deletePaycheck (and releases the draft that settled the row).
+ */
+export function applyPaycheckPlan(
+  userId: string,
+  entries: ReadonlyArray<PaycheckPlanEntry>,
+  note: string | null,
+): void {
+  getDb().transaction((tx) => {
+    for (const entry of entries) {
+      if (entry.action === "add") {
+        tx.insert(paychecks)
+          .values({ id: newId(), userId, payDate: entry.payDate, amountCents: entry.amountCents, note })
+          .run();
+        continue;
+      }
+      const where = and(eq(paychecks.userId, userId), eq(paychecks.id, entry.id));
+      if (entry.action === "remove") {
+        tx.update(paychecks).set({ isActive: false, settledByDraftId: null }).where(where).run();
+      } else {
+        tx.update(paychecks).set({ payDate: entry.payDate, amountCents: entry.amountCents }).where(where).run();
+      }
+    }
+  });
 }

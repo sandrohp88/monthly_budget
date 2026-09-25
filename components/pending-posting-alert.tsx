@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AlertBar } from "@/components/ui/alert-bar";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
@@ -97,10 +98,21 @@ export function PendingPostingAlert({
     const key = `${cardId}:${date}`;
     setBusy(key);
     try {
-      const res = await fetch(
-        `/api/credit-cards/${cardId}/payment-overrides?dueDate=${encodeURIComponent(date)}`,
-        { method: "DELETE" },
-      );
+      const url = `/api/credit-cards/${cardId}/payment-overrides?dueDate=${encodeURIComponent(date)}`;
+      let res = await fetch(url, { method: "DELETE" });
+      if (res.status === 409) {
+        // A bank transaction is linked to this plan (see applyCardPaymentOps).
+        const payload = (await res.json().catch(() => null)) as { error?: string; code?: string } | null;
+        if (payload?.code !== "linked_payment") throw new Error(payload?.error ?? "Could not cancel the plan");
+        const ok = await confirmDialog({
+          title: "Remove the bank-transaction link too?",
+          description: `${payload.error} The transaction will be flagged on the Transactions page so you can link it again.`,
+          confirmText: "Remove link",
+          tone: "danger",
+        });
+        if (!ok) return;
+        res = await fetch(`${url}&unlink=1`, { method: "DELETE" });
+      }
       if (!res.ok) throw new Error("Could not cancel the plan");
       toast.success("Payment plan cancelled — reserved cash released");
       router.refresh();

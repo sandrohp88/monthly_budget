@@ -1,13 +1,7 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError, readJson } from "@/lib/api";
 import { paycheckScheduleSchema } from "@/lib/validation";
-import {
-  createPaycheck,
-  deletePaycheck,
-  getSettings,
-  listPaychecks,
-  updatePaycheck,
-} from "@/lib/repos";
+import { applyPaycheckPlan, getSettings, listPaychecks } from "@/lib/repos";
 import { planSchedule } from "@/lib/paycheck-schedule";
 import { addDaysIso, todayIso } from "@/lib/dates";
 
@@ -51,22 +45,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ plan, applied: false });
   }
 
-  for (const entry of plan.entries) {
-    if (entry.action === "add") {
-      await createPaycheck(auth.userId, {
-        payDate: entry.payDate,
-        amountCents: entry.amountCents,
-        note: label || null,
-      });
-    } else if (entry.action === "update" || entry.action === "move") {
-      await updatePaycheck(auth.userId, entry.id, {
-        payDate: entry.payDate,
-        amountCents: entry.amountCents,
-      });
-    } else {
-      await deletePaycheck(auth.userId, entry.id);
-    }
-  }
+  // All or nothing: a failure part-way used to leave half a schedule behind.
+  applyPaycheckPlan(auth.userId, plan.entries, label || null);
 
   return NextResponse.json({
     plan,

@@ -75,7 +75,7 @@ npx playwright test        # E2E happy-path (rare; builds + spins localhost:3000
 | Styles | **Tailwind v4** (`@theme` syntax) | Atomic, paired with shadcn-style primitives |
 | Charts | **Recharts** | Composable, restyled with mint palette |
 | Testing | **Vitest** (engine) + **Playwright** (E2E) | Pure functions get unit; happy paths get E2E |
-| Runtime | **Node 20** in Alpine, served by **tini** | Standalone Next build for minimal image |
+| Runtime | **Node 22** in Alpine (matches CI and `.nvmrc`), served by **tini** | Standalone Next build for minimal image |
 | Reverse proxy | **Caddy 2** with `tls internal` | Auto-cert from internal CA for the LAN domain |
 
 ---
@@ -466,6 +466,7 @@ If anything matches that isn't intentional (`.env.example` placeholders are OK),
 - **Server**: **LXC 125 `budget`** (`10.10.88.25`) on the proxmox cluster (pve-7050) — migrated off `plex`
 - **Deploy directory**: `/opt/budget`
 - **Public URL**: **`https://budget.sherrera.dev`** via the **`bluefalls-public` Cloudflare Tunnel**, whose connector moved to **LXC 139 `bluefalls-edge`** on 2026-07-06 (it originally ran in LXC 125). Path: tunnel (LXC 139) → `https://10.10.88.25` (LXC 125 Caddy) → loopback app. **Tunnel-only**: the loopback app rejects other Host headers, so the old `budget.bluefalls.home` LAN vhost was dropped by design. See `Z:\llm-wiki\wiki\projects\bluefalls-edge\index.md`.
+- **Client IP for rate limits**: behind the tunnel, the peer the LXC-125 Caddy sees is cloudflared on LXC 139 (`10.10.88.39`) for every visitor, so without extra config every visitor shares one login/setup/webhook bucket. To fix that, the host-owned Caddyfile needs `trusted_proxies static 10.10.88.39/32` plus `client_ip_headers CF-Connecting-IP` in its global `servers` block and `header_up X-Real-IP {client_ip}` on the budget vhost, and `.env` needs `CLIENT_IP_HEADER=X-Real-IP`. The repo `Caddyfile` shows the pattern. Enable `CLIENT_IP_HEADER` only after Caddy overwrites that header; otherwise clients could pick their own bucket.
 - **Containers**: `budget-app` (loopback `:3000`, healthcheck `/api/health`) + `budget-backup` (VACUUM cron). The LXC-125 Caddy at `/opt/budget/Caddyfile` fronts budget for the tunnel hop AND the other `*.bluefalls.home` LAN vhosts — never rebuild/restart it casually.
 - Full host detail: `Z:\llm-wiki\wiki\entities\proxmox-cluster.md`
 
@@ -484,6 +485,15 @@ scripts/deploy-lxc125.sh     # Linux/macOS — committed; same steps plus a pre-
 `scripts/deploy-lxc125.sh` also excludes the host-owned `Caddyfile`, `docker-compose.yml`
 and `.env*` from the archive, writes `/opt/budget/DEPLOYED_REVISION`, and verifies an
 unknown pve-7050 host key against the cluster's record before trusting it.
+
+**Files removed from git are removed from the host too.** Extracting the archive over
+`/opt/budget` never deleted anything, so a deleted route kept serving. Each deploy ships a
+`.deploy-manifest` (the archive's file list), and `scripts/deploy-prune.sh` deletes files the
+previous deploy listed (`/opt/budget/.deployed-files`) that this one doesn't. Host-owned paths
+(`data/`, `backups/`, `.env*`, `Caddyfile`, `docker-compose.yml`) are never deleted. The first
+deploy with the manifest only *lists* stale files; rerun with `PRUNE_UNTRACKED=1
+scripts/deploy-lxc125.sh` after reading that list. `redeploy.py` doesn't do this, so prefer
+`deploy-lxc125.sh`.
 
 Two hard-won gotchas baked into the script:
 - The compose file's `app` service is `image: budget-app:latest` with **no
@@ -505,8 +515,10 @@ If you switch base images, verify the user UID still matches the host owner.
 
 ### Backups
 The `budget-backup` container runs `scripts/backup.sh` via crond at 03:00
-local time. It does `VACUUM INTO` to `/backups/budget-YYYYMMDD-HHMM.db` and
-prunes anything older than 14 days. Pull a backup off LXC 125 with `scp`
+local time. It does `VACUUM INTO` to `/backups/budget-YYYYMMDD-HHMMSS.db` and
+keeps the newest 14 of those nightly files. Pre-deploy (and any other ad-hoc) backups go to
+`/backups/adhoc/`, which the deploy script trims to the newest 20; they never count toward the
+nightly 14 and aren't mirrored offsite. Pull a backup off LXC 125 with `scp`
 from `/opt/budget/backups/`. Note: the backup container is read-only —
 one-off prod data fixes go through the `budget-app` container's node +
 better-sqlite3 instead.

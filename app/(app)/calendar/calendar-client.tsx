@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, ChevronLeft, ChevronRight, CreditCard, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Card } from "@/components/ui/card";
 import {
   Dialog,
@@ -1123,13 +1124,30 @@ export function CalendarClient({
   // is applied in a single transaction: all or nothing, with collision and
   // stale-state checks (review 2026-09-21 R06). Never sequence separate
   // DELETE/PUT requests here: a failure between them loses the payment.
+  //
+  // A move carries the payment's bank-transaction link with it on the server.
+  // When a change would leave a link with nowhere to go, the server answers
+  // `linked_payment`; ask, and resend with `unlinkAllocations` only on yes.
   const applyCardPaymentOps = async (ops: CardPaymentOp[]) => {
-    const res = await fetch("/api/credit-cards/payment-overrides/batch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ops }),
-    });
-    const json = await res.json();
+    const send = async (unlinkAllocations: boolean) => {
+      const res = await fetch("/api/credit-cards/payment-overrides/batch", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ops, ...(unlinkAllocations ? { unlinkAllocations } : {}) }),
+      });
+      return { res, json: (await res.json()) as { error?: string; code?: string } };
+    };
+    let { res, json } = await send(false);
+    if (res.status === 409 && json.code === "linked_payment") {
+      const ok = await confirmDialog({
+        title: "Remove the bank-transaction link too?",
+        description: `${json.error} The transaction will be flagged on the Transactions page so you can link it again.`,
+        confirmText: "Remove link",
+        tone: "danger",
+      });
+      if (!ok) throw new Error("Nothing changed: the payment is still linked.");
+      ({ res, json } = await send(true));
+    }
     if (!res.ok) throw new Error(json.error ?? "save failed");
   };
 

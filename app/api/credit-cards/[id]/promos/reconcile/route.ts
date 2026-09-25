@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 import { ensureUser, readJson, jsonError } from "@/lib/api";
 import {
-  archivePromo,
-  createPromo,
+  applyPromoReconcile,
   getCreditCard,
   getSettings,
   listPromosForCard,
-  updatePromo,
 } from "@/lib/repos";
 import { planPromoReconcile } from "@/lib/paypal-promo-list";
 import { planChaseFlexReconcile, type ChaseFlexPlanRow } from "@/lib/chase-flex-plan-list";
@@ -66,29 +64,32 @@ export async function POST(req: Request, ctx: Ctx) {
     archives: planned.archives,
   };
 
-  for (const { promoId, row } of plan.updates) {
-    await updatePromo(auth.userId, promoId, {
-      remainingAmountCents: row.remainingCents,
-      endDate: row.endDate,
-      // A past deadline does not prove the balance was paid. Keep any
-      // issuer-reported remainder active until the issuer reports zero.
-      isActive: row.remainingCents > 0,
-      authoritativeSource: source,
-      // Chase rows carry the issuer's own plan payment + purchase total —
-      // adopt them when present, keep the existing values otherwise.
-      ...(row.monthlyPaymentCents != null
-        ? { monthlyPaymentCents: row.monthlyPaymentCents }
-        : {}),
-      ...(row.originalCents != null ? { originalAmountCents: row.originalCents } : {}),
-    });
-  }
+  // Zero-balance rows carry no debt. Expired rows with a reported remainder
+  // must stay visible because deferred interest may already have triggered.
+  const creates = plan.creates.filter((row) => row.remainingCents > 0);
+  const archiveIds = data.archiveMissing ? plan.archives.map((a) => a.promoId) : [];
 
-  let created = 0;
-  for (const row of plan.creates) {
-    // Zero-balance rows carry no debt. Expired rows with a reported remainder
-    // must stay visible because deferred interest may already have triggered.
-    if (row.remainingCents <= 0) continue;
-    await createPromo(auth.userId, id, {
+  // One transaction: a failure part-way through used to leave the card half
+  // reconciled against the pasted list (review 2026-09-24 C11).
+  applyPromoReconcile(auth.userId, id, {
+    updates: plan.updates.map(({ promoId, row }) => ({
+      promoId,
+      patch: {
+        remainingAmountCents: row.remainingCents,
+        endDate: row.endDate,
+        // A past deadline does not prove the balance was paid. Keep any
+        // issuer-reported remainder active until the issuer reports zero.
+        isActive: row.remainingCents > 0,
+        authoritativeSource: source,
+        // Chase rows carry the issuer's own plan payment + purchase total —
+        // adopt them when present, keep the existing values otherwise.
+        ...(row.monthlyPaymentCents != null
+          ? { monthlyPaymentCents: row.monthlyPaymentCents }
+          : {}),
+        ...(row.originalCents != null ? { originalAmountCents: row.originalCents } : {}),
+      },
+    })),
+    creates: creates.map((row) => ({
       description: row.description,
       // The issuer's purchase total when the table carries it; the current
       // balance is the best available anchor otherwise.
@@ -103,21 +104,13 @@ export async function POST(req: Request, ctx: Ctx) {
           : "Created from pasted PayPal promo list",
       authoritativeSource: source,
       isActive: true,
-    });
-    created++;
-  }
-
-  let archived = 0;
-  if (data.archiveMissing) {
-    for (const a of plan.archives) {
-      await archivePromo(auth.userId, a.promoId);
-      archived++;
-    }
-  }
+    })),
+    archiveIds,
+  });
 
   return NextResponse.json({
     updated: plan.updates.length,
-    created,
-    archived,
+    created: creates.length,
+    archived: archiveIds.length,
   });
 }

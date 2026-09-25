@@ -6,11 +6,11 @@ import {
   getPlaidDraft,
   updatePlaidDraft,
   deletePlaidDraft,
-  updatePlaidDraftStatus,
+  approveDraftAsExpense,
+  dismissPendingDraft,
   setPlaidDraftBillLink,
   setPlaidDraftBillMatchExcluded,
-  createExtra,
-  createPromo,
+  createPromoForDraft,
   getCreditCardByPlaidAccountId,
   listPlaidAccounts,
   listCategories,
@@ -77,8 +77,11 @@ export async function PATCH(
   }
 
   if (body.action === "dismiss") {
-    const updated = await updatePlaidDraftStatus(auth.userId, id, { status: "dismissed" });
-    return NextResponse.json({ draft: updated });
+    // Conditional on still awaiting review: a concurrent approve wins cleanly.
+    if (!dismissPendingDraft(auth.userId, id)) {
+      return jsonError("Draft has already been actioned", 409);
+    }
+    return NextResponse.json({ draft: await getPlaidDraft(auth.userId, id) });
   }
 
   if (body.action === "create_promo") {
@@ -120,7 +123,9 @@ export async function PATCH(
       return jsonError("Remaining amount cannot exceed original amount", 400);
     }
 
-    const promo = await createPromo(auth.userId, card.id, {
+    // The promo and the draft's link are one write: a double submit (or a
+    // sync that seeded a promo meanwhile) gets 409, never a second promo.
+    const promo = createPromoForDraft(auth.userId, card.id, id, {
       description: body.description ?? draft.merchantName ?? draft.description,
       originalAmountCents,
       remainingAmountCents,
@@ -130,13 +135,9 @@ export async function PATCH(
       notes: body.notes ?? null,
       isActive: true,
     });
+    if (!promo) return jsonError("Transaction is already linked to a promo", 409);
 
-    const updated = await updatePlaidDraftStatus(auth.userId, id, {
-      status: "approved",
-      linkedPromoId: promo.id,
-    });
-
-    return NextResponse.json({ draft: updated, promo });
+    return NextResponse.json({ draft: await getPlaidDraft(auth.userId, id), promo });
   }
 
   // action === "approve": create a one_time_expense and link it.
@@ -146,20 +147,18 @@ export async function PATCH(
   const categoryName =
     categories.find((c) => c.name === requestedCategory)?.name ?? "Other";
 
-  const expense = await createExtra(auth.userId, {
+  // Expense + status change in one write, conditional on the draft still
+  // awaiting review — a double submit creates one expense, not two.
+  const expense = approveDraftAsExpense(auth.userId, id, {
     date: body.date ?? draft.date,
     description: body.description ?? draft.description,
     amountCents: body.amountCents ?? draft.amountCents,
     category: categoryName,
     notes: body.notes ?? null,
   });
+  if (!expense) return jsonError("Draft has already been actioned", 409);
 
-  const updated = await updatePlaidDraftStatus(auth.userId, id, {
-    status: "approved",
-    linkedExpenseId: expense.id,
-  });
-
-  return NextResponse.json({ draft: updated, expense });
+  return NextResponse.json({ draft: await getPlaidDraft(auth.userId, id), expense });
 }
 
 export async function DELETE(
