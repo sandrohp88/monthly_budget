@@ -23,6 +23,12 @@ function trustedProxyHops(): number {
   return n;
 }
 
+/** Header the trusted edge proxy sets to the resolved client IP, if configured. */
+function clientIpHeader(): string | null {
+  const raw = process.env.CLIENT_IP_HEADER?.trim().toLowerCase();
+  return raw && /^[a-z0-9-]+$/.test(raw) ? raw : null;
+}
+
 /**
  * Pull the originating client IP out of the request. With one trusted proxy
  * hop (the default — Caddy in our deploy), we take the rightmost entry of
@@ -37,6 +43,20 @@ function trustedProxyHops(): number {
 export function clientIp(req: Request): string {
   const hops = trustedProxyHops();
   if (hops > 0) {
+    // Behind a chain of proxies (Cloudflare → cloudflared → Caddy) the
+    // rightmost x-forwarded-for entry is the previous PROXY, not the client,
+    // so every visitor would share one rate-limit bucket (review 2026-09-24
+    // C07). When the edge proxy resolves the real client itself — Caddy
+    // `trusted_proxies` + `client_ip_headers`, then `header_up X-Real-IP
+    // {client_ip}` — CLIENT_IP_HEADER names the header it ALWAYS overwrites.
+    // Opt-in: naming a header the proxy passes through unchanged would let a
+    // client pick its own bucket.
+    const named = clientIpHeader();
+    if (named) {
+      const value = req.headers.get(named)?.split(",")[0]?.trim();
+      if (value) return value;
+    }
+
     // Caddy strips/rewrites x-forwarded-for; we trust only the rightmost
     // `hops` entries. The leftmost (untrusted) hops are whatever the original
     // client claimed and must not be used for rate limiting.
