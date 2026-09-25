@@ -75,7 +75,7 @@ npx playwright test        # E2E happy-path (rare; builds + spins localhost:3000
 | Styles | **Tailwind v4** (`@theme` syntax) | Atomic, paired with shadcn-style primitives |
 | Charts | **Recharts** | Composable, restyled with mint palette |
 | Testing | **Vitest** (engine) + **Playwright** (E2E) | Pure functions get unit; happy paths get E2E |
-| Runtime | **Node 20** in Alpine, served by **tini** | Standalone Next build for minimal image |
+| Runtime | **Node 22** in Alpine (matches CI and `.nvmrc`), served by **tini** | Standalone Next build for minimal image |
 | Reverse proxy | **Caddy 2** with `tls internal` | Auto-cert from internal CA for the LAN domain |
 
 ---

@@ -43,7 +43,7 @@ budget-app/
 
 ## Local development
 
-Prereqs: Node 20+ and a working C/C++ toolchain (for `better-sqlite3` and
+Prereqs: Node 22 (see `.nvmrc`; production and CI both run 22) and a working C/C++ toolchain (for `better-sqlite3` and
 `argon2`). On Windows, install build tools via `npm install --global windows-build-tools`
 or VS C++ workload.
 

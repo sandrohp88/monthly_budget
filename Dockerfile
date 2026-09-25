@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.7
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 COPY --from=deps /app/node_modules ./node_modules
@@ -19,13 +19,13 @@ ENV NEXT_OUTPUT_STANDALONE=1
 # runtime against an already-migrated database.
 RUN npm run build
 
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
-# Use the node user (UID 1000) that ships with node:20-alpine.
+# Use the node user (UID 1000) that ships with node:22-alpine.
 # This matches the UID of files written by the host on a typical Linux server,
 # so the volume-mounted /data directory is writable without a chown step.
 RUN apk add --no-cache tini sqlite \
