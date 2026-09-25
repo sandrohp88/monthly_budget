@@ -15,3 +15,7 @@ backups
 .git
 .gitignore
 README.md
+# Deploy bookkeeping on the host (scripts/deploy-prune.sh)
+.deploy-manifest
+.deployed-files
+DEPLOYED_REVISION

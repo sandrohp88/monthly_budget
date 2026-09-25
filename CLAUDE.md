@@ -486,6 +486,15 @@ scripts/deploy-lxc125.sh     # Linux/macOS — committed; same steps plus a pre-
 and `.env*` from the archive, writes `/opt/budget/DEPLOYED_REVISION`, and verifies an
 unknown pve-7050 host key against the cluster's record before trusting it.
 
+**Files removed from git are removed from the host too.** Extracting the archive over
+`/opt/budget` never deleted anything, so a deleted route kept serving. Each deploy ships a
+`.deploy-manifest` (the archive's file list), and `scripts/deploy-prune.sh` deletes files the
+previous deploy listed (`/opt/budget/.deployed-files`) that this one doesn't. Host-owned paths
+(`data/`, `backups/`, `.env*`, `Caddyfile`, `docker-compose.yml`) are never deleted. The first
+deploy with the manifest only *lists* stale files; rerun with `PRUNE_UNTRACKED=1
+scripts/deploy-lxc125.sh` after reading that list. `redeploy.py` doesn't do this, so prefer
+`deploy-lxc125.sh`.
+
 Two hard-won gotchas baked into the script:
 - The compose file's `app` service is `image: budget-app:latest` with **no
   `build:` section**, so `docker compose up --build` is a **silent no-op**.
@@ -506,8 +515,10 @@ If you switch base images, verify the user UID still matches the host owner.
 
 ### Backups
 The `budget-backup` container runs `scripts/backup.sh` via crond at 03:00
-local time. It does `VACUUM INTO` to `/backups/budget-YYYYMMDD-HHMM.db` and
-prunes anything older than 14 days. Pull a backup off LXC 125 with `scp`
+local time. It does `VACUUM INTO` to `/backups/budget-YYYYMMDD-HHMMSS.db` and
+keeps the newest 14 of those nightly files. Pre-deploy (and any other ad-hoc) backups go to
+`/backups/adhoc/`, which the deploy script trims to the newest 20; they never count toward the
+nightly 14 and aren't mirrored offsite. Pull a backup off LXC 125 with `scp`
 from `/opt/budget/backups/`. Note: the backup container is read-only —
 one-off prod data fixes go through the `budget-app` container's node +
 better-sqlite3 instead.
