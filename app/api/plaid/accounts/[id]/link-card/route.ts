@@ -10,7 +10,7 @@ import {
   seedCreditLimitFromPlaid,
 } from "@/lib/repos";
 import { decryptToken } from "@/lib/plaid-crypto";
-import { syncCreditCardLiabilitiesForItem } from "@/lib/plaid-sync";
+import { syncCreditCardLiabilitiesForItem, withUserSyncLock } from "@/lib/plaid-sync";
 
 /**
  * Map a Plaid credit-card account to a manual credit_cards row, then
@@ -91,7 +91,11 @@ export async function POST(
         item.accessTokenIv,
         item.accessTokenTag,
       );
-      await syncCreditCardLiabilitiesForItem(auth.userId, item.id, accessToken);
+      // Under the sync lock: this writes statements a running sync may be
+      // settling at the same moment.
+      await withUserSyncLock(auth.userId, () =>
+        syncCreditCardLiabilitiesForItem(auth.userId, item.id, accessToken),
+      );
     }
   } catch {
     // swallow — link itself succeeded

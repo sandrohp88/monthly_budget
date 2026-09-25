@@ -31,6 +31,15 @@ import {
   // credit cards
   createCreditCard,
   createPromo,
+  createPromoForDraft,
+  approveDraftAsExpense,
+  dismissPendingDraft,
+  applyPromoReconcile,
+  applyPaycheckPlan,
+  createPaycheck,
+  listPaychecks,
+  listExtras,
+  getPlaidDraft,
   getCreditCard,
   listCreditCards,
   listPromos,
@@ -1238,5 +1247,90 @@ describe("repos / statement paid transitions", () => {
     });
     await deletePushSubscriptionById(sub.id);
     expect(await listPushSubscriptions(userId)).toHaveLength(0);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Atomic multi-step writes (review 2026-09-24 C11): all or nothing, and the
+// "already actioned?" check is part of the write itself.
+// ────────────────────────────────────────────────────────────────────────────
+describe("repos / atomic multi-step writes", () => {
+  async function setup() {
+    const user = await makeUser();
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins", institutionName: "T",
+      accessTokenEnc: "00", accessTokenIv: "00", accessTokenTag: "00",
+      cursor: null, lastSyncedAt: null, isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_card", itemId: item.id, userId: user.id, name: "Card", mask: null,
+      type: "credit", subtype: "credit card", balanceCents: 0, updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Card", statementDay: 1, dueDay: 21, autoPay: false, isActive: true, plaidAccountId: "acct_card",
+    });
+    await upsertPlaidDraft({
+      id: "txn_1", userId: user.id, accountId: "acct_card", date: "2026-09-01",
+      description: "Sofa", amountCents: 1_200_00, plaidCategory: "HOME", merchantName: "Sofa Co",
+      pending: false, status: "pending_review", linkedExpenseId: null,
+    });
+    return { userId: user.id, cardId: card.id };
+  }
+  const promoData = {
+    description: "Sofa", originalAmountCents: 1_200_00, remainingAmountCents: 1_200_00,
+    startDate: "2026-09-01", endDate: "2027-09-01", monthlyPaymentCents: null, notes: null, isActive: true,
+  };
+
+  it("createPromoForDraft links once; a second call writes nothing", async () => {
+    const { userId, cardId } = await setup();
+    const first = createPromoForDraft(userId, cardId, "txn_1", promoData);
+    const second = createPromoForDraft(userId, cardId, "txn_1", promoData);
+    expect(first).not.toBeNull();
+    expect(second).toBeNull();
+    expect(await listPromos(userId, false)).toHaveLength(1);
+    expect((await getPlaidDraft(userId, "txn_1"))?.linkedPromoId).toBe(first!.id);
+  });
+
+  it("approveDraftAsExpense creates one expense; a repeat or a dismissed draft gets null", async () => {
+    const { userId } = await setup();
+    const expense = { date: "2026-09-01", description: "Sofa", amountCents: 1_200_00, category: "Other", notes: null };
+    expect(approveDraftAsExpense(userId, "txn_1", expense)).not.toBeNull();
+    expect(approveDraftAsExpense(userId, "txn_1", expense)).toBeNull();
+    expect(await listExtras(userId)).toHaveLength(1);
+    expect(dismissPendingDraft(userId, "txn_1")).toBe(false);
+    expect((await getPlaidDraft(userId, "txn_1"))?.status).toBe("approved");
+  });
+
+  it("applyPromoReconcile rolls every change back when one fails", async () => {
+    const { userId, cardId } = await setup();
+    const existing = await createPromo(userId, cardId, { ...promoData, description: "Old" });
+    expect(() =>
+      applyPromoReconcile(userId, cardId, {
+        updates: [{ promoId: existing.id, patch: { remainingAmountCents: 1 } }],
+        // endDate is NOT NULL: this insert fails after the update ran.
+        creates: [{ ...promoData, endDate: null as unknown as string }],
+        archiveIds: [],
+      }),
+    ).toThrow();
+    const promos = await listPromos(userId, false);
+    expect(promos).toHaveLength(1);
+    expect(promos[0]?.remainingAmountCents).toBe(1_200_00);
+  });
+
+  it("applyPaycheckPlan rolls back a half-applied run", async () => {
+    const user = await makeUser();
+    const kept = await createPaycheck(user.id, { payDate: "2026-10-01", amountCents: 2_000_00, note: null });
+    expect(() =>
+      applyPaycheckPlan(
+        user.id,
+        [
+          { action: "add", payDate: "2026-10-15", amountCents: 2_000_00 },
+          { action: "move", id: kept.id, payDate: null as unknown as string, fromPayDate: "2026-10-01", amountCents: 2_000_00 },
+        ],
+        null,
+      ),
+    ).toThrow();
+    const rows = await listPaychecks(user.id);
+    expect(rows.map((p) => p.payDate)).toEqual(["2026-10-01"]);
   });
 });
