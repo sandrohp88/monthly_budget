@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError, readJson } from "@/lib/api";
-import { paycheckScheduleSchema } from "@/lib/validation";
-import { applyPaycheckPlan, getSettings, listPaychecks } from "@/lib/repos";
-import { planSchedule } from "@/lib/paycheck-schedule";
+import { paycheckScheduleRemoveSchema, paycheckScheduleSchema } from "@/lib/validation";
+import { applyPaycheckPlan, archivePaychecks, getSettings, listPaychecks } from "@/lib/repos";
+import { planSchedule, sequenceLabel, sequenceRemovalIds } from "@/lib/paycheck-schedule";
 import { addDaysIso, todayIso } from "@/lib/dates";
 
 /**
@@ -53,4 +53,30 @@ export async function POST(req: Request) {
     applied: true,
     paychecks: await listPaychecks(auth.userId),
   });
+}
+
+/**
+ * Remove a schedule: archive every upcoming, unreceived paycheck in it.
+ * Received and past rows are kept as history (see sequenceRemovalIds) — the
+ * same promise the schedule editor makes — and can be removed individually.
+ */
+export async function DELETE(req: Request) {
+  const auth = await ensureUser();
+  if (auth instanceof NextResponse) return auth;
+
+  const data = await readJson(req, paycheckScheduleRemoveSchema);
+  if (data instanceof NextResponse) return data;
+
+  const settings = await getSettings(auth.userId);
+  if (!settings) return jsonError("settings missing", 400);
+
+  const today = todayIso(settings.timezone);
+  const ids = sequenceRemovalIds(
+    await listPaychecks(auth.userId),
+    sequenceLabel(data.label),
+    today,
+  );
+  const removed = archivePaychecks(auth.userId, ids);
+
+  return NextResponse.json({ removed, paychecks: await listPaychecks(auth.userId) });
 }

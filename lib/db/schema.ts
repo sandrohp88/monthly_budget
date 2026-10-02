@@ -85,6 +85,13 @@ export const paychecks = sqliteTable(
      * deposit is free to re-match.
      */
     settledByDraftId: text("settled_by_draft_id"),
+    /**
+     * One-time income (bonus, tax refund) rather than a scheduled paycheck.
+     * Projects and auto-reconciles like any paycheck, but is never part of a
+     * schedule: lib/paycheck-schedule.ts skips it, so a schedule edit can't
+     * move it onto a payday or restate its amount.
+     */
+    isOneTime: integer("is_one_time", { mode: "boolean" }).notNull().default(false),
     isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
   },

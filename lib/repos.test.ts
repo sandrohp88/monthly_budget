@@ -36,6 +36,7 @@ import {
   dismissPendingDraft,
   applyPromoReconcile,
   applyPaycheckPlan,
+  archivePaychecks,
   createPaycheck,
   listPaychecks,
   listExtras,
@@ -1444,5 +1445,37 @@ describe("repos / atomic multi-step writes", () => {
     ).toThrow();
     const rows = await listPaychecks(user.id);
     expect(rows.map((p) => p.payDate)).toEqual(["2026-10-01"]);
+  });
+});
+
+describe("repos / archivePaychecks", () => {
+  it("archives only the caller's rows and releases their deposit drafts", async () => {
+    const me = await makeUser("me@example.com");
+    const other = await makeUser("other@example.com");
+    const mine = await createPaycheck(me.id, {
+      payDate: "2026-10-09",
+      amountCents: 2_000_00,
+      note: null,
+      settledByDraftId: "draft-1",
+    });
+    const theirs = await createPaycheck(other.id, { payDate: "2026-10-09", amountCents: 1_00, note: null });
+
+    expect(archivePaychecks(me.id, [mine.id, theirs.id])).toBe(1);
+
+    expect(await listPaychecks(me.id)).toEqual([]);
+    const [archived] = await listPaychecks(me.id, true);
+    expect(archived).toMatchObject({ isActive: false, settledByDraftId: null });
+    expect((await listPaychecks(other.id)).map((p) => p.id)).toEqual([theirs.id]);
+  });
+
+  it("keeps one-time income flagged through create", async () => {
+    const me = await makeUser();
+    const bonus = await createPaycheck(me.id, {
+      payDate: "2026-12-15",
+      amountCents: 2_500_00,
+      note: "Year-end bonus",
+      isOneTime: true,
+    });
+    expect(bonus.isOneTime).toBe(true);
   });
 });

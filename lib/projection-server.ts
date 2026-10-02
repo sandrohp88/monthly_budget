@@ -666,7 +666,9 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
           payDate: p.payDate,
           amountCents:
             p.actualReceived && p.actualAmountCents != null ? p.actualAmountCents : p.amountCents,
-          note: p.note,
+          // The note is the event label; a one-time income whose description
+          // was cleared must not read as "Paycheck".
+          note: p.isOneTime && !p.note?.trim() ? "One-time income" : p.note,
           settledBeforeDate: settleBefore,
           settled: depositPosted,
           // Render the received occurrence as a paid marker (zero cash) instead

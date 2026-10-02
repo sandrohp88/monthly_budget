@@ -6,6 +6,7 @@ import {
   isSchedulable,
   planSchedule,
   sequenceLabel,
+  sequenceRemovalIds,
   summarizeSequences,
 } from "./paycheck-schedule";
 import type { PaycheckRow } from "./db/schema";
@@ -23,6 +24,7 @@ function pay(over: Partial<PaycheckRow> = {}): PaycheckRow {
     actualAmountCents: null,
     actualDate: null,
     settledByDraftId: null,
+    isOneTime: false,
     isActive: true,
     createdAt: 0,
     ...over,
@@ -305,5 +307,55 @@ describe("summarizeSequences", () => {
 
   it("ignores archived rows entirely", () => {
     expect(summarizeSequences([pay({ isActive: false })], TODAY)).toEqual([]);
+  });
+});
+
+describe("one-time income", () => {
+  const bonus = pay({ id: "bonus", payDate: "2026-09-18", amountCents: 1500_00, isOneTime: true });
+  const run = [
+    pay({ id: "a", payDate: "2026-09-11" }),
+    pay({ id: "b", payDate: "2026-09-25" }),
+  ];
+
+  it("is not summarized as a schedule, even with a label of its own", () => {
+    const labelled = { ...bonus, note: "Q3 bonus" };
+    const seqs = summarizeSequences([...run, labelled], TODAY);
+    expect(seqs.map((s) => s.label)).toEqual([""]);
+    expect(seqs[0]?.upcomingCount).toBe(2);
+    expect(seqs[0]?.amountCents).toBe(3974_00);
+  });
+
+  it("is never moved, restated or pruned by a schedule edit", () => {
+    // Unlabelled, off-cadence, different amount: without the gate this row is
+    // a leftover the plan would MOVE onto a payday (or remove when pruning).
+    const plan = planSchedule({
+      existing: [...run, bonus],
+      label: "",
+      anchor: "2026-09-11",
+      cadence: { kind: "everyDays", days: 14 },
+      amountCents: 4000_00,
+      from: TODAY,
+      through: "2026-10-10",
+      today: TODAY,
+      pruneExtra: true,
+    });
+    expect(plan.entries.some((e) => "id" in e && e.id === "bonus")).toBe(false);
+    expect(plan.protectedCount).toBe(0);
+  });
+});
+
+describe("sequenceRemovalIds", () => {
+  it("takes only upcoming unreceived rows of that sequence", () => {
+    const rows = [
+      pay({ id: "past", payDate: "2026-08-15" }),
+      pay({ id: "received", payDate: "2026-09-11", actualReceived: true }),
+      pay({ id: "next", payDate: "2026-09-25" }),
+      pay({ id: "later", payDate: "2026-10-09" }),
+      pay({ id: "other", payDate: "2026-09-25", note: "Partner" }),
+      pay({ id: "bonus", payDate: "2026-09-30", isOneTime: true }),
+      pay({ id: "gone", payDate: "2026-10-23", isActive: false }),
+    ];
+    expect(sequenceRemovalIds(rows, "", TODAY)).toEqual(["next", "later"]);
+    expect(sequenceRemovalIds(rows, "Partner", TODAY)).toEqual(["other"]);
   });
 });

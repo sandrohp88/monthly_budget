@@ -44,6 +44,16 @@ export type PaycheckSequence = {
 
 export const UNLABELLED = "";
 
+/**
+ * Whether a row belongs to a schedule at all. One-time income (a bonus) is
+ * income, not a payday: letting it into a sequence would skew the inferred
+ * cadence and amount, and a schedule edit would move it onto a payday and
+ * restate it. Every schedule read and write goes through this gate.
+ */
+export function isScheduledPaycheck(p: PaycheckRow): boolean {
+  return p.isActive && !p.isOneTime;
+}
+
 /** Normalize a row's note into a sequence label. */
 export function sequenceLabel(note: string | null | undefined): string {
   return (note ?? "").trim();
@@ -256,7 +266,9 @@ export function planSchedule(opts: {
   pruneExtra?: boolean;
 }): PaycheckPlan {
   const { existing, label, amountCents, today, pruneExtra = false } = opts;
-  const inSequence = existing.filter((p) => p.isActive && sequenceLabel(p.note) === label);
+  const inSequence = existing.filter(
+    (p) => isScheduledPaycheck(p) && sequenceLabel(p.note) === label,
+  );
   const schedulable = inSequence.filter((p) => isSchedulable(p, today));
   const protectedCount = inSequence.length - schedulable.length;
 
@@ -346,7 +358,7 @@ export function summarizeSequences(
 ): PaycheckSequence[] {
   const byLabel = new Map<string, PaycheckRow[]>();
   for (const p of paychecks) {
-    if (!p.isActive) continue;
+    if (!isScheduledPaycheck(p)) continue;
     const label = sequenceLabel(p.note);
     const list = byLabel.get(label) ?? [];
     list.push(p);
@@ -378,4 +390,24 @@ export function summarizeSequences(
     (a, b) => (a.nextPayDate ?? "9999").localeCompare(b.nextPayDate ?? "9999") ||
       a.label.localeCompare(b.label),
   );
+}
+
+/**
+ * The rows "remove this schedule" archives: every upcoming, unreceived row in
+ * the sequence. The same protection a schedule edit gets applies here —
+ * received and past rows are history, so they stay (and can be removed one at
+ * a time if they really were a mistake). One-time income is never part of a
+ * sequence, so it can't be swept up with one.
+ */
+export function sequenceRemovalIds(
+  paychecks: readonly PaycheckRow[],
+  label: string,
+  today: string,
+): string[] {
+  return paychecks
+    .filter(
+      (p) =>
+        isScheduledPaycheck(p) && sequenceLabel(p.note) === label && isSchedulable(p, today),
+    )
+    .map((p) => p.id);
 }
