@@ -18,7 +18,8 @@ export async function POST(req: Request) {
     const created = await createPaycheck(auth.userId, {
       payDate: data.payDate,
       amountCents: data.amountCents,
-      note: data.note ?? null,
+      note: data.note?.trim() || null,
+      isOneTime: data.isOneTime ?? false,
     });
     return NextResponse.json({ paycheck: created });
   } catch (e) {

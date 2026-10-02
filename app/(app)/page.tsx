@@ -99,7 +99,8 @@ export default async function DashboardPage() {
       : null;
   const ccOverdueCount = openStatements.filter((s) => s.dueDate < today).length;
 
-  const upcomingPaychecks = paychecks.filter((p) => p.payDate >= today);
+  // A bonus is income but not a payday — keep it out of the "next payday" tile.
+  const upcomingPaychecks = paychecks.filter((p) => p.payDate >= today && !p.isOneTime);
   const nextPayday = upcomingPaychecks[0];
 
   // Card due dates coming up whose balance no scheduled payment (fully) covers

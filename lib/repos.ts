@@ -1061,6 +1061,20 @@ export async function deletePaycheck(userId: string, id: string): Promise<void> 
 }
 
 /**
+ * Archive several paychecks at once ("remove this schedule") in one statement.
+ * Same release rule as deletePaycheck. Scoped by userId, so an id belonging to
+ * someone else is simply not matched.
+ */
+export function archivePaychecks(userId: string, ids: readonly string[]): number {
+  if (ids.length === 0) return 0;
+  return getDb()
+    .update(paychecks)
+    .set({ isActive: false, settledByDraftId: null })
+    .where(and(eq(paychecks.userId, userId), inArray(paychecks.id, [...ids])))
+    .run().changes;
+}
+
+/**
  * Paychecks awaiting reconciliation — active, not yet received — with payDate
  * in [startIso, endIso]. Feed for the deposit matcher in lib/plaid-sync.ts.
  */
@@ -3323,6 +3337,7 @@ export async function getNetWorthComponents(userId: string): Promise<NetWorthCom
  *        creditCards.gracePeriodDays / creditLimitCents,
  *        creditCardStatements.dueDateUserOverride and paychecks.actualDate
  *        (always exported as full rows, but dropped on import before v12).
+ *   v13: + paychecks.isOneTime (one-time income)
  *
  * Draft allocations and manual draft→bill links live on the Plaid drafts,
  * which import never touches: a same-install restore keeps them (ids are
@@ -3867,6 +3882,7 @@ function importInsideTransaction(
       actualAmountCents: p.actualAmountCents ?? null,
       actualDate: p.actualDate ?? null,
       settledByDraftId: p.settledByDraftId ?? null,
+      isOneTime: p.isOneTime ?? false,
       isActive: p.isActive ?? true,
     }).run();
   }

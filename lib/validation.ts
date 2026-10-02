@@ -171,13 +171,26 @@ export const cardPaymentBatchSchema = z.object({
 
 export type CardPaymentOp = z.infer<typeof cardPaymentOpSchema>;
 
-export const paycheckCreateSchema = z.object({
+const paycheckFields = z.object({
   payDate: isoDate,
   amountCents: cents,
   note: z.string().max(120).nullable().optional(),
 });
 
-export const paycheckUpdateSchema = paycheckCreateSchema.extend({
+/**
+ * `isOneTime` is set at creation only: turning a scheduled paycheck into a
+ * bonus (or back) would silently change which schedule owns the row. A
+ * one-time income needs a description because the note is its only label on
+ * the calendar and ledger ("Paycheck" would be wrong).
+ */
+export const paycheckCreateSchema = paycheckFields
+  .extend({ isOneTime: z.boolean().optional() })
+  .refine((p) => !p.isOneTime || (p.note ?? "").trim().length > 0, {
+    message: "Describe the income (e.g. Q3 bonus)",
+    path: ["note"],
+  });
+
+export const paycheckUpdateSchema = paycheckFields.extend({
   actualReceived: z.boolean().optional(),
   actualAmountCents: cents.nullable().optional(),
 });
@@ -410,6 +423,11 @@ export type BillUpdateInput = z.infer<typeof billUpdateSchema>;
 export type VariableBillCreateInput = z.infer<typeof variableBillCreateSchema>;
 export type VariableBillUpdateInput = z.infer<typeof variableBillUpdateSchema>;
 export type VariableBillAverageInput = z.infer<typeof variableBillAverageSchema>;
+/** Remove a schedule: the sequence label ("" = the unlabelled one). */
+export const paycheckScheduleRemoveSchema = z.object({
+  label: z.string().max(120),
+});
+
 export type PaycheckCreateInput = z.infer<typeof paycheckCreateSchema>;
 export type PaycheckUpdateInput = z.infer<typeof paycheckUpdateSchema>;
 export type PaycheckScheduleInput = z.infer<typeof paycheckScheduleSchema>;
@@ -718,6 +736,7 @@ const importPaycheckSchema = z.object({
   // round-trip through backup/restore or every deposit becomes re-spendable
   // after an import (same rule as the statement settledByDraftId below).
   settledByDraftId: z.string().min(1).max(128).nullable().optional(),
+  isOneTime: z.boolean().optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -815,7 +834,7 @@ const importAssetSchema = z.object({
 const importSettingsSchema = settingsUpdateSchema.partial();
 
 /** Version written by `exportAll`. Backups from a newer app are rejected. */
-export const BACKUP_SCHEMA_VERSION = 12;
+export const BACKUP_SCHEMA_VERSION = 13;
 
 /**
  * Top-level shape of a backup payload. Every collection is bounded so a

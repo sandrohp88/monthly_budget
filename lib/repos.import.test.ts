@@ -405,6 +405,16 @@ describe("backup import / semantic round trip", () => {
         actualDate: "2026-09-23",
       })
       .run();
+    db.insert(paychecks)
+      .values({
+        id: "bonus",
+        userId,
+        payDate: "2026-12-15",
+        amountCents: 250000,
+        note: "Year-end bonus",
+        isOneTime: true,
+      })
+      .run();
     db.insert(creditCardStatements)
       .values({
         id: "stmt",
@@ -445,7 +455,7 @@ describe("backup import / semantic round trip", () => {
     db.update(settings).set({ startingBalanceCents: 99, projectionMonths: 12 }).run();
     db.update(creditCards).set({ gracePeriodDays: 14, creditLimitCents: null }).run();
     db.update(bills).set({ matchAlias: null }).run();
-    db.update(paychecks).set({ actualDate: null }).run();
+    db.update(paychecks).set({ actualDate: null, isOneTime: false }).run();
     db.update(creditCardStatements).set({ dueDateUserOverride: false }).run();
 
     await importAll(user.id, backupImportSchema.parse(JSON.parse(JSON.stringify(before))));
@@ -455,7 +465,8 @@ describe("backup import / semantic round trip", () => {
     expect(after.settings?.startingBalanceCents).toBe(123456);
     expect(after.creditCards[0]).toMatchObject({ gracePeriodDays: 25, creditLimitCents: 500000 });
     expect(after.bills[0]?.matchAlias).toBe("SYN UTILITY");
-    expect(after.paychecks[0]?.actualDate).toBe("2026-09-23");
+    expect(after.paychecks.find((p) => p.id === "pay")?.actualDate).toBe("2026-09-23");
+    expect(after.paychecks.find((p) => p.id === "bonus")?.isOneTime).toBe(true);
     expect(after.creditCardStatements[0]?.dueDateUserOverride).toBe(true);
 
     const projectionAfter = await buildProjection(user.id);

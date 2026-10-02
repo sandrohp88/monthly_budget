@@ -368,6 +368,7 @@ weird gets emitted before merging.
 - `0039_transactions_refresh` — `plaid_items.transactions_refreshed_at`: same throttle contract for `/transactions/refresh`. Separate column because the two calls sit at different points in the sync and have different Plaid limits. See §17 "The ledger must be as fresh as the balance".
 - `0040_track_planned_payment_posting` — `credit_card_payment_overrides.track_posting` (see §17 posting-aware reservations).
 - `0041_user_session_version` — `users.session_version`: revocable sessions. The JWT carries the version it was issued at; `lib/session-user.ts` rejects mismatches, deleted users and stale roles.
+- `0042_one_time_income` — `paychecks.is_one_time`: one-time income (bonuses) lives on `paychecks` so it projects and deposit-reconciles like a paycheck, but `isScheduledPaycheck` (lib/paycheck-schedule.ts) keeps it out of every schedule read/write — otherwise a schedule edit moves a bonus onto a payday and restates its amount. Set at creation only. Backup v13.
 
 ---
 
