@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { CalendarClock, Gift, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -54,6 +55,7 @@ export function PaychecksClient({
   timezone: string;
   defaultMonths: number;
 }) {
+  const router = useRouter();
   const [items, setItems] = React.useState<PaycheckRow[]>(initialPaychecks);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [oneTimeOpen, setOneTimeOpen] = React.useState(false);
@@ -128,6 +130,12 @@ export function PaychecksClient({
       const res = await fetch(`/api/paychecks/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("delete failed");
       toast.success(`${what} removed`);
+      // This list is local state. The dashboard, calendar, ledger, and the
+      // sidebar sparkline are server renders kept in the client route cache,
+      // including the history entry for the page the user just left. fetch()
+      // does not invalidate that cache, so Back (and the sidebar) keep
+      // expecting the occurrence until a full reload.
+      router.refresh();
     } catch (e) {
       setItems(prev);
       toast.error((e as Error).message);
@@ -177,6 +185,7 @@ export function PaychecksClient({
       setItems(json.paychecks as PaycheckRow[]);
       const n = json.removed as number;
       toast.success(`${n} paycheck${n === 1 ? "" : "s"} removed`);
+      router.refresh();
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -559,6 +568,7 @@ export function PaychecksClient({
             onCreated={(p) => {
               setItems((prev) => [...prev, p].sort((a, b) => a.payDate.localeCompare(b.payDate)));
               setCreateOpen(false);
+              router.refresh();
             }}
           />
         </DialogContent>
@@ -576,6 +586,7 @@ export function PaychecksClient({
             onCreated={(p) => {
               setItems((prev) => [...prev, p].sort((a, b) => a.payDate.localeCompare(b.payDate)));
               setOneTimeOpen(false);
+              router.refresh();
             }}
           />
         </DialogContent>
@@ -586,7 +597,10 @@ export function PaychecksClient({
         onOpenChange={setScheduleOpen}
         seed={scheduleSeed}
         defaultMonths={defaultMonths}
-        onApplied={setItems}
+        onApplied={(rows) => {
+          setItems(rows);
+          router.refresh();
+        }}
       />
     </div>
   );
