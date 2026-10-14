@@ -807,7 +807,13 @@ calendar events, and reports. Refreshing only the current component leaves
 Next's client route cache holding pre-sync payloads for pages the user already
 visited or prefetched, which makes those pages look stale until a browser
 reload. In Next 15, `router.refresh()` clears that whole route cache while
-preserving client and browser state.
+preserving client and browser state. A plain `fetch` to an API route does
+not. Paycheck creates, deletes, and schedule saves on `/paychecks` must
+refresh too: the row is archived immediately, but Back restores the
+dashboard/calendar/ledger entry that was cached before the delete, so the
+projection keeps expecting that occurrence. Migration 0029 does not recreate
+it — `settlePaycheckWithDraft` refuses an inactive row, and the matcher only
+sees active unreconciled paychecks.
 
 ### Cached vs live balances (read before touching balance code)
 `/transactions/sync`'s `data.accounts` and `/accounts/get` both return the
