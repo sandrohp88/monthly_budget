@@ -161,3 +161,13 @@ Stop and ask for clarification before continuing when:
   safely fixed within the feature branch.
 - The safest implementation choice would significantly expand scope beyond the
   requested feature.
+
+## Cursor Cloud specific instructions
+
+Cloud Agents install with `npm ci` on the default image (Node 22 and a C/C++ toolchain are already present; `better-sqlite3` and `argon2` compile during install). On every boot, `start` creates a gitignored `.env` when one is missing, copies `.env.fixture` to `.env.local` when that file is missing, rebuilds `data/dev-fixture.db` when nothing is listening on port 3000, and runs `npm run dev` on `0.0.0.0:3000`.
+
+- Open http://localhost:3000. The host allowlist is `localhost:3000` and `127.0.0.1:3000`; other hosts get HTTP 421.
+- Fixture login: `dev@fixture.local` / `dev-fixture-pw1`. A cold start reseeds that database, so edits there do not survive the next boot. If port 3000 is already healthy, `start` leaves the database alone.
+- `npm run check` (typecheck, lint, unit tests, production build) is the gate from `CLAUDE.md`. Run it while the dev server is stopped; both write `.next`.
+- Plaid and VAPID variables are optional. Without them the app still boots and web push stays off.
+- Playwright browsers are not installed. Before `npm run test:e2e`, run `npx playwright install --with-deps chromium`.
