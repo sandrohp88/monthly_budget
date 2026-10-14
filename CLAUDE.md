@@ -369,6 +369,7 @@ weird gets emitted before merging.
 - `0040_track_planned_payment_posting` — `credit_card_payment_overrides.track_posting` (see §17 posting-aware reservations).
 - `0041_user_session_version` — `users.session_version`: revocable sessions. The JWT carries the version it was issued at; `lib/session-user.ts` rejects mismatches, deleted users and stale roles.
 - `0042_one_time_income` — `paychecks.is_one_time`: one-time income (bonuses) lives on `paychecks` so it projects and deposit-reconciles like a paycheck, but `isScheduledPaycheck` (lib/paycheck-schedule.ts) keeps it out of every schedule read/write — otherwise a schedule edit moves a bonus onto a payday and restates its amount. Set at creation only. Backup v13.
+- `0043_shared_deposit_income` — drops `paychecks_settled_by_draft_unique_idx` (from 0029). One posted deposit may settle a scheduled paycheck and one-time income together; each row stores its own share. No row rewrite. Shares are capped in `settlePaycheckSharesWithDraft`.
 
 ---
 
@@ -961,8 +962,9 @@ one-time expense, which the matcher could only ever credit to one of them.
 No heuristic can recover a split; only the sender knows how it divides.
 
 `draft_allocations` (migration 0037) records the answer: `(draft, target_kind,
-target_id, target_date, amount_cents)`, where a target is a bill occurrence or
-a one-time expense. Rules that matter:
+target_id, target_date, amount_cents)`, where a target is a bill occurrence, a
+one-time expense, a planned card payment, or — on a deposit — a paycheck or
+one-time income. Rules that matter:
 
 - **Allocations are EXHAUSTIVE for their draft.** A split draft leaves
   heuristic matching entirely (`excludeDraftIds`), and the occurrences it
@@ -987,17 +989,27 @@ a one-time expense. Rules that matter:
 ### Paycheck reconciliation (deposits → paychecks)
 The income-side analog. `lib/paycheck-reconciliation.ts` (pure) matches
 approved deposit drafts (negative `amountCents`) on starting-balance accounts
-to scheduled paychecks: ±5 days of `payDate`, deposit within 70%–200% of the
-planned amount, best-amount-fit one-to-one assignment (two same-day earners
-split by amount; the paycheck note is a priority-only text signal). Unlike
-bills this PERSISTS: `reconcilePaycheckDeposits` in `lib/plaid-sync.ts` runs
-once per sync and calls `settlePaycheckWithDraft` (repos), which sets
-`actualReceived` + `actualAmountCents` + `settledByDraftId`. It fires ONLY on
-the not-received→received edge (manual reconciliation wins; re-syncs are
-no-ops) and consumes each draft at most once — enforced by the partial unique
-index from migration 0029. Un-marking received on `/paychecks` (or archiving
-the row) clears `settledByDraftId` so the deposit can re-settle — same
-release contract as the statements PATCH route. Auto-reconciled rows show an
+to expected income: ±5 days of `payDate` (an early posting inside that window
+settles the expected paycheck), deposit within 70%–200% of the planned
+amount, best-amount-fit assignment (two same-day earners split by amount; the
+paycheck note is a priority-only text signal). Two scheduled paychecks never
+share a deposit. A scheduled paycheck plus one or more one-time incomes DO,
+when the deposit is materially closer to their sum than to any single row —
+the bonus that arrived in the same credit. Each row records its own share
+(the bonus keeps its planned amount; the paycheck absorbs the difference),
+and the shares cannot sum past the deposit. Unlike bills this PERSISTS:
+`reconcilePaycheckDeposits` in `lib/plaid-sync.ts` runs once per sync and
+calls `settlePaycheckSharesWithDraft` (repos), which sets `actualReceived` +
+`actualAmountCents` + `settledByDraftId` for every share in one transaction.
+It fires ONLY on the not-received→received edge (manual reconciliation wins;
+re-syncs are no-ops). Migration 0043 dropped 0029's one-draft-one-paycheck
+unique index so those shares can point at the same draft. When the sum isn't
+clear enough to guess, Transactions → Split on the deposit
+(`draft_allocations.target_kind = paycheck`) is the user's answer; that
+split is exhaustive and a portion below 70% of plan does not mark the income
+received. Un-marking received on `/paychecks` (or archiving the row) clears
+`settledByDraftId` so the deposit can re-settle — un-mark every income that
+deposit settled, or the draft stays consumed. Auto-reconciled rows show an
 AUTO pill next to RECEIVED.
 
 ---

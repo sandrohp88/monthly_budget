@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   draftMatchesPaycheckNote,
+  matchAllocatedIncome,
   matchPaycheckDeposits,
   PAYCHECK_MATCH_WINDOW_DAYS,
 } from "./paycheck-reconciliation";
@@ -288,6 +289,20 @@ describe("matchPaycheckDeposits — a note must not outrank a better amount", ()
     expect(m).toEqual([expect.objectContaining({ paycheckId: "a" })]);
   });
 
+  it("a deposit two days early still settles the expected paycheck", () => {
+    // Payroll often posts before the scheduled payday. Two days is inside the
+    // ±5 day window, so the expected paycheck is settled from that deposit.
+    const early = deposit({ date: "2026-07-08" });
+    expect(matchPaycheckDeposits([paycheck], [early])).toEqual([
+      expect.objectContaining({
+        paycheckId: "pay-1",
+        draftId: "txn-1",
+        depositDate: "2026-07-08",
+        depositAmountCents: 1950_00,
+      }),
+    ]);
+  });
+
   it("a cents-level difference is still a tie the note may break", () => {
     // $2.00 apart — inside PAYCHECK_BETTER_FIT_CENTS, so this stays the note's
     // call rather than being decided by small payroll drift.
@@ -296,5 +311,190 @@ describe("matchPaycheckDeposits — a note must not outrank a better amount", ()
     const d = deposit({ id: "acme", description: "ACME CORP DIRECT DEP", amountCents: -1998_00 });
     const m = matchPaycheckDeposits([a, b], [d], { schedule: [a, b] });
     expect(m).toEqual([expect.objectContaining({ paycheckId: "a" })]);
+  });
+});
+
+describe("matchPaycheckDeposits — one deposit covers a paycheck and a bonus", () => {
+  // The paycheck and a one-time bonus were expected the same day and arrived
+  // together, two days early, as a single deposit. A one-to-one assignment
+  // keeps the worse-fitting income (here, the paycheck — the bonus is closer
+  // and inside its own amount band) projected as still coming.
+  const payDate = "2026-07-10";
+  const paycheck = {
+    id: "pay",
+    payDate,
+    amountCents: 1500_00,
+    note: null,
+    isOneTime: false,
+  };
+  const bonus = {
+    id: "bonus",
+    payDate,
+    amountCents: 2000_00,
+    note: "Q3 bonus",
+    isOneTime: true,
+  };
+  const combined = deposit({
+    id: "dep-combined",
+    date: "2026-07-08", // two days early
+    description: "ACME CORP DIRECT DEP",
+    amountCents: -3500_00,
+  });
+
+  it("settles both incomes from the one early deposit, each with its own share", () => {
+    const matches = matchPaycheckDeposits([paycheck, bonus], [combined], {
+      schedule: [paycheck, bonus],
+    });
+    expect(matches).toEqual([
+      {
+        paycheckId: "bonus",
+        draftId: "dep-combined",
+        depositDate: "2026-07-08",
+        depositAmountCents: 2000_00,
+      },
+      {
+        paycheckId: "pay",
+        draftId: "dep-combined",
+        depositDate: "2026-07-08",
+        depositAmountCents: 1500_00,
+      },
+    ]);
+  });
+
+  it("gives payroll variance to the paycheck and the planned amount to the bonus", () => {
+    // $3,400 posted: $200 short of the $3,500 plan. The bonus is a known
+    // figure; the paycheck absorbs the difference and still clears its band.
+    const light = deposit({
+      id: "dep-light",
+      date: "2026-07-08",
+      amountCents: -3400_00,
+    });
+    const matches = matchPaycheckDeposits([paycheck, bonus], [light], {
+      schedule: [paycheck, bonus],
+    });
+    expect(matches).toEqual([
+      expect.objectContaining({ paycheckId: "bonus", depositAmountCents: 2000_00 }),
+      expect.objectContaining({ paycheckId: "pay", depositAmountCents: 1400_00 }),
+    ]);
+  });
+
+  it("does not treat a normal paycheck deposit as also paying a nearby bonus", () => {
+    const onlyPay = deposit({
+      id: "dep-pay",
+      date: "2026-07-08",
+      amountCents: -1500_00,
+    });
+    expect(
+      matchPaycheckDeposits([paycheck, bonus], [onlyPay], { schedule: [paycheck, bonus] }),
+    ).toEqual([
+      expect.objectContaining({
+        paycheckId: "pay",
+        draftId: "dep-pay",
+        depositAmountCents: 1500_00,
+      }),
+    ]);
+  });
+
+  it("does not combine two scheduled paychecks — two earners still take one deposit each", () => {
+    const hers = { id: "hers", payDate, amountCents: 2000_00, note: null, isOneTime: false };
+    const his = { id: "his", payDate, amountCents: 1500_00, note: null, isOneTime: false };
+    const matches = matchPaycheckDeposits(
+      [hers, his],
+      [deposit({ id: "both", date: "2026-07-08", amountCents: -3500_00 })],
+      { schedule: [hers, his] },
+    );
+    expect(matches).toHaveLength(1);
+  });
+
+  it("leaves a deposit that is plainly the other earner's paycheck unmatched", () => {
+    const hers = { id: "hers", payDate: "2026-07-10", amountCents: 3974_00, note: null };
+    const his = { id: "his", payDate: "2026-07-10", amountCents: 2000_00, note: null };
+    const hisBonus = {
+      id: "his-bonus",
+      payDate: "2026-07-10",
+      amountCents: 1974_00,
+      note: "Bonus",
+      isOneTime: true,
+    };
+    const herDeposit = deposit({
+      id: "hers-dep",
+      date: "2026-07-08",
+      amountCents: -3974_00,
+    });
+    // Her row is already reconciled, so only his paycheck and bonus are waiting.
+    // $3,974 is her paycheck, not his $2,000 plus a $1,974 bonus.
+    expect(
+      matchPaycheckDeposits([his, hisBonus], [herDeposit], {
+        schedule: [hers, his, hisBonus],
+      }),
+    ).toEqual([]);
+  });
+
+  it("combines a deposit too large for either income on its own", () => {
+    // $6,500 is past the paycheck's $4,000 ceiling and the bonus's $6,000
+    // ceiling, so a one-to-one pass finds nothing. The sum still explains it:
+    // the bonus keeps $3,000 and the paycheck takes the $3,500 remainder.
+    const bigPay = { ...paycheck, amountCents: 2000_00 };
+    const bigBonus = { ...bonus, amountCents: 3000_00 };
+    const big = deposit({ id: "dep-big", date: "2026-07-08", amountCents: -6500_00 });
+    expect(matchPaycheckDeposits([bigPay, bigBonus], [big], { schedule: [bigPay, bigBonus] })).toEqual([
+      expect.objectContaining({ paycheckId: "bonus", depositAmountCents: 3000_00 }),
+      expect.objectContaining({ paycheckId: "pay", depositAmountCents: 3500_00 }),
+    ]);
+  });
+
+  it("does not combine incomes outside the early/late window", () => {
+    const tooEarly = deposit({ id: "far", date: "2026-07-04", amountCents: -3500_00 });
+    expect(
+      matchPaycheckDeposits([paycheck, bonus], [tooEarly], { schedule: [paycheck, bonus] }),
+    ).toEqual([]);
+  });
+});
+
+describe("matchAllocatedIncome", () => {
+  const paycheck = {
+    id: "pay",
+    payDate: "2026-07-10",
+    amountCents: 1500_00,
+    note: null,
+    isOneTime: false,
+  };
+  const bonus = {
+    id: "bonus",
+    payDate: "2026-07-10",
+    amountCents: 2000_00,
+    note: "Q3 bonus",
+    isOneTime: true,
+  };
+
+  it("settles each income for the portion the user assigned", () => {
+    const matches = matchAllocatedIncome([paycheck, bonus], [
+      {
+        ...deposit({ id: "dep", date: "2026-07-08", amountCents: -3500_00 }),
+        allocations: [
+          { targetKind: "paycheck", targetId: "pay", targetDate: "2026-07-10", amountCents: 1500_00 },
+          { targetKind: "paycheck", targetId: "bonus", targetDate: "2026-07-10", amountCents: 2000_00 },
+        ],
+      },
+    ]);
+    expect(matches).toEqual([
+      expect.objectContaining({ paycheckId: "bonus", depositAmountCents: 2000_00, depositDate: "2026-07-08" }),
+      expect.objectContaining({ paycheckId: "pay", depositAmountCents: 1500_00 }),
+    ]);
+  });
+
+  it("does not mark an income received from a token portion", () => {
+    const matches = matchAllocatedIncome([paycheck, bonus], [
+      {
+        ...deposit({ id: "dep", date: "2026-07-08", amountCents: -3500_00 }),
+        allocations: [
+          { targetKind: "paycheck", targetId: "pay", targetDate: "2026-07-10", amountCents: 1_00 },
+          { targetKind: "paycheck", targetId: "bonus", targetDate: "2026-07-10", amountCents: 2000_00 },
+        ],
+      },
+    ]);
+    expect(matches).toEqual([
+      expect.objectContaining({ paycheckId: "bonus", depositAmountCents: 2000_00 }),
+    ]);
   });
 });

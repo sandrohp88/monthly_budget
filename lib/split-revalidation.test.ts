@@ -12,7 +12,9 @@ import { draftAllocations, paychecks, users } from "./db/schema";
 import {
   createPlaidItem,
   findInvalidSplitDraftIds,
-  reopenPaycheckSettledByDraft,
+  applyIncomeAllocations,
+  reopenPaychecksSettledByDraft,
+  replaceDraftAllocations,
   upsertPlaidAccount,
   upsertPlaidDraft,
 } from "./repos";
@@ -30,6 +32,25 @@ describe("splitIsValid", () => {
     [{ amountCents: 100, allocations: [{ amountCents: 60 }, { amountCents: 41 }] }, false],
     [{ amountCents: 0, allocations: [{ amountCents: 1 }] }, false],
     [{ amountCents: -100, allocations: [{ amountCents: 50 }] }, false],
+    [
+      {
+        amountCents: -2500_00,
+        allocations: [
+          { amountCents: 1500_00, targetKind: "paycheck" },
+          { amountCents: 1000_00, targetKind: "paycheck" },
+        ],
+      },
+      true,
+    ],
+    [
+      {
+        amountCents: -1000_00,
+        allocations: [{ amountCents: 1500_00, targetKind: "paycheck" }],
+      },
+      false,
+    ],
+    [{ amountCents: 1000_00, allocations: [{ amountCents: 1000_00, targetKind: "paycheck" }] }, false],
+    [{ amountCents: -1000_00, allocations: [{ amountCents: 1000_00, targetKind: "bill" }] }, false],
     [{ amountCents: 100, allocations: [{ amountCents: 0 }] }, false],
   ])("%j → %s", (draft, valid) => {
     expect(splitIsValid(draft)).toBe(valid);
@@ -115,18 +136,58 @@ describe("repo support", () => {
     expect((await findInvalidSplitDraftIds("u", [])).size).toBe(0);
   });
 
-  it("reopens only the paycheck a removed deposit settled", async () => {
+  it("reopens every income a removed deposit settled", async () => {
     getDb().insert(paychecks).values([
-      { id: "p1", userId: "u", payDate: "2026-09-19", amountCents: 1, actualReceived: true,
-        actualAmountCents: 1, actualDate: "2026-09-18", settledByDraftId: "deposit-1" },
+      { id: "p1", userId: "u", payDate: "2026-09-19", amountCents: 1500_00, actualReceived: true,
+        actualAmountCents: 1500_00, actualDate: "2026-09-18", settledByDraftId: "deposit-1" },
+      { id: "bonus", userId: "u", payDate: "2026-09-19", amountCents: 500_00, actualReceived: true,
+        actualAmountCents: 500_00, actualDate: "2026-09-18", settledByDraftId: "deposit-1", isOneTime: true },
       { id: "p2", userId: "u", payDate: "2026-09-05", amountCents: 1, actualReceived: true },
     ]).run();
-    expect((await reopenPaycheckSettledByDraft("u", "deposit-1"))?.id).toBe("p1");
+    expect((await reopenPaychecksSettledByDraft("u", "deposit-1")).map((row) => row.id).sort()).toEqual([
+      "bonus",
+      "p1",
+    ]);
     const rows = getDb().select().from(paychecks).all();
     expect(rows.find((r) => r.id === "p1")).toMatchObject({
       actualReceived: false, actualAmountCents: null, actualDate: null, settledByDraftId: null,
     });
+    expect(rows.find((r) => r.id === "bonus")).toMatchObject({
+      actualReceived: false, settledByDraftId: null,
+    });
     expect(rows.find((r) => r.id === "p2")?.actualReceived).toBe(true);
-    expect(await reopenPaycheckSettledByDraft("u", "deposit-1")).toBeUndefined();
+    expect(await reopenPaychecksSettledByDraft("u", "deposit-1")).toEqual([]);
+  });
+
+  it("an explicit split settles the paycheck and the bonus, and a token portion does not", async () => {
+    await upsertPlaidDraft({
+      id: "dep-bonus", userId: "u", accountId: "checking", date: "2026-09-18",
+      description: "PAYROLL", originalDescription: "PAYROLL", amountCents: -3500_00,
+      plaidCategory: null, merchantName: null, pending: false, status: "approved",
+    });
+    getDb().insert(paychecks).values([
+      { id: "pay", userId: "u", payDate: "2026-09-20", amountCents: 1500_00 },
+      { id: "bonus", userId: "u", payDate: "2026-09-20", amountCents: 2000_00, note: "Q3 bonus", isOneTime: true },
+    ]).run();
+
+    await replaceDraftAllocations("u", "dep-bonus", [
+      { targetKind: "paycheck", targetId: "pay", targetDate: "2026-09-20", amountCents: 1_00 },
+      { targetKind: "paycheck", targetId: "bonus", targetDate: "2026-09-20", amountCents: 1_00 },
+    ]);
+    expect(await applyIncomeAllocations("u", "dep-bonus")).toBe(0);
+    expect(getDb().select().from(paychecks).all().every((row) => !row.actualReceived)).toBe(true);
+
+    await replaceDraftAllocations("u", "dep-bonus", [
+      { targetKind: "paycheck", targetId: "pay", targetDate: "2026-09-20", amountCents: 1500_00 },
+      { targetKind: "paycheck", targetId: "bonus", targetDate: "2026-09-20", amountCents: 2000_00 },
+    ]);
+    expect(await applyIncomeAllocations("u", "dep-bonus")).toBe(2);
+    const rows = getDb().select().from(paychecks).all();
+    expect(rows.find((row) => row.id === "pay")).toMatchObject({
+      actualReceived: true, actualAmountCents: 1500_00, settledByDraftId: "dep-bonus", actualDate: "2026-09-18",
+    });
+    expect(rows.find((row) => row.id === "bonus")).toMatchObject({
+      actualReceived: true, actualAmountCents: 2000_00, settledByDraftId: "dep-bonus",
+    });
   });
 });

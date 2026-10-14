@@ -302,6 +302,13 @@
       "when": 1784001600012,
       "tag": "0042_one_time_income",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1784001600013,
+      "tag": "0043_shared_deposit_income",
+      "breakpoints": true
     }
   ]
 }

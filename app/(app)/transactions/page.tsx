@@ -2,6 +2,7 @@ import { requirePageUser } from "@/lib/auth";
 import { buildProjection } from "@/lib/projection-server";
 import {
   listBills,
+  listPaychecks,
   listCategories,
   listCreditCards,
   listCreditCardPaymentOverridesForUser,
@@ -21,7 +22,7 @@ export const dynamic = "force-dynamic";
 export default async function TransactionsPage() {
   const { id: userId } = await requirePageUser();
 
-  const [drafts, accounts, cards, categories, bills, extras, projection, cardPlans, invalidSplits, orphanedSplits] =
+  const [drafts, accounts, cards, categories, bills, extras, paychecks, projection, cardPlans, invalidSplits, orphanedSplits] =
     await Promise.all([
       listPlaidDrafts(userId, "approved"),
       listPlaidAccounts(userId),
@@ -29,6 +30,7 @@ export default async function TransactionsPage() {
       listCategories(userId),
       listBills(userId, false),
       listExtras(userId),
+      listPaychecks(userId),
       // Cached per request (the layout already builds it) — reused here for the
       // bill-reconciliation matches so the rows can show "this paid bill X".
       buildProjection(userId),
@@ -106,6 +108,13 @@ export default async function TransactionsPage() {
         description: e.description,
         date: e.date,
         amountCents: e.amountCents,
+      }))}
+      incomes={paychecks.map((p) => ({
+        id: p.id,
+        payDate: p.payDate,
+        amountCents: p.amountCents,
+        note: p.note,
+        isOneTime: p.isOneTime,
       }))}
     />
   );

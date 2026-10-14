@@ -23,12 +23,18 @@
  *   - text: a paycheck's note matching the draft's description/merchant is an
  *     optional extra signal — it only PRIORITIZES a pair during assignment,
  *     it never gates or widens eligibility.
- *   - assignment: single phase, best-amount-fit, one draft per paycheck and
- *     one paycheck per draft (the bill matcher's phase 1). There is no
- *     leftover-folding phase 2 — a paycheck never posts as several partial
- *     deposits the way a utility posts split ACH pulls.
+ *   - assignment: best-amount-fit. Two scheduled paychecks never share a
+ *     deposit (two earners). A scheduled paycheck plus one or more one-time
+ *     incomes DO share one deposit when the posted amount is the sum — a
+ *     bonus that arrived in the same credit as the paycheck. Each row then
+ *     records its own share, not the whole deposit. There is no
+ *     leftover-folding phase — a paycheck never posts as several partial
+ *     deposits the way a utility posts split ACH pulls. An explicit split
+ *     (draft_allocations of kind `paycheck`) is the user's answer when the
+ *     sum isn't clear enough to guess.
  */
 
+import { splitIsValid } from "./bill-reconciliation";
 import type { PaycheckRow } from "./db/schema";
 import { daysBetween } from "./dates";
 
@@ -69,6 +75,12 @@ export type ReconcilableDepositDraft = {
 export type ReconcilablePaycheck = Pick<PaycheckRow, "id" | "payDate" | "amountCents"> & {
   /** Optional text hint (the paycheck's note) — priority signal only. */
   note?: string | null;
+  /**
+   * One-time income (bonus) rather than a scheduled paycheck. Omitted or
+   * false means scheduled. A combined deposit may settle one scheduled
+   * paycheck together with one-time rows; two scheduled paychecks may not.
+   */
+  isOneTime?: boolean;
 };
 
 export type PaycheckDepositMatch = {
@@ -76,7 +88,11 @@ export type PaycheckDepositMatch = {
   draftId: string;
   /** The deposit's posting date — becomes the "received" date semantically. */
   depositDate: string;
-  /** Positive magnitude of the deposit — becomes actualAmountCents. */
+  /**
+   * Positive cents recorded as this income's actual amount. A one-to-one
+   * match records the whole deposit. A combined paycheck-plus-bonus deposit
+   * records each row's share, and the shares sum to the deposit.
+   */
   depositAmountCents: number;
 };
 
@@ -98,6 +114,110 @@ export function draftMatchesPaycheckNote(
   if (hint.length < 3) return false; // too short to trust substring matching
   const haystacks = [draft.description, draft.merchantName ?? ""].map(normalize);
   return haystacks.some((h) => h.length >= 3 && (h.includes(hint) || hint.includes(h)));
+}
+
+/** Cap subset search. A 5-day window never has this many one-time incomes. */
+const MAX_ONE_TIMES_PER_DEPOSIT = 8;
+
+function nonEmptySubsets<T>(items: readonly T[]): T[][] {
+  const out: T[][] = [];
+  const n = items.length;
+  for (let mask = 1; mask < 1 << n; mask++) {
+    const subset: T[] = [];
+    for (let i = 0; i < n; i++) if (mask & (1 << i)) subset.push(items[i]!);
+    out.push(subset);
+  }
+  return out;
+}
+
+type IncomeCombo = {
+  draft: ReconcilableDepositDraft;
+  paycheck: ReconcilablePaycheck;
+  oneTimes: ReconcilablePaycheck[];
+  gapSum: number;
+  paycheckShare: number;
+};
+
+/**
+ * Deposits that are a scheduled paycheck plus one or more one-time incomes
+ * posted together. The one-time rows keep their planned amounts (a bonus is
+ * a known figure) and the paycheck absorbs the difference, which still has
+ * to land inside the paycheck's own amount band. The sum has to explain the
+ * deposit materially better than any single member, and better than any
+ * other scheduled paycheck in range — including one already reconciled —
+ * so another earner's deposit is not retold as "paycheck plus bonus".
+ */
+function combinedIncomeDeposits(
+  expected: readonly ReconcilablePaycheck[],
+  deposits: readonly ReconcilableDepositDraft[],
+  schedule: readonly ReconcilablePaycheck[],
+  windowDays: number,
+): IncomeCombo[] {
+  const inWindow = (payDate: string, draftDate: string) =>
+    Math.abs(daysBetween(payDate, draftDate)) <= windowDays;
+  const combos: IncomeCombo[] = [];
+
+  for (const draft of deposits) {
+    const depositCents = -draft.amountCents;
+    const near = expected.filter((p) => p.amountCents > 0 && inWindow(p.payDate, draft.date));
+    const scheduled = near.filter((p) => !p.isOneTime);
+    let oneTimes = near.filter((p) => p.isOneTime === true);
+    if (scheduled.length === 0 || oneTimes.length === 0) continue;
+    if (oneTimes.length > MAX_ONE_TIMES_PER_DEPOSIT) {
+      oneTimes = [...oneTimes]
+        .sort(
+          (a, b) =>
+            Math.abs(daysBetween(a.payDate, draft.date)) -
+              Math.abs(daysBetween(b.payDate, draft.date)) || a.id.localeCompare(b.id),
+        )
+        .slice(0, MAX_ONE_TIMES_PER_DEPOSIT);
+    }
+
+    for (const paycheck of scheduled) {
+      for (const subset of nonEmptySubsets(oneTimes)) {
+        if (subset.some((o) => Math.abs(daysBetween(o.payDate, paycheck.payDate)) > windowDays)) {
+          continue;
+        }
+        const oneTimeSum = subset.reduce((sum, o) => sum + o.amountCents, 0);
+        const plannedSum = paycheck.amountCents + oneTimeSum;
+        const gapSum = Math.abs(depositCents - plannedSum);
+        const gapPaycheck = Math.abs(depositCents - paycheck.amountCents);
+        if (gapPaycheck - gapSum <= PAYCHECK_BETTER_FIT_CENTS) continue;
+        if (
+          subset.some(
+            (o) => Math.abs(depositCents - o.amountCents) - gapSum <= PAYCHECK_BETTER_FIT_CENTS,
+          )
+        ) {
+          continue;
+        }
+        if (depositCents < Math.round(plannedSum * PAYCHECK_MATCH_MIN_FRACTION)) continue;
+        if (depositCents > Math.round(plannedSum * PAYCHECK_MATCH_MAX_FRACTION)) continue;
+        const paycheckShare = depositCents - oneTimeSum;
+        if (paycheckShare < Math.round(paycheck.amountCents * PAYCHECK_MATCH_MIN_FRACTION)) continue;
+        if (paycheckShare > Math.round(paycheck.amountCents * PAYCHECK_MATCH_MAX_FRACTION)) continue;
+        const explainedByAnotherPaycheck = schedule.some((other) => {
+          if (other.id === paycheck.id || other.isOneTime || other.amountCents <= 0) return false;
+          if (!inWindow(other.payDate, draft.date)) return false;
+          return Math.abs(depositCents - other.amountCents) <= gapSum + PAYCHECK_BETTER_FIT_CENTS;
+        });
+        if (explainedByAnotherPaycheck) continue;
+        combos.push({ draft, paycheck, oneTimes: subset, gapSum, paycheckShare });
+      }
+    }
+  }
+
+  combos.sort(
+    (a, b) =>
+      a.gapSum - b.gapSum ||
+      a.oneTimes.length - b.oneTimes.length ||
+      a.paycheck.id.localeCompare(b.paycheck.id) ||
+      a.oneTimes
+        .map((o) => o.id)
+        .join()
+        .localeCompare(b.oneTimes.map((o) => o.id).join()) ||
+      a.draft.id.localeCompare(b.draft.id),
+  );
+  return combos;
 }
 
 /**
@@ -197,12 +317,13 @@ export function matchPaycheckDeposits(
       });
     }
   }
-  if (pairs.length === 0) return [];
-
-  // Best amount fit, ONE draft per paycheck and ONE paycheck per draft. Two
-  // same-day paychecks (two earners) each take the deposit closest to their
-  // planned amount instead of both being handed the first deposit seen.
-  // Note-matched pairs go first so an employer hint can break a near-tie.
+  // Combined paycheck + bonus deposits are assigned first, each income
+  // taking its share of the one credit — including when the deposit is too
+  // large for either income's own band, so no one-to-one pair exists. Two
+  // scheduled paychecks still never share a draft. Then best amount fit,
+  // one remaining draft per paycheck and one paycheck per draft.
+  // Note-matched pairs go first so an employer hint can break a near-tie
+  // among one-to-one pairs.
   const byFit = [...pairs].sort(
     (a, b) =>
       Number(b.noteMatch) - Number(a.noteMatch) ||
@@ -214,6 +335,27 @@ export function matchPaycheckDeposits(
   const assignedDrafts = new Set<string>();
   const assignedPaychecks = new Set<string>();
   const out: PaycheckDepositMatch[] = [];
+  for (const combo of combinedIncomeDeposits(expected, deposits, schedule, windowDays)) {
+    if (assignedDrafts.has(combo.draft.id) || assignedPaychecks.has(combo.paycheck.id)) continue;
+    if (combo.oneTimes.some((oneTime) => assignedPaychecks.has(oneTime.id))) continue;
+    assignedDrafts.add(combo.draft.id);
+    assignedPaychecks.add(combo.paycheck.id);
+    out.push({
+      paycheckId: combo.paycheck.id,
+      draftId: combo.draft.id,
+      depositDate: combo.draft.date,
+      depositAmountCents: combo.paycheckShare,
+    });
+    for (const oneTime of combo.oneTimes) {
+      assignedPaychecks.add(oneTime.id);
+      out.push({
+        paycheckId: oneTime.id,
+        draftId: combo.draft.id,
+        depositDate: combo.draft.date,
+        depositAmountCents: oneTime.amountCents,
+      });
+    }
+  }
   for (const p of byFit) {
     if (assignedDrafts.has(p.draft.id) || assignedPaychecks.has(p.paycheck.id)) continue;
     assignedDrafts.add(p.draft.id);
@@ -224,6 +366,56 @@ export function matchPaycheckDeposits(
       depositDate: p.draft.date,
       depositAmountCents: -p.draft.amountCents,
     });
+  }
+  out.sort((a, b) => a.paycheckId.localeCompare(b.paycheckId));
+  return out;
+}
+
+/**
+ * Settle incomes the user explicitly split a deposit across.
+ *
+ * Allocations are exhaustive: the caller must keep the draft out of
+ * {@link matchPaycheckDeposits}. The settle floor still applies per income —
+ * naming the paycheck decides where the money went, and a token portion does
+ * not mark a large paycheck received. There is no amount ceiling: the user
+ * already said this portion is that income.
+ */
+export function matchAllocatedIncome(
+  paychecks: ReadonlyArray<ReconcilablePaycheck>,
+  drafts: ReadonlyArray<
+    ReconcilableDepositDraft & {
+      allocations?: ReadonlyArray<{
+        targetKind: string;
+        targetId: string;
+        targetDate: string;
+        amountCents: number;
+      }>;
+    }
+  >,
+): PaycheckDepositMatch[] {
+  const byId = new Map(paychecks.map((p) => [p.id, p]));
+  const used = new Set<string>();
+  const out: PaycheckDepositMatch[] = [];
+  for (const draft of drafts) {
+    const allocations = draft.allocations ?? [];
+    if (allocations.length === 0) continue;
+    if (!splitIsValid({ amountCents: draft.amountCents, allocations })) continue;
+    if (draft.amountCents >= 0) continue;
+    for (const allocation of allocations) {
+      if (allocation.targetKind !== "paycheck" || allocation.amountCents <= 0) continue;
+      const paycheck = byId.get(allocation.targetId);
+      if (!paycheck || paycheck.amountCents <= 0 || paycheck.payDate !== allocation.targetDate) continue;
+      if (used.has(paycheck.id)) continue;
+      const floor = Math.round(paycheck.amountCents * PAYCHECK_MATCH_MIN_FRACTION);
+      if (allocation.amountCents < floor) continue;
+      used.add(paycheck.id);
+      out.push({
+        paycheckId: paycheck.id,
+        draftId: draft.id,
+        depositDate: draft.date,
+        depositAmountCents: allocation.amountCents,
+      });
+    }
   }
   out.sort((a, b) => a.paycheckId.localeCompare(b.paycheckId));
   return out;
