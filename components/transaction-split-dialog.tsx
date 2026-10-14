@@ -19,6 +19,7 @@ import { DateLabel } from "@/components/date-label";
 import { cn } from "@/lib/cn";
 import { daysBetween } from "@/lib/dates";
 import { MATCH_WINDOW_DAYS, enumerateBillOccurrences } from "@/lib/bill-reconciliation";
+import { PAYCHECK_MATCH_WINDOW_DAYS } from "@/lib/paycheck-reconciliation";
 
 export type SplitBillOption = {
   id: string;
@@ -35,8 +36,16 @@ export type SplitExtraOption = {
   amountCents: number;
 };
 
+export type SplitIncomeOption = {
+  id: string;
+  payDate: string;
+  amountCents: number;
+  note: string | null;
+  isOneTime: boolean;
+};
+
 export type Allocation = {
-  targetKind: "bill" | "extra" | "card_payment";
+  targetKind: "bill" | "extra" | "card_payment" | "paycheck";
   targetId: string;
   targetDate: string;
   amountCents: number;
@@ -45,7 +54,7 @@ export type Allocation = {
 /** One obligation the transaction could have paid: a dated, planned amount. */
 type Candidate = {
   key: string;
-  targetKind: "bill" | "extra" | "card_payment";
+  targetKind: "bill" | "extra" | "card_payment" | "paycheck";
   targetId: string;
   targetDate: string;
   label: string;
@@ -115,6 +124,31 @@ function candidatesFor(
   return out;
 }
 
+function incomeCandidatesFor(
+  txnDate: string,
+  incomes: ReadonlyArray<SplitIncomeOption>,
+): Candidate[] {
+  const from = addDays(txnDate, -PAYCHECK_MATCH_WINDOW_DAYS);
+  const to = addDays(txnDate, PAYCHECK_MATCH_WINDOW_DAYS);
+  const out: Candidate[] = [];
+  for (const income of incomes) {
+    if (income.payDate < from || income.payDate > to || income.amountCents <= 0) continue;
+    const label =
+      income.note?.trim() || (income.isOneTime ? "One-time income" : "Paycheck");
+    out.push({
+      key: `paycheck:${income.id}:${income.payDate}`,
+      targetKind: "paycheck",
+      targetId: income.id,
+      targetDate: income.payDate,
+      label,
+      plannedCents: income.amountCents,
+      distanceDays: Math.abs(daysBetween(income.payDate, txnDate)),
+    });
+  }
+  out.sort((a, b) => a.distanceDays - b.distanceDays || a.label.localeCompare(b.label));
+  return out;
+}
+
 /**
  * Divide one transaction across the obligations it actually paid.
  *
@@ -132,24 +166,33 @@ export function TransactionSplitDialog({
   bills,
   extras,
   cardPayments = [],
+  incomes = [],
+  direction = "debit",
   onClose,
 }: {
   transactionId: string;
   transactionDate: string;
   transactionLabel: string;
-  /** Positive cents — the debit being divided. */
+  /** Positive cents — the magnitude being divided. */
   transactionAmountCents: number;
   initialAllocations: ReadonlyArray<Allocation>;
   bills: ReadonlyArray<SplitBillOption>;
   extras: ReadonlyArray<SplitExtraOption>;
   cardPayments?: ReadonlyArray<SplitExtraOption>;
+  incomes?: ReadonlyArray<SplitIncomeOption>;
+  /** A credit splits across expected income; a debit across expenses. */
+  direction?: "credit" | "debit";
   onClose: () => void;
 }) {
   const router = useRouter();
   const [saving, setSaving] = React.useState(false);
+  const incomeSplit = direction === "credit";
   const candidates = React.useMemo(
-    () => candidatesFor(transactionDate, bills, extras, cardPayments),
-    [transactionDate, bills, extras, cardPayments],
+    () =>
+      incomeSplit
+        ? incomeCandidatesFor(transactionDate, incomes)
+        : candidatesFor(transactionDate, bills, extras, cardPayments),
+    [incomeSplit, transactionDate, incomes, bills, extras, cardPayments],
   );
 
   // Selected portions, keyed by candidate key. Absent = not part of the split.
@@ -216,7 +259,7 @@ export function TransactionSplitDialog({
       <DialogContent className="max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <CardSubTag>Split transaction</CardSubTag>
-          <DialogTitle>What did this pay?</DialogTitle>
+          <DialogTitle>{incomeSplit ? "What income arrived?" : "What did this pay?"}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -230,8 +273,9 @@ export function TransactionSplitDialog({
 
           {candidates.length === 0 ? (
             <p className="text-[13px] text-[var(--text-2)]">
-              No bills or one-time expenses fall within {MATCH_WINDOW_DAYS} days of this
-              transaction, so there is nothing to split it across.
+              {incomeSplit
+                ? `No expected paycheck or one-time income falls within ${PAYCHECK_MATCH_WINDOW_DAYS} days of this deposit, so there is nothing to split it across.`
+                : `No bills or one-time expenses fall within ${MATCH_WINDOW_DAYS} days of this transaction, so there is nothing to split it across.`}
             </p>
           ) : (
             <div className="space-y-2">
@@ -263,8 +307,11 @@ export function TransactionSplitDialog({
                               ? "Bill"
                               : c.targetKind === "card_payment"
                                 ? "Card payment"
-                                : "One-time"}{" "}
-                            · due <DateLabel iso={c.targetDate} format="short" /> · plan{" "}
+                                : c.targetKind === "paycheck"
+                                  ? "Income"
+                                  : "One-time"}{" "}
+                            · {c.targetKind === "paycheck" ? "expected" : "due"}{" "}
+                            <DateLabel iso={c.targetDate} format="short" /> · plan{" "}
                             <Money cents={c.plannedCents} />
                           </div>
                         </button>
@@ -306,9 +353,9 @@ export function TransactionSplitDialog({
           </div>
 
           <p className="text-2xs leading-relaxed text-[var(--text-3)]">
-            Splitting takes this transaction out of automatic matching — the portions below are what
-            counts. Leaving some unattributed is fine; that part simply doesn&apos;t settle
-            anything. Any bill you name here also learns this wording for future months.
+            {incomeSplit
+              ? "Splitting takes this deposit out of automatic matching — the portions below are what counts. A portion has to cover most of that income before it is marked received. Leaving some unattributed is fine."
+              : "Splitting takes this transaction out of automatic matching — the portions below are what counts. Leaving some unattributed is fine; that part simply doesn't settle anything. Any bill you name here also learns this wording for future months."}
           </p>
         </div>
 

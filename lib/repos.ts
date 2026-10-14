@@ -72,6 +72,7 @@ import {
 } from "./db/schema";
 import { newId } from "./ids";
 import { enumerateBillOccurrences, splitIsValid } from "./bill-reconciliation";
+import { matchAllocatedIncome } from "./paycheck-reconciliation";
 import { hashPassword } from "./auth";
 import { calculateMonthlyHistoryAverage } from "./variable-bills";
 import { log } from "./log";
@@ -1145,51 +1146,110 @@ export async function listConsumedPaycheckDraftIds(userId: string): Promise<Set<
 }
 
 /**
- * Consume a deposit draft against a scheduled paycheck — the ONLY path that
- * may mark a paycheck received from a Plaid draft. Mirrors
- * settleStatementWithDraft's contract:
+ * Mark one or more incomes received from a single deposit, atomically.
  *
- * 1. Draft already consumed by any paycheck (globally) → no-op. Backed by the
- *    partial UNIQUE index from migration 0029, so a double-spend is a
- *    constraint violation even if a future code path skips this check.
- * 2. Fires ONLY on the not-received → received edge: a paycheck that is
- *    already received (manually or by a previous sync) is never touched —
- *    manual reconciliation always wins, and re-syncs are no-ops.
+ * A paycheck and a one-time bonus can arrive as one credit. Each share is
+ * that row's actual amount — never the whole deposit copied onto every row.
+ * The shares plus anything this draft already settled must not exceed the
+ * posted deposit. Fires only on the not-received → received edge, so a
+ * manual reconciliation and a re-sync are left alone. All shares commit
+ * together: a crash between two updates cannot leave the deposit consumed
+ * by only one of them.
  *
- * Returns the updated row, or null when nothing was settled.
+ * Returns the rows that were newly marked received, in share order.
+ */
+export async function settlePaycheckSharesWithDraft(
+  userId: string,
+  input: {
+    draftId: string;
+    date: string;
+    shares: ReadonlyArray<{ paycheckId: string; amountCents: number }>;
+  },
+): Promise<PaycheckRow[]> {
+  if (input.shares.length === 0) return [];
+  if (input.shares.some((share) => share.amountCents <= 0)) return [];
+  const ids = input.shares.map((share) => share.paycheckId);
+  if (new Set(ids).size !== ids.length) return [];
+
+  const draft = await getPlaidDraft(userId, input.draftId);
+  if (!draft || draft.amountCents >= 0 || draft.pending || draft.status !== "approved") return [];
+  const depositCents = -draft.amountCents;
+
+  const db = getDb();
+  const already = await db
+    .select({ id: paychecks.id, amountCents: paychecks.actualAmountCents })
+    .from(paychecks)
+    .where(and(eq(paychecks.userId, userId), eq(paychecks.settledByDraftId, input.draftId)))
+    .all();
+  const alreadyIds = new Set(already.map((row) => row.id));
+  if (ids.some((id) => alreadyIds.has(id))) return [];
+  const used = already.reduce((sum, row) => sum + (row.amountCents ?? 0), 0);
+  const adding = input.shares.reduce((sum, share) => sum + share.amountCents, 0);
+  if (used + adding > depositCents) return [];
+
+  const rows = await db
+    .select()
+    .from(paychecks)
+    .where(and(eq(paychecks.userId, userId), inArray(paychecks.id, ids)))
+    .all();
+  if (rows.length !== ids.length) return [];
+  if (rows.some((row) => !row.isActive || row.actualReceived || row.settledByDraftId != null)) {
+    return [];
+  }
+
+  try {
+    db.transaction((tx) => {
+      for (const share of input.shares) {
+        const result = tx
+          .update(paychecks)
+          .set({
+            actualReceived: true,
+            actualAmountCents: share.amountCents,
+            actualDate: input.date,
+            settledByDraftId: input.draftId,
+          })
+          .where(
+            and(
+              eq(paychecks.userId, userId),
+              eq(paychecks.id, share.paycheckId),
+              eq(paychecks.actualReceived, false),
+              isNull(paychecks.settledByDraftId),
+            ),
+          )
+          .run();
+        if (result.changes !== 1) throw new Error("paycheck settle conflict");
+      }
+    });
+  } catch (e) {
+    if (isUniqueViolation(e) || (e instanceof Error && e.message === "paycheck settle conflict")) {
+      return [];
+    }
+    throw e;
+  }
+
+  const settled: PaycheckRow[] = [];
+  for (const id of ids) {
+    const row = await getPaycheck(userId, id);
+    if (row) settled.push(row);
+  }
+  return settled;
+}
+
+/**
+ * Consume a deposit draft against one paycheck. Prefer
+ * {@link settlePaycheckSharesWithDraft} when one deposit covers several
+ * incomes — this wrapper settles a single share.
  */
 export async function settlePaycheckWithDraft(
   userId: string,
   input: { paycheckId: string; draftId: string; amountCents: number; date: string },
 ): Promise<PaycheckRow | null> {
-  if (input.amountCents <= 0) return null;
-
-  const consumed = await listConsumedPaycheckDraftIds(userId);
-  if (consumed.has(input.draftId)) return null;
-
-  const existing = await getPaycheck(userId, input.paycheckId);
-  if (!existing || !existing.isActive) return null;
-  // The not-received → received edge — never overwrite a reconciled row.
-  if (existing.actualReceived || existing.settledByDraftId != null) return null;
-
-  const db = getDb();
-  try {
-    await db
-      .update(paychecks)
-      .set({
-        actualReceived: true,
-        actualAmountCents: input.amountCents,
-        actualDate: input.date,
-        settledByDraftId: input.draftId,
-      })
-      .where(and(eq(paychecks.userId, userId), eq(paychecks.id, input.paycheckId)))
-      .run();
-  } catch (e) {
-    // Another path consumed this draft since the check above: nothing settled.
-    if (isUniqueViolation(e)) return null;
-    throw e;
-  }
-  return (await getPaycheck(userId, input.paycheckId)) ?? null;
+  const rows = await settlePaycheckSharesWithDraft(userId, {
+    draftId: input.draftId,
+    date: input.date,
+    shares: [{ paycheckId: input.paycheckId, amountCents: input.amountCents }],
+  });
+  return rows[0] ?? null;
 }
 
 export async function listExtras(userId: string, includeArchived = false): Promise<OneTimeExpenseRow[]> {
@@ -3029,16 +3089,20 @@ export async function findInvalidSplitDraftIds(
     .select({
       draftId: draftAllocations.draftId,
       allocationCents: draftAllocations.amountCents,
+      targetKind: draftAllocations.targetKind,
       draftCents: plaidTransactionDrafts.amountCents,
     })
     .from(draftAllocations)
     .innerJoin(plaidTransactionDrafts, eq(plaidTransactionDrafts.id, draftAllocations.draftId))
     .where(and(...conditions))
     .all();
-  const byDraft = new Map<string, { amountCents: number; allocations: { amountCents: number }[] }>();
+  const byDraft = new Map<
+    string,
+    { amountCents: number; allocations: { amountCents: number; targetKind: string }[] }
+  >();
   for (const r of rows) {
     const d = byDraft.get(r.draftId) ?? { amountCents: r.draftCents, allocations: [] };
-    d.allocations.push({ amountCents: r.allocationCents });
+    d.allocations.push({ amountCents: r.allocationCents, targetKind: r.targetKind });
     byDraft.set(r.draftId, d);
   }
   return new Set([...byDraft].filter(([, d]) => !splitIsValid(d)).map(([id]) => id));
@@ -3085,6 +3149,14 @@ export async function findOrphanedAllocationDraftIds(userId: string): Promise<Se
       .all()
       .map((e) => e.id),
   );
+  const paycheckById = new Map(
+    db
+      .select()
+      .from(paychecks)
+      .where(and(eq(paychecks.userId, userId), eq(paychecks.isActive, true)))
+      .all()
+      .map((p) => [p.id, p] as const),
+  );
 
   const orphaned = new Set<string>();
   for (const a of rows) {
@@ -3096,7 +3168,9 @@ export async function findOrphanedAllocationDraftIds(userId: string): Promise<Se
               const bill = billById.get(a.targetId);
               return !!bill && enumerateBillOccurrences(bill, a.targetDate, a.targetDate).length > 0;
             })()
-          : activeExtras.has(a.targetId);
+          : a.targetKind === "paycheck"
+            ? paycheckById.get(a.targetId)?.payDate === a.targetDate
+            : activeExtras.has(a.targetId);
     if (!live) orphaned.add(a.draftId);
   }
   return orphaned;
@@ -3108,22 +3182,149 @@ export async function findOrphanedAllocationDraftIds(userId: string): Promise<Se
  * stays "received" on the strength of a deposit that no longer exists.
  * Only rows settled BY that draft are touched; manual marks are left alone.
  */
-export async function reopenPaycheckSettledByDraft(
+export async function reopenPaychecksSettledByDraft(
   userId: string,
   draftId: string,
-): Promise<PaycheckRow | undefined> {
+): Promise<PaycheckRow[]> {
   const db = getDb();
-  const row = db
+  const rows = await db
     .select()
     .from(paychecks)
     .where(and(eq(paychecks.userId, userId), eq(paychecks.settledByDraftId, draftId)))
-    .get();
-  if (!row) return undefined;
-  db.update(paychecks)
+    .all();
+  if (rows.length === 0) return [];
+  await db
+    .update(paychecks)
     .set({ actualReceived: false, actualAmountCents: null, actualDate: null, settledByDraftId: null })
-    .where(eq(paychecks.id, row.id))
+    .where(and(eq(paychecks.userId, userId), eq(paychecks.settledByDraftId, draftId)))
     .run();
-  return row;
+  return rows;
+}
+
+/**
+ * Apply a deposit's paycheck allocations: mark each covered income received
+ * for its share, refresh shares the user edited, and reopen incomes this
+ * draft had settled that the split no longer names. A draft with no paycheck
+ * allocations is left alone — automatic matching owns those settlements.
+ * Returns how many incomes were newly marked received.
+ */
+export async function applyIncomeAllocations(userId: string, draftId: string): Promise<number> {
+  const draft = await getPlaidDraft(userId, draftId);
+  if (!draft) return 0;
+  const allocations = await listDraftAllocations(userId, draftId);
+  if (!allocations.some((allocation) => allocation.targetKind === "paycheck")) return 0;
+
+  const db = getDb();
+  const settledRows = await db
+    .select()
+    .from(paychecks)
+    .where(and(eq(paychecks.userId, userId), eq(paychecks.settledByDraftId, draftId)))
+    .all();
+  const targetIds = [
+    ...new Set(
+      allocations
+        .filter((allocation) => allocation.targetKind === "paycheck")
+        .map((allocation) => allocation.targetId),
+    ),
+  ];
+  const targets =
+    targetIds.length === 0
+      ? []
+      : await db
+          .select()
+          .from(paychecks)
+          .where(and(eq(paychecks.userId, userId), inArray(paychecks.id, targetIds)))
+          .all();
+  const known = new Map<string, PaycheckRow>();
+  for (const row of [...settledRows, ...targets]) known.set(row.id, row);
+
+  const postedCredit =
+    draft.amountCents < 0 && !draft.pending && draft.status === "approved";
+  const matches =
+    postedCredit && splitIsValid({ amountCents: draft.amountCents, allocations })
+      ? matchAllocatedIncome(
+          [...known.values()].filter((row) => row.isActive),
+          [
+            {
+              id: draft.id,
+              date: draft.date,
+              description: draft.description,
+              merchantName: draft.merchantName,
+              amountCents: draft.amountCents,
+              allocations: allocations.map((allocation) => ({
+                targetKind: allocation.targetKind,
+                targetId: allocation.targetId,
+                targetDate: allocation.targetDate,
+                amountCents: allocation.amountCents,
+              })),
+            },
+          ],
+        )
+      : [];
+  const matchById = new Map(matches.map((match) => [match.paycheckId, match]));
+  if (draft.amountCents < 0) {
+    const matchSum = matches.reduce((sum, match) => sum + match.depositAmountCents, 0);
+    if (matchSum > -draft.amountCents) return 0;
+  }
+
+  let newly = 0;
+  db.transaction((tx) => {
+    for (const row of settledRows) {
+      if (matchById.has(row.id)) continue;
+      tx.update(paychecks)
+        .set({
+          actualReceived: false,
+          actualAmountCents: null,
+          actualDate: null,
+          settledByDraftId: null,
+        })
+        .where(
+          and(
+            eq(paychecks.userId, userId),
+            eq(paychecks.id, row.id),
+            eq(paychecks.settledByDraftId, draftId),
+          ),
+        )
+        .run();
+    }
+    for (const match of matches) {
+      const row = known.get(match.paycheckId);
+      if (!row || !row.isActive) continue;
+      if (row.settledByDraftId === draftId && row.actualReceived) {
+        tx.update(paychecks)
+          .set({ actualAmountCents: match.depositAmountCents, actualDate: match.depositDate })
+          .where(
+            and(
+              eq(paychecks.userId, userId),
+              eq(paychecks.id, row.id),
+              eq(paychecks.settledByDraftId, draftId),
+            ),
+          )
+          .run();
+        continue;
+      }
+      if (row.actualReceived || row.settledByDraftId != null) continue;
+      const result = tx
+        .update(paychecks)
+        .set({
+          actualReceived: true,
+          actualAmountCents: match.depositAmountCents,
+          actualDate: match.depositDate,
+          settledByDraftId: draftId,
+        })
+        .where(
+          and(
+            eq(paychecks.userId, userId),
+            eq(paychecks.id, row.id),
+            eq(paychecks.actualReceived, false),
+            isNull(paychecks.settledByDraftId),
+          ),
+        )
+        .run();
+      if (result.changes === 1) newly++;
+    }
+  });
+  return newly;
 }
 
 /**

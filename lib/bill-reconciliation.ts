@@ -77,7 +77,7 @@ export type DraftAllocation = {
   amountCents: number;
 };
 
-export type ObligationKind = "bill" | "extra" | "card_payment";
+export type ObligationKind = "bill" | "extra" | "card_payment" | "paycheck";
 
 /**
  * Whether a draft's explicit split may be credited, judged against the
@@ -94,16 +94,25 @@ export type ObligationKind = "bill" | "extra" | "card_payment";
  */
 export function splitIsValid(draft: {
   amountCents: number;
-  allocations?: ReadonlyArray<{ amountCents: number }> | null;
+  allocations?: ReadonlyArray<{ amountCents: number; targetKind?: string }> | null;
 }): boolean {
   const allocations = draft.allocations ?? [];
   if (allocations.length === 0) return true;
-  if (draft.amountCents <= 0) return false;
   let total = 0;
+  let income = 0;
+  let expense = 0;
   for (const a of allocations) {
     if (a.amountCents <= 0) return false;
     total += a.amountCents;
+    if (a.targetKind === "paycheck") income++;
+    else expense++;
   }
+  // A deposit (negative) splits across expected income only. A debit splits
+  // across bills, extras, and card payments. Mixing the two, or claiming
+  // more than the transaction, credits money the bank did not report.
+  if (income > 0 && expense > 0) return false;
+  if (income > 0) return draft.amountCents < 0 && total <= -draft.amountCents;
+  if (draft.amountCents <= 0) return false;
   return total <= draft.amountCents;
 }
 
@@ -270,7 +279,11 @@ export function matchAllocatedObligations(
     // A split the bank has since invalidated credits nothing (see splitIsValid).
     if (!splitIsValid(draft)) continue;
     for (const a of allocations) {
-      if (a.amountCents <= 0 || a.targetKind === "card_payment") continue;
+      // Paycheck portions settle through matchAllocatedIncome, not as an
+      // expense. The draft still stays out of bill matching (allocated above).
+      if (a.amountCents <= 0 || a.targetKind === "card_payment" || a.targetKind === "paycheck") {
+        continue;
+      }
       const key = `${a.targetKind}:${a.targetId}:${a.targetDate}`;
       const existing = buckets.get(key);
       if (existing) {

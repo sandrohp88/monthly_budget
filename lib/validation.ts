@@ -82,13 +82,15 @@ export const billPaymentOverrideSchema = z.object({
 /**
  * How one transaction divides across the obligations it paid. Replaces the
  * draft's whole split; an empty list clears it. Amounts are positive portions
- * of a debit — the route checks they don't exceed the transaction.
+ * of the transaction — a debit splits across bills, extras, and card
+ * payments; a deposit (`paycheck`) splits across expected income. The route
+ * checks the portions don't exceed the transaction.
  */
 export const draftAllocationsSchema = z.object({
   allocations: z
     .array(
       z.object({
-        targetKind: z.enum(["bill", "extra", "card_payment"]),
+        targetKind: z.enum(["bill", "extra", "card_payment", "paycheck"]),
         targetId: z.string().min(1),
         targetDate: isoDate,
         amountCents: cents.refine((n) => n > 0, "Each portion must be more than zero"),

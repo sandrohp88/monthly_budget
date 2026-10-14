@@ -37,6 +37,7 @@ import {
   createCreditCard,
   createPaycheck,
   createPlaidItem,
+  replaceDraftAllocations,
   createPromo,
   createStatement,
   getPaycheck,
@@ -1414,6 +1415,113 @@ describe("syncPlaidTransactions paycheck reconciliation", () => {
     const result = await syncPlaidTransactions(user.id, item.id);
     expect(result.paychecksReconciled).toBe(1);
     expect((await getPaycheck(user.id, paycheck.id))!.settledByDraftId).toBe("dep_1");
+  });
+
+  it("one early deposit settles a paycheck and a one-time bonus together", async () => {
+    // Both were expected two days out and posted today as a single credit.
+    // Each row records its own share — never the whole deposit twice — and a
+    // re-sync does not settle them again.
+    const user = await makeUser();
+    const { item } = await seedCheckingAccount(user.id);
+    const payDate = addDaysIso(TODAY, 2);
+    const paycheck = await createPaycheck(user.id, {
+      payDate,
+      amountCents: 1500_00,
+      note: null,
+    });
+    const bonus = await createPaycheck(user.id, {
+      payDate,
+      amountCents: 2000_00,
+      note: "Q3 bonus",
+      isOneTime: true,
+    });
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [depositTxn({ transaction_id: "dep_combo", date: TODAY, amount: -3500 })],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.paychecksReconciled).toBe(2);
+
+    const payRow = (await getPaycheck(user.id, paycheck.id))!;
+    const bonusRow = (await getPaycheck(user.id, bonus.id))!;
+    expect(payRow).toMatchObject({
+      actualReceived: true,
+      actualAmountCents: 1500_00,
+      actualDate: TODAY,
+      settledByDraftId: "dep_combo",
+    });
+    expect(bonusRow).toMatchObject({
+      actualReceived: true,
+      actualAmountCents: 2000_00,
+      actualDate: TODAY,
+      settledByDraftId: "dep_combo",
+    });
+
+    const again = await syncPlaidTransactions(user.id, item.id);
+    expect(again.paychecksReconciled).toBe(0);
+    expect((await getPaycheck(user.id, paycheck.id))!.actualAmountCents).toBe(1500_00);
+    expect((await getPaycheck(user.id, bonus.id))!.actualAmountCents).toBe(2000_00);
+  });
+
+  it("does not auto-match a deposit the user already split, even below the settle floor", async () => {
+    const user = await makeUser();
+    const { item } = await seedCheckingAccount(user.id);
+    const payDate = addDaysIso(TODAY, 2);
+    const paycheck = await createPaycheck(user.id, {
+      payDate,
+      amountCents: 1500_00,
+      note: null,
+    });
+    const bonus = await createPaycheck(user.id, {
+      payDate,
+      amountCents: 2000_00,
+      note: "Q3 bonus",
+      isOneTime: true,
+    });
+    await upsertPlaidDraft({
+      id: "dep_split",
+      userId: user.id,
+      accountId: "acct_checking",
+      date: TODAY,
+      description: "ACME CORP DIRECT DEP",
+      originalDescription: "ACME CORP DIRECT DEP",
+      amountCents: -3500_00,
+      plaidCategory: null,
+      merchantName: null,
+      pending: false,
+      status: "approved",
+      kind: "expense",
+    });
+    await replaceDraftAllocations(user.id, "dep_split", [
+      { targetKind: "paycheck", targetId: paycheck.id, targetDate: payDate, amountCents: 1_00 },
+      { targetKind: "paycheck", targetId: bonus.id, targetDate: payDate, amountCents: 1_00 },
+    ]);
+
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [depositTxn({ transaction_id: "dep_split", date: TODAY, amount: -3500 })],
+        modified: [],
+        removed: [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    const result = await syncPlaidTransactions(user.id, item.id);
+    expect(result.paychecksReconciled).toBe(0);
+    expect((await getPaycheck(user.id, paycheck.id))!.actualReceived).toBe(false);
+    expect((await getPaycheck(user.id, bonus.id))!.actualReceived).toBe(false);
   });
 
   it("ignores deposits on accounts that do not feed the starting balance", async () => {

@@ -24,7 +24,10 @@ import {
   settleStatementWithDraft,
   getStatementSettledByDraft,
   findInvalidSplitDraftIds,
-  reopenPaycheckSettledByDraft,
+  reopenPaychecksSettledByDraft,
+  applyIncomeAllocations,
+  listDraftAllocationsForUser,
+  settlePaycheckSharesWithDraft,
   updatePlaidDraft,
   deletePlaidDraft,
   listStatements,
@@ -33,7 +36,6 @@ import {
   listStartingBalanceDraftsInRange,
   listPaychecksInRange,
   listUnreconciledPaychecksInRange,
-  settlePaycheckWithDraft,
 } from "./repos";
 import type { PlaidTransactionDraftRow } from "./db/schema";
 import { addDaysIso, DEFAULT_TIMEZONE, todayIso } from "./dates";
@@ -402,11 +404,13 @@ const PAYCHECK_RECONCILE_LOOKBACK_DAYS = 45;
  * the income-side analog of reconcileCardPaymentDraft. Runs once per sync at
  * user level: deposits and paychecks aren't tied to a single Plaid item.
  *
- * All invariants live in settlePaycheckWithDraft (consume-once draft gate +
- * the not-received→received edge), so a re-sync is a no-op and a manually
- * reconciled paycheck is never overwritten. This function just assembles the
- * matcher's inputs: unreconciled paychecks near the lookback window and
- * approved unconsumed deposit drafts inside it.
+ * Shares of one deposit are written together by settlePaycheckSharesWithDraft
+ * (the sum cannot exceed the deposit, and only the not-received→received
+ * edge fires), so a re-sync is a no-op and a manually reconciled paycheck is
+ * never overwritten. An explicit income split is applied first and that
+ * draft stays out of the heuristic. This function assembles the matcher's
+ * inputs: unreconciled paychecks near the lookback window and approved
+ * unconsumed deposit drafts inside it.
  *
  * Returns the number of paychecks newly marked received.
  */
@@ -416,6 +420,36 @@ async function reconcilePaycheckDeposits(userId: string, today: string): Promise
   // to the match window away — pad the paycheck range accordingly.
   const rangeStart = addDaysIso(windowStart, -PAYCHECK_MATCH_WINDOW_DAYS);
   const rangeEnd = addDaysIso(today, PAYCHECK_MATCH_WINDOW_DAYS);
+  const [allDrafts, allocations] = await Promise.all([
+    listStartingBalanceDraftsInRange(userId, windowStart, today),
+    listDraftAllocationsForUser(userId),
+  ]);
+  const allocationsByDraft = new Map<string, typeof allocations>();
+  for (const allocation of allocations) {
+    const list = allocationsByDraft.get(allocation.draftId) ?? [];
+    list.push(allocation);
+    allocationsByDraft.set(allocation.draftId, list);
+  }
+
+  // A user split is exhaustive: it settles the incomes it names and the
+  // draft never also goes through the heuristic. Applied before the
+  // heuristic so a later pass in this sync sees those rows as received.
+  let settled = 0;
+  const explicitDraftIds = new Set<string>();
+  for (const draft of allDrafts) {
+    const portions = allocationsByDraft.get(draft.id);
+    if (!portions?.some((portion) => portion.targetKind === "paycheck")) continue;
+    explicitDraftIds.add(draft.id);
+    const marked = await applyIncomeAllocations(userId, draft.id);
+    if (marked > 0) {
+      settled += marked;
+      log.info(
+        `plaid-sync: applied income split on deposit ${draft.id} ` +
+          `(${marked} ${marked === 1 ? "income" : "incomes"} marked received)`,
+      );
+    }
+  }
+
   const [pendingPaychecks, schedule, consumed] = await Promise.all([
     listUnreconciledPaychecksInRange(userId, rangeStart, rangeEnd),
     // The full schedule — reconciled rows included — is the matcher's reference
@@ -425,28 +459,41 @@ async function reconcilePaycheckDeposits(userId: string, today: string): Promise
     listPaychecksInRange(userId, rangeStart, rangeEnd),
     listConsumedPaycheckDraftIds(userId),
   ]);
-  if (pendingPaychecks.length === 0) return 0;
+  if (pendingPaychecks.length === 0) return settled;
 
-  const drafts = (await listStartingBalanceDraftsInRange(userId, windowStart, today)).filter(
-    (d) => !consumed.has(d.id),
+  const drafts = allDrafts.filter(
+    (draft) =>
+      !consumed.has(draft.id) &&
+      !explicitDraftIds.has(draft.id) &&
+      !(allocationsByDraft.get(draft.id)?.length),
   );
-  if (drafts.length === 0) return 0;
+  if (drafts.length === 0) return settled;
 
-  let settled = 0;
-  for (const m of matchPaycheckDeposits(pendingPaychecks, drafts, { schedule })) {
-    const row = await settlePaycheckWithDraft(userId, {
-      paycheckId: m.paycheckId,
-      draftId: m.draftId,
-      amountCents: m.depositAmountCents,
-      date: m.depositDate,
+  const matches = matchPaycheckDeposits(pendingPaychecks, drafts, { schedule });
+  const byDraft = new Map<string, typeof matches>();
+  for (const match of matches) {
+    const list = byDraft.get(match.draftId) ?? [];
+    list.push(match);
+    byDraft.set(match.draftId, list);
+  }
+  for (const [draftId, group] of byDraft) {
+    const rows = await settlePaycheckSharesWithDraft(userId, {
+      draftId,
+      date: group[0]!.depositDate,
+      shares: group.map((match) => ({
+        paycheckId: match.paycheckId,
+        amountCents: match.depositAmountCents,
+      })),
     });
-    if (!row) continue;
-    settled++;
-    log.info(
-      `plaid-sync: reconciled deposit ${m.draftId} ` +
-        `($${(m.depositAmountCents / 100).toFixed(2)} on ${m.depositDate}) ` +
-        `→ paycheck ${row.id} scheduled ${row.payDate} (marked received)`,
-    );
+    for (const row of rows) {
+      settled++;
+      const share = group.find((match) => match.paycheckId === row.id);
+      log.info(
+        `plaid-sync: reconciled deposit ${draftId} ` +
+          `($${((share?.depositAmountCents ?? 0) / 100).toFixed(2)} on ${group[0]!.depositDate}) ` +
+          `→ paycheck ${row.id} scheduled ${row.payDate} (marked received)`,
+      );
+    }
   }
   return settled;
 }
@@ -809,10 +856,14 @@ async function syncPlaidTransactionsUnlocked(
                 `promos, their remaining balances may need manual reconciliation`,
             );
           }
-          // Same rule for a deposit that had settled a paycheck: the money it
-          // proved no longer exists, so the paycheck is expected again.
-          const reopenedPaycheck = await reopenPaycheckSettledByDraft(userId, removedTxn.transaction_id);
-          if (reopenedPaycheck) {
+          // Same rule for a deposit that had settled income: the money it
+          // proved no longer exists, so every income it settled is expected
+          // again. One deposit may have covered a paycheck and a bonus.
+          const reopenedPaychecks = await reopenPaychecksSettledByDraft(
+            userId,
+            removedTxn.transaction_id,
+          );
+          for (const reopenedPaycheck of reopenedPaychecks) {
             log.warn(
               `plaid-sync: transaction ${removedTxn.transaction_id} was removed by Plaid but had ` +
                 `settled paycheck ${reopenedPaycheck.id} (${reopenedPaycheck.payDate}) — paycheck re-opened`,

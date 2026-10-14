@@ -19,6 +19,7 @@ import {
   TransactionSplitDialog,
   type Allocation,
   type SplitExtraOption,
+  type SplitIncomeOption,
 } from "@/components/transaction-split-dialog";
 import {
   Dialog,
@@ -83,6 +84,7 @@ export function TransactionsClient({
   bills = [],
   extras = [],
   plannedCardPayments = [],
+  incomes = [],
 }: {
   initialTransactions: DraftWithAccount[];
   categoryNames: string[];
@@ -94,6 +96,7 @@ export function TransactionsClient({
   bills?: BillOption[];
   extras?: SplitExtraOption[];
   plannedCardPayments?: SplitExtraOption[];
+  incomes?: SplitIncomeOption[];
 }) {
   const router = useRouter();
   const invalidSplits = React.useMemo(() => new Set(invalidSplitIds), [invalidSplitIds]);
@@ -415,7 +418,10 @@ export function TransactionsClient({
                         <Link2 className={cn("h-3.5 w-3.5", txn.linkedBillId && "text-[var(--mint)]")} />
                       </Button>
                     ) : null}
-                    {txn.amountCents > 0 || invalidSplits.has(txn.id) || orphanedSplits.has(txn.id) ? (
+                    {txn.amountCents > 0 ||
+                    (txn.amountCents < 0 && !txn.pending) ||
+                    invalidSplits.has(txn.id) ||
+                    orphanedSplits.has(txn.id) ? (
                       <Button
                         size="icon"
                         variant="ghost"
@@ -424,14 +430,18 @@ export function TransactionsClient({
                             ? "Split needs review: the bank changed this transaction"
                             : orphanedSplits.has(txn.id)
                               ? "Split needs review: a linked payment was moved or removed"
-                              : "Split across obligations"
+                              : txn.amountCents < 0
+                                ? "Split across income"
+                                : "Split across obligations"
                         }
                         title={
                           invalidSplits.has(txn.id)
                             ? "The bank changed this transaction and its split no longer fits. It counts toward nothing until you fix or clear it."
                             : orphanedSplits.has(txn.id)
                               ? "Something this split points to was moved or removed, so that part counts toward nothing. Link it again."
-                              : "Link or split this across bills, one-time expenses, or planned card payments"
+                              : txn.amountCents < 0
+                                ? "Split this deposit across a paycheck and one-time income"
+                                : "Link or split this across bills, one-time expenses, or planned card payments"
                         }
                         onClick={() => openSplit(txn)}
                       >
@@ -490,6 +500,8 @@ export function TransactionsClient({
           bills={bills}
           extras={extras}
           cardPayments={plannedCardPayments}
+          incomes={incomes}
+          direction={splittingTxn.amountCents < 0 ? "credit" : "debit"}
           onClose={() => setSplittingTxn(null)}
         />
       ) : null}

@@ -77,12 +77,14 @@ export const paychecks = sqliteTable(
      */
     actualDate: text("actual_date"),
     /**
-     * Plaid transaction_id of the deposit draft that auto-reconciled this
-     * paycheck as received, if any. Null on manually-reconciled rows. Once
-     * set, that draft can never settle a DIFFERENT paycheck — mirror of
-     * credit_card_statements.settled_by_draft_id (see settlePaycheckWithDraft
-     * in lib/repos.ts). Cleared when the user un-marks received, so the
-     * deposit is free to re-match.
+     * Plaid transaction_id of the deposit draft that reconciled this
+     * paycheck as received, if any. Null on manually-reconciled rows.
+     * One deposit may settle several incomes when a paycheck and a one-time
+     * bonus arrive together — each row stores its own share in
+     * actual_amount_cents, and the shares are capped at the deposit
+     * (settlePaycheckSharesWithDraft). Cleared when the user un-marks
+     * received, so the deposit is free to re-match. Migration 0043 dropped
+     * the one-draft-one-paycheck unique index from 0029.
      */
     settledByDraftId: text("settled_by_draft_id"),
     /**
@@ -97,11 +99,6 @@ export const paychecks = sqliteTable(
   },
   (t) => ({
     userDate: index("paychecks_user_date_idx").on(t.userId, t.payDate),
-    // A deposit draft may settle at most ONE paycheck, globally — enforced at
-    // the DB level so no code path (present or future) can double-spend it.
-    settledByDraftUnique: uniqueIndex("paychecks_settled_by_draft_unique_idx")
-      .on(t.settledByDraftId)
-      .where(sql`settled_by_draft_id IS NOT NULL`),
   }),
 );
 
@@ -759,9 +756,12 @@ export const plaidTransactionDrafts = sqliteTable(
  * A row here is the user stating a portion explicitly. Semantics:
  *
  * - `target_kind` is `bill` (with `target_date` = the generated occurrence
- *   date) or `extra` (a one-time expense; `target_date` is its own date).
- *   Deliberately polymorphic and FK-less on `target_id`: an obligation is
- *   just "a dated amount", and the matcher ignores targets it isn't given.
+ *   date), `extra` (a one-time expense; `target_date` is its own date),
+ *   `card_payment`, or `paycheck` (a scheduled paycheck or one-time income;
+ *   `target_date` is its pay date). A paycheck split is how the user divides
+ *   one deposit across a paycheck and a bonus. Deliberately polymorphic and
+ *   FK-less on `target_id`: an obligation is just "a dated amount", and the
+ *   matcher ignores targets it isn't given.
  * - **Allocations are exhaustive for their draft.** A draft with any
  *   allocation stops participating in heuristic matching entirely, so the
  *   same dollars can never be credited twice. Any unallocated remainder is
@@ -779,7 +779,9 @@ export const draftAllocations = sqliteTable(
     draftId: text("draft_id")
       .notNull()
       .references(() => plaidTransactionDrafts.id, { onDelete: "cascade" }),
-    targetKind: text("target_kind", { enum: ["bill", "extra", "card_payment"] }).notNull(),
+    targetKind: text("target_kind", {
+      enum: ["bill", "extra", "card_payment", "paycheck"],
+    }).notNull(),
     targetId: text("target_id").notNull(),
     /** Occurrence date for a bill; the expense's own date for an extra. */
     targetDate: text("target_date").notNull(),
