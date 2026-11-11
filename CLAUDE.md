@@ -1035,7 +1035,9 @@ An occurrence settles only when something confirms it. Precedence, strongest
 first: a matched posted transaction → `paid_externally` mark → `sent` mark →
 nothing (hold it). A held occurrence keeps debiting and rides forward to the
 projection start date if its own date is outside the window, so it can never
-silently vanish — the same rule as card OVERDUE markers. Bounded by
+silently vanish — the same rule as card OVERDUE markers. A `sent` mark can be
+any age, so `computeProjection` enumerates each bill back to its oldest held
+date (not just one interval before the start month). Bounded by
 `OVERDUE_LOOKBACK_DAYS` (12), shared with the unpaid alert so the cash hold and
 the nag always describe the same set. **No grace period**: the alert waits two
 days because a false alarm is annoying, but a hold has the opposite cost

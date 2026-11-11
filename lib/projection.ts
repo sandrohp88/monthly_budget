@@ -474,7 +474,15 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
     const anchorMonths = anchorY * 12 + (anchorM - 1);
     const startMonths = startY * 12 + (startM - 1);
     const endMonths = endY * 12 + (endM - 1);
-    const kStart = Math.floor((startMonths - anchorMonths) / b.intervalMonths) - 1;
+    // A held occurrence can be any age (a `sent` mark that never posted), and
+    // it must still ride forward onto the start date. Reach back far enough to
+    // enumerate the oldest one; every other date in that extra range is before
+    // the window, so addEvent clips it exactly as before.
+    const oldestHeldMonths = (b.heldOccurrences ?? []).reduce((min, h) => {
+      const d = new Date(parseIsoDate(h.date));
+      return Math.min(min, d.getUTCFullYear() * 12 + d.getUTCMonth());
+    }, startMonths);
+    const kStart = Math.floor((oldestHeldMonths - anchorMonths) / b.intervalMonths) - 1;
     const kEnd = Math.floor((endMonths - anchorMonths) / b.intervalMonths) + 1;
 
     for (let k = kStart; k <= kEnd; k++) {
