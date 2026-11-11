@@ -54,6 +54,7 @@ import {
   updateCreditCard,
   listPlaidAccounts,
   listPlaidItems,
+  updatePlaidAccount,
 } from "./repos";
 import { encryptToken } from "./plaid-crypto";
 import {
@@ -2811,6 +2812,28 @@ describe("live balance refresh (the stale-cache regression)", () => {
       // The ledger has the debit, so the balance must no longer contain it.
       expect((await getPlaidDraft(user.id, "txn_rent"))?.amountCents).toBe(300_00);
       expect(await storedPair(user.id)).toEqual([100_05, 100_05]);
+    });
+
+    it("an account unflagged as starting balance takes cached balances again", async () => {
+      const user = await makeUser();
+      await seedCheckingItem(user.id);
+      syncReturningNoAccounts();
+      accountsGetReturning([checking({ current: 667.79, available: 600.0 })]);
+      balanceGetReturning(400.05, 350.0);
+
+      at(0);
+      await syncPlaidTransactions(user.id);
+      expect(await storedPair(user.id)).toEqual([400_05, 350_00]);
+
+      // No anchor left on the item: no further attempt will ever move the
+      // item's stamp, so the old live pair must not stay frozen.
+      await updatePlaidAccount(user.id, "acct_chk", { useAsStartingBalance: false });
+      accountsGetReturning([checking({ current: 650.0, available: 640.0 })]);
+      at(2 * MINUTE);
+      await syncPlaidTransactions(user.id);
+
+      expect(await storedPair(user.id)).toEqual([650_00, 640_00]);
+      expect((await storedBalance(user.id))?.liveBalanceAt).toBeNull();
     });
 
     it("a cached payload with no current keeps the stored pair (both cached paths)", async () => {

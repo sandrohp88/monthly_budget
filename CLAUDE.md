@@ -858,7 +858,10 @@ because the endpoint is **billed per call** (~$0.05–$0.15) and capped at
   (migration 0044; the caller passes the attempt stamp as
   `upsertPlaidAccount(…, { cachedSinceLiveAttemptAt })`). `>=` because a
   success writes the pair and the attempt stamp with the same `now`. The pair
-  is kept or replaced as one; name, type and `limit_cents` still update.
+  is kept or replaced as one; name, type and `limit_cents` still update. Only
+  current anchors (depository + `useAsStartingBalance`) get the guard
+  (`cachedWriteGuard`): an unflagged account gets no new attempts, so a guard
+  would freeze its balance.
 - ❌ Don't let a FAILED live attempt keep an older live pair. The webhook sync
   that delivers a new debit to the ledger can carry a fresher cached balance;
   keeping the old live one counts that debit twice in the user's favour. After

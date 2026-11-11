@@ -84,6 +84,23 @@ export function cachedBalancePair(balances: {
   };
 }
 
+/**
+ * The guard option for a CACHED write of one account (see upsertPlaidAccount).
+ * Only an account that live pulls still target — a depository account flagged
+ * `useAsStartingBalance`, the same filter as refreshLiveBalancesForItem — can
+ * have its live pair outrank the cache. Once unflagged, no new attempt ever
+ * moves the item's stamp past its old live pair, so guarding it would freeze
+ * its balance; it takes cached payloads again like any non-anchor account.
+ */
+function cachedWriteGuard(
+  account: { useAsStartingBalance: boolean; type: string } | undefined,
+  liveAttemptAt: number | null,
+): { cachedSinceLiveAttemptAt?: number | null } {
+  return account?.useAsStartingBalance && account.type === "depository"
+    ? { cachedSinceLiveAttemptAt: liveAttemptAt }
+    : {};
+}
+
 export interface SyncResult {
   added: number;
   modified: number;
@@ -683,7 +700,7 @@ async function syncPlaidTransactionsUnlocked(
             // latest live attempt is the one that wrote it — see
             // upsertPlaidAccount. The transactions refresh above stamps a
             // different column, so the item row read at the start is current.
-            { cachedSinceLiveAttemptAt: item.balanceRefreshedAt ?? null },
+            cachedWriteGuard(accountById.get(acct.account_id), item.balanceRefreshedAt ?? null),
           );
         }
 
@@ -1040,6 +1057,7 @@ export async function refreshAccountsFromPlaid(
   try {
     const known = await listPlaidAccountsByItem(itemId);
     const knownIds = new Set(known.map((a) => a.id));
+    const knownById = new Map(known.map((a) => [a.id, a] as const));
     const cards = await listCreditCards(userId, false);
     const cardByAccountId = new Map(
       cards
@@ -1067,7 +1085,7 @@ export async function refreshAccountsFromPlaid(
           limitCents,
           updatedAt: Date.now(),
         },
-        { cachedSinceLiveAttemptAt: liveAttemptAt },
+        cachedWriteGuard(knownById.get(acct.account_id), liveAttemptAt),
       );
       cachedAccounts.push(acct);
       accountsUpdated += 1;
