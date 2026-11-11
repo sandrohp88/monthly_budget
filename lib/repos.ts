@@ -2301,21 +2301,31 @@ export async function listPlaidAccountsByItem(itemId: string): Promise<PlaidAcco
  *
  * Balance pair provenance (migration 0044): a write that carries
  * `balanceCents` also sets `liveBalanceAt` — to `data.liveBalanceAt` when the
- * pair came from a live pull, else to null. A CACHED payload passes
- * `opts.keepLiveBalanceAfter`: if the stored pair was written by a live pull
- * after that instant, the pair (and its stamp) is kept and only the other
- * fields update. Both halves of the pair are kept or replaced together.
+ * pair came from a live pull, else to null.
+ *
+ * A CACHED payload passes `opts.cachedSinceLiveAttemptAt` = the item's
+ * `balanceRefreshedAt` (latest live ATTEMPT, success or failure). The stored
+ * pair outranks the cached one only while the latest attempt is the one that
+ * wrote it: `live_balance_at >= attempt`. `>=`, not `>`: a successful pull
+ * writes the pair and the attempt stamp with the SAME `now`, so equality IS
+ * the success case. A later failed attempt moves the stamp past the pair, and
+ * cached payloads apply again. Null attempt stamp: any live pair outranks.
+ * The pair (and its stamp) is kept or replaced as one; the other fields
+ * always update.
  */
 export async function upsertPlaidAccount(
   data: NewPlaidAccount,
-  opts: { keepLiveBalanceAfter?: number } = {},
+  opts: { cachedSinceLiveAttemptAt?: number | null } = {},
 ): Promise<void> {
   const db = getDb();
   const writesBalance = data.balanceCents !== undefined;
+  const attemptAt = opts.cachedSinceLiveAttemptAt;
   const keepLive =
-    writesBalance && opts.keepLiveBalanceAfter !== undefined
-      ? sql`(${plaidAccounts.liveBalanceAt} IS NOT NULL AND ${plaidAccounts.liveBalanceAt} > ${opts.keepLiveBalanceAfter})`
-      : null;
+    !writesBalance || attemptAt === undefined
+      ? null
+      : attemptAt === null
+        ? sql`(${plaidAccounts.liveBalanceAt} IS NOT NULL)`
+        : sql`(${plaidAccounts.liveBalanceAt} IS NOT NULL AND ${plaidAccounts.liveBalanceAt} >= ${attemptAt})`;
   await db
     .insert(plaidAccounts)
     .values({ ...data, updatedAt: Date.now() })

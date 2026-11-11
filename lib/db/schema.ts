@@ -669,9 +669,10 @@ export const plaidAccounts = sqliteTable(
      * by a SUCCESSFUL live `/accounts/balance/get` (migration 0044), epoch ms.
      * Null when the pair came from a cached payload. Unlike
      * `plaidItems.balanceRefreshedAt` (a per-item ATTEMPT stamp), this is a
-     * per-account success stamp: while it is younger than
-     * `LIVE_BALANCE_TRUST_MS`, a cached payload may not overwrite the pair.
-     * See `refreshLiveBalancesForItem` and CLAUDE.md §17.
+     * per-account success stamp. While it is `>=` the item's
+     * `balanceRefreshedAt` (the latest attempt wrote this pair), a cached
+     * payload may not overwrite the pair. See `refreshLiveBalancesForItem`
+     * and CLAUDE.md §17.
      */
     liveBalanceAt: integer("live_balance_at"),
     /** Credit line as reported by Plaid (`balances.limit`). Null for most

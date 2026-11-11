@@ -1,5 +1,5 @@
 import "server-only";
-import { CountryCode, Products } from "plaid";
+import { CountryCode, Products, type AccountBase } from "plaid";
 import { getPlaidClient } from "./plaid-client";
 import { decryptToken } from "./plaid-crypto";
 import {
@@ -73,7 +73,7 @@ const PLAID_TRANSACTION_HISTORY_DAYS = 730;
  * nothing: both halves are omitted, so the stored pair stays together — the
  * live path skips such a payload the same way (review 2026-11-10 PLAID-7).
  */
-function cachedBalancePair(balances: {
+export function cachedBalancePair(balances: {
   current?: number | null;
   available?: number | null;
 }): { balanceCents?: number; availableBalanceCents?: number | null } {
@@ -679,7 +679,11 @@ async function syncPlaidTransactionsUnlocked(
               limitCents: acct.balances.limit != null ? toCents(acct.balances.limit) : null,
               updatedAt: Date.now(),
             },
-            { keepLiveBalanceAfter: Date.now() - LIVE_BALANCE_TRUST_MS },
+            // The live pair outranks this cached one only while the item's
+            // latest live attempt is the one that wrote it — see
+            // upsertPlaidAccount. The transactions refresh above stamps a
+            // different column, so the item row read at the start is current.
+            { cachedSinceLiveAttemptAt: item.balanceRefreshedAt ?? null },
           );
         }
 
@@ -916,16 +920,24 @@ async function syncPlaidTransactionsUnlocked(
       // Authoritative account snapshot: balances AND credit lines. Runs
       // outside the pagination loop and independently of whether
       // transactions/sync returned any accounts at all.
-      await refreshAccountsFromPlaid(userId, item.id, accessToken);
+      const accountsSnapshot = await refreshAccountsFromPlaid(
+        userId,
+        item.id,
+        accessToken,
+        item.balanceRefreshedAt ?? null,
+      );
 
       // ...then overwrite the CACHED balance with a live one for the accounts
       // the projection actually anchors on. Strictly after the call above,
-      // which would otherwise clobber it. See refreshLiveBalancesForItem.
+      // which would otherwise clobber it. Gets that call's payload so a FAILED
+      // attempt can fall back to it at once. See refreshLiveBalancesForItem.
       const live = await refreshLiveBalancesForItem(
         userId,
         item.id,
         accessToken,
         item.balanceRefreshedAt ?? null,
+        Date.now(),
+        accountsSnapshot.cachedAccounts,
       );
       totalLiveBalances += live.accountsRefreshed;
 
@@ -1015,10 +1027,15 @@ export async function refreshAccountsFromPlaid(
   userId: string,
   itemId: string,
   accessToken: string,
-): Promise<{ accountsUpdated: number; limitsSeeded: number }> {
+  /** The item's `balanceRefreshedAt` (latest live attempt) — see upsertPlaidAccount. */
+  liveAttemptAt: number | null,
+): Promise<{ accountsUpdated: number; limitsSeeded: number; cachedAccounts: AccountBase[] }> {
   const plaid = getPlaidClient();
   let accountsUpdated = 0;
   let limitsSeeded = 0;
+  // The tracked accounts' payload, kept for refreshLiveBalancesForItem's
+  // fallback after a failed live attempt (no second Plaid call).
+  const cachedAccounts: AccountBase[] = [];
 
   try {
     const known = await listPlaidAccountsByItem(itemId);
@@ -1050,8 +1067,9 @@ export async function refreshAccountsFromPlaid(
           limitCents,
           updatedAt: Date.now(),
         },
-        { keepLiveBalanceAfter: Date.now() - LIVE_BALANCE_TRUST_MS },
+        { cachedSinceLiveAttemptAt: liveAttemptAt },
       );
+      cachedAccounts.push(acct);
       accountsUpdated += 1;
 
       // Seed the linked card's credit line while it has none. Manual wins
@@ -1068,7 +1086,7 @@ export async function refreshAccountsFromPlaid(
     log.warn(`plaid-accounts: refresh skipped for item ${itemId}: ${(err as Error).message}`);
   }
 
-  return { accountsUpdated, limitsSeeded };
+  return { accountsUpdated, limitsSeeded, cachedAccounts };
 }
 
 /**
@@ -1162,25 +1180,6 @@ export async function refreshItemTransactions(
  */
 export const BALANCE_REFRESH_MIN_INTERVAL_MS = 5 * 60_000;
 
-/**
- * How long a successful live balance outranks Plaid's CACHED one. Every sync
- * writes the cached payload (sync loop, then `refreshAccountsFromPlaid`)
- * before the live pull, and inside the throttle above the live pull writes
- * nothing — so without this, the second sync within five minutes (typically
- * the SYNC_UPDATES_AVAILABLE webhook our own `/transactions/refresh` caused)
- * put the stale cached figure straight back (review 2026-11-10 PLAID-1).
- *
- * Why one hour, not the 5-minute throttle: the first pull after the throttle
- * can fail (BALANCE_LIMIT under bursty webhooks), and one failed attempt must
- * not hand the anchor back to a cache measured $267 wrong. One hour is Plaid's
- * own BALANCE_LIMIT window (30/hour per item), so a rate-limit failure has
- * cleared inside it. If no live pull has succeeded for a whole hour, the live
- * path is broken for another reason (institution down, product not offered)
- * and the account falls back to the documented degraded mode: the cached
- * balance. An old live value is not better than the cache forever.
- */
-export const LIVE_BALANCE_TRUST_MS = 60 * 60_000;
-
 export type LiveBalanceRefreshResult = {
   accountsRefreshed: number;
   /** Why no call was made, or null when one was attempted. */
@@ -1210,8 +1209,22 @@ export type LiveBalanceRefreshResult = {
  * MUST run AFTER `refreshAccountsFromPlaid`: that writes the cached balance and
  * would otherwise clobber the live one we just paid for.
  *
+ * Live vs cached (review 2026-11-10 PLAID-1): a live pair outranks cached
+ * payloads only while this item's LATEST attempt is the one that wrote it
+ * (`plaid_accounts.live_balance_at >= plaid_items.balance_refreshed_at`, see
+ * upsertPlaidAccount). So inside the throttle — no new attempt — every
+ * sync's cached writes keep the live pair. The pair and the attempt stamp
+ * are written with the same `now`, so a just-written pair is never "stale".
+ *
  * Non-fatal, like the other post-transaction refreshes — a bank that errors
- * here leaves the cached balance in place rather than failing the sync.
+ * here leaves the CACHED balance in place rather than failing the sync. The
+ * cached writes of this sync ran before the attempt and were skipped for a
+ * live pair, so an anchor the attempt did not write gets `cachedAccounts`
+ * (this sync's `/accounts/get` payload, no second call) re-applied here and
+ * its live stamp cleared. Otherwise a failed attempt would keep an old live
+ * balance against a ledger that already holds newer debits (a $300 rent ACH
+ * delivered by the webhook sync, settling its hold, would count twice in the
+ * user's favour).
  */
 export async function refreshLiveBalancesForItem(
   userId: string,
@@ -1219,6 +1232,7 @@ export async function refreshLiveBalancesForItem(
   accessToken: string,
   lastRefreshedAt: number | null,
   now: number = Date.now(),
+  cachedAccounts: readonly AccountBase[] = [],
 ): Promise<LiveBalanceRefreshResult> {
   const known = await listPlaidAccountsByItem(itemId);
   // Only what the projection actually anchors on. A credit account's balance
@@ -1232,6 +1246,7 @@ export async function refreshLiveBalancesForItem(
 
   const plaid = getPlaidClient();
   const anchorIds = new Set(anchors.map((a) => a.id));
+  const writtenLive = new Set<string>();
   let accountsRefreshed = 0;
 
   try {
@@ -1245,7 +1260,7 @@ export async function refreshLiveBalancesForItem(
       if (!anchorIds.has(acct.account_id)) continue;
       const balance = acct.balances.current ?? null;
       // A payload with no `current` tells us nothing; writing it would erase a
-      // balance we already have. Leave the cached row alone.
+      // balance we already have. The cached fallback below handles the row.
       if (balance === null) {
         log.warn(
           `plaid-balance: ${acct.account_id} returned no current balance — keeping cached value`,
@@ -1271,6 +1286,7 @@ export async function refreshLiveBalancesForItem(
         liveBalanceAt: now,
         updatedAt: now,
       });
+      writtenLive.add(acct.account_id);
       accountsRefreshed += 1;
     }
     if (accountsRefreshed > 0) {
@@ -1290,7 +1306,35 @@ export async function refreshLiveBalancesForItem(
 
   // Stamped on failure too — see markItemBalanceRefreshed. A bank that is down
   // or rate-limiting us must not be retried on every single sync.
+  // Same `now` as the live writes above: equal stamps mean "this attempt
+  // wrote the pair", which upsertPlaidAccount's `>=` keeps outranking cache.
   await markItemBalanceRefreshed(itemId, now);
+
+  // Fallback for every anchor this attempt did NOT write (call failed, no
+  // `current`, account missing from the response): this sync's cached pair,
+  // both halves from one payload, live stamp cleared. No payload or no
+  // `current` there either: keep the stored pair — nothing better is known.
+  const cachedById = new Map(cachedAccounts.map((a) => [a.account_id, a] as const));
+  for (const anchor of anchors) {
+    if (writtenLive.has(anchor.id)) continue;
+    const acct = cachedById.get(anchor.id);
+    if (!acct) continue;
+    const pair = cachedBalancePair(acct.balances);
+    if (pair.balanceCents === undefined) continue;
+    await upsertPlaidAccount({
+      id: acct.account_id,
+      itemId,
+      userId,
+      name: acct.name,
+      mask: acct.mask ?? null,
+      type: acct.type,
+      subtype: acct.subtype ?? null,
+      ...pair,
+      limitCents: acct.balances.limit != null ? toCents(acct.balances.limit) : null,
+      liveBalanceAt: null,
+      updatedAt: now,
+    });
+  }
 
   return { accountsRefreshed, skipped: null };
 }

@@ -53,11 +53,11 @@ import {
   updatePromo,
   updateCreditCard,
   listPlaidAccounts,
+  listPlaidItems,
 } from "./repos";
 import { encryptToken } from "./plaid-crypto";
 import {
   BALANCE_REFRESH_MIN_INTERVAL_MS,
-  LIVE_BALANCE_TRUST_MS,
   TRANSACTIONS_REFRESH_MIN_INTERVAL_MS,
   refreshItemTransactions,
   refreshLiveBalancesForItem,
@@ -2665,7 +2665,56 @@ describe("live balance refresh (the stale-cache regression)", () => {
       expect(await storedPair(user.id)).toEqual([380_00, 370_00]);
     });
 
-    it("a failed later live pull keeps a recent live value, then lets the cache back in", async () => {
+    it("a live success at T outranks the cache at T+1min (pair and attempt share one stamp)", async () => {
+      const user = await makeUser();
+      const item = await seedCheckingItem(user.id);
+      syncReturningNoAccounts();
+      accountsGetReturning([checking({ current: 667.79, available: 600.0 })]);
+      balanceGetReturning(400.05, 350.0);
+
+      at(0);
+      await syncPlaidTransactions(user.id);
+      const [itemRow] = await listPlaidItems(user.id);
+      // Written with the same `now`: equal stamps are the success case.
+      expect((await storedBalance(user.id))?.liveBalanceAt).toBe(t0);
+      expect(itemRow?.id).toBe(item.id);
+      expect(itemRow?.balanceRefreshedAt).toBe(t0);
+
+      at(MINUTE);
+      const next = await syncPlaidTransactions(user.id);
+      expect(next.liveBalancesRefreshed).toBe(0);
+      expect(await storedPair(user.id)).toEqual([400_05, 350_00]);
+    });
+
+    it("compares the live stamp to the attempt stamp with >= (equal keeps, later replaces)", async () => {
+      const user = await makeUser();
+      const item = await seedCheckingItem(user.id);
+      const T = 1_800_000_000_000;
+      const live = {
+        id: "acct_chk",
+        itemId: item.id,
+        userId: user.id,
+        name: "Checking",
+        mask: "2677",
+        type: "depository",
+        subtype: "checking",
+        updatedAt: T,
+      };
+      await upsertPlaidAccount({ ...live, balanceCents: 400_05, availableBalanceCents: 350_00, liveBalanceAt: T });
+      const cached = { ...live, balanceCents: 667_79, availableBalanceCents: 600_00 };
+
+      await upsertPlaidAccount(cached, { cachedSinceLiveAttemptAt: T });
+      expect(await storedPair(user.id)).toEqual([400_05, 350_00]);
+      await upsertPlaidAccount(cached, { cachedSinceLiveAttemptAt: null });
+      expect(await storedPair(user.id)).toEqual([400_05, 350_00]);
+
+      // A later attempt that did not write this pair: the cache applies.
+      await upsertPlaidAccount(cached, { cachedSinceLiveAttemptAt: T + 1 });
+      expect(await storedPair(user.id)).toEqual([667_79, 600_00]);
+      expect((await storedBalance(user.id))?.liveBalanceAt).toBeNull();
+    });
+
+    it("many throttled syncs in a row keep the live pair", async () => {
       const user = await makeUser();
       await seedCheckingItem(user.id);
       syncReturningNoAccounts();
@@ -2674,27 +2723,94 @@ describe("live balance refresh (the stale-cache regression)", () => {
 
       at(0);
       await syncPlaidTransactions(user.id);
+      for (let offset = 30_000; offset < BALANCE_REFRESH_MIN_INTERVAL_MS; offset += 30_000) {
+        at(offset);
+        await syncPlaidTransactions(user.id);
+        expect(await storedPair(user.id)).toEqual([400_05, 350_00]);
+      }
+      expect(__plaidMock.accountsBalanceGet).toHaveBeenCalledTimes(1);
+    });
 
-      // The next allowed pull fails (rate limited): the 6-minute-old live
-      // figure is still better than Plaid's cache.
+    it("a failed attempt stores THAT sync's cached pair at once; a later success is live again", async () => {
+      const user = await makeUser();
+      await seedCheckingItem(user.id);
+      syncReturningNoAccounts();
+      accountsGetReturning([checking({ current: 667.79, available: 600.0 })]);
+      balanceGetReturning(400.05, 350.0);
+
+      at(0);
+      await syncPlaidTransactions(user.id);
+      expect(await storedPair(user.id)).toEqual([400_05, 350_00]);
+
+      // The next allowed attempt fails. This sync's cached payload is the
+      // freshest balance left, and it must be used now, not a sync later.
+      accountsGetReturning([checking({ current: 100.05, available: 90.0 })]);
       balanceGetRateLimited();
       at(BALANCE_REFRESH_MIN_INTERVAL_MS + MINUTE);
-      const second = await syncPlaidTransactions(user.id);
+      const failed = await syncPlaidTransactions(user.id);
       expect(__plaidMock.accountsBalanceGet).toHaveBeenCalledTimes(2);
-      expect(second.liveBalancesRefreshed).toBe(0);
-      expect(await storedPair(user.id)).toEqual([400_05, 350_00]);
-
-      // Still inside the trust window: still protected.
-      at(LIVE_BALANCE_TRUST_MS - 1);
-      await syncPlaidTransactions(user.id);
-      expect(await storedPair(user.id)).toEqual([400_05, 350_00]);
-
-      // No successful live pull for a whole trust window: the live path is
-      // broken, so the cached pair (one payload, both halves) is used again.
-      at(LIVE_BALANCE_TRUST_MS);
-      await syncPlaidTransactions(user.id);
-      expect(await storedPair(user.id)).toEqual([667_79, 600_00]);
+      expect(failed.liveBalancesRefreshed).toBe(0);
+      expect(await storedPair(user.id)).toEqual([100_05, 90_00]);
       expect((await storedBalance(user.id))?.liveBalanceAt).toBeNull();
+
+      // The attempt after that succeeds: live again, and stamped.
+      balanceGetReturning(95.0, 95.0);
+      at(2 * BALANCE_REFRESH_MIN_INTERVAL_MS + MINUTE);
+      const ok = await syncPlaidTransactions(user.id);
+      expect(ok.liveBalancesRefreshed).toBe(1);
+      expect(await storedPair(user.id)).toEqual([95_00, 95_00]);
+      expect((await storedBalance(user.id))?.liveBalanceAt).toBe(
+        t0 + 2 * BALANCE_REFRESH_MIN_INTERVAL_MS + MINUTE,
+      );
+    });
+
+    it("rent ACH timeline: a failed attempt cannot keep a live balance older than the ledger", async () => {
+      const user = await makeUser();
+      const item = await seedCheckingItem(user.id);
+      syncReturningNoAccounts();
+      accountsGetReturning([checking({ current: 400.05, available: 400.05 })]);
+      balanceGetReturning(400.05);
+
+      // 09:00 manual sync, live pull OK.
+      at(0);
+      await syncPlaidTransactions(user.id);
+      expect(await storedPair(user.id)).toEqual([400_05, 400_05]);
+
+      // 09:10 a $300 rent ACH posts. 09:20 Plaid's poll updates its cache and
+      // fires SYNC_UPDATES_AVAILABLE; the webhook sync delivers the debit,
+      // and the live attempt fails with an institution error.
+      __plaidMock.transactionsSync.mockResolvedValueOnce({
+        data: {
+          added: [
+            {
+              transaction_id: "txn_rent",
+              account_id: "acct_chk",
+              pending: false,
+              date: TODAY,
+              name: "RENT ACH",
+              original_description: "RENT ACH PPD",
+              amount: 300.0,
+              personal_finance_category: { primary: "RENT_AND_UTILITIES" },
+              merchant_name: null,
+            },
+          ],
+          modified: [],
+          removed: [],
+          next_cursor: "c2",
+          has_more: false,
+        },
+      });
+      accountsGetReturning([checking({ current: 100.05, available: 100.05 })]);
+      __plaidMock.accountsBalanceGet.mockRejectedValue({
+        response: { data: { error_code: "INSTITUTION_DOWN" } },
+        message: "Request failed with status code 400",
+      });
+      at(20 * MINUTE);
+      await syncPlaidTransactions(user.id, item.id);
+
+      // The ledger has the debit, so the balance must no longer contain it.
+      expect((await getPlaidDraft(user.id, "txn_rent"))?.amountCents).toBe(300_00);
+      expect(await storedPair(user.id)).toEqual([100_05, 100_05]);
     });
 
     it("a cached payload with no current keeps the stored pair (both cached paths)", async () => {
