@@ -12,6 +12,7 @@ import { draftAllocations, paychecks, users } from "./db/schema";
 import {
   createPlaidItem,
   findInvalidSplitDraftIds,
+  findOrphanedAllocationDraftIds,
   applyIncomeAllocations,
   reopenPaychecksSettledByDraft,
   replaceDraftAllocations,
@@ -188,6 +189,39 @@ describe("repo support", () => {
     });
     expect(rows.find((row) => row.id === "bonus")).toMatchObject({
       actualReceived: true, actualAmountCents: 2000_00, settledByDraftId: "dep-bonus",
+    });
+  });
+
+  // Review 2026-11-10 PAY-1: the sync's re-apply must not reopen income a
+  // still-posted deposit settled; a user save of the split still decides.
+  it("the automatic re-apply keeps a settled income unflagged after a plan-amount change; a user save reopens it", async () => {
+    await upsertPlaidDraft({
+      id: "dep-pay", userId: "u", accountId: "checking", date: "2026-09-18",
+      description: "PAYROLL", originalDescription: "PAYROLL", amountCents: -1500_00,
+      plaidCategory: null, merchantName: null, pending: false, status: "approved",
+    });
+    getDb().insert(paychecks).values([
+      { id: "pay", userId: "u", payDate: "2026-09-20", amountCents: 1500_00 },
+    ]).run();
+    await replaceDraftAllocations("u", "dep-pay", [
+      { targetKind: "paycheck", targetId: "pay", targetDate: "2026-09-20", amountCents: 1500_00 },
+    ]);
+    expect(await applyIncomeAllocations("u", "dep-pay", { automatic: true })).toBe(1);
+
+    // The plan amount rises past what the share covers (floor 2,100 > 1,500).
+    // The money arrived, so the income stays received, and nothing flags it.
+    getDb().update(paychecks).set({ amountCents: 3000_00 }).run();
+    expect(await applyIncomeAllocations("u", "dep-pay", { automatic: true })).toBe(0);
+    expect(getDb().select().from(paychecks).get()).toMatchObject({
+      actualReceived: true, actualAmountCents: 1500_00, settledByDraftId: "dep-pay",
+    });
+    expect((await findInvalidSplitDraftIds("u", ["dep-pay"])).size).toBe(0);
+    expect((await findOrphanedAllocationDraftIds("u")).has("dep-pay")).toBe(false);
+
+    // The same split saved by the user follows the floor, as before.
+    expect(await applyIncomeAllocations("u", "dep-pay")).toBe(0);
+    expect(getDb().select().from(paychecks).get()).toMatchObject({
+      actualReceived: false, actualAmountCents: null, settledByDraftId: null,
     });
   });
 });

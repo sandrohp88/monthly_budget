@@ -34,7 +34,7 @@ import {
   currentStatementOf,
   daysBetween,
   interestSavingCashDueCents,
-  isStatementOpen,
+  interestSavingOwedByStatement,
   nextStatementDateOnOrAfter,
   paidWithoutInterest,
   promoMonthlyChunkAt,
@@ -161,13 +161,11 @@ export function CardDetailClient({
   // the promo cash the projection still debits after them.
   const scheduledCardPaymentCents = scheduledCardPayments.reduce((s, p) => s + p.amountCents, 0);
 
-  const openStatements = statements.filter(isStatementOpen);
-  // Cash needed to avoid interest — the Interest Saving Balance when the card
-  // has active 0% promos, the full statement cash due otherwise.
-  const openDueCents = openStatements.reduce(
-    (s, x) => s + interestSavingCashDueCents(x, activePromos),
-    0,
-  );
+  // Cash still needed to avoid interest — the Interest Saving Balance when the
+  // card has active 0% promos, the full statement cash due otherwise. A
+  // recorded partial payment leaves its residual due on the NEWEST statement.
+  const owedById = interestSavingOwedByStatement(statements, activePromos);
+  const openDueCents = statements.reduce((s, x) => s + (owedById.get(x.id) ?? 0), 0);
   const balanceCents =
     card.currentBalanceCents ??
     accountBalanceCents ??
@@ -176,8 +174,9 @@ export function CardDetailClient({
       : null);
 
   // Current statement state — the page's headline: what to pay to avoid interest.
-  const current = currentStatementOf(statements);
-  const isOpen = current ? isStatementOpen(current) : false;
+  const current = currentStatementOf(statements, activePromos);
+  const currentOwedCents = current ? (owedById.get(current.id) ?? 0) : 0;
+  const isOpen = currentOwedCents > 0;
   const days = current ? daysBetween(today, current.dueDate) : null;
   const safe = current ? paidWithoutInterest(current, activePromos) : false;
 
@@ -330,7 +329,9 @@ export function CardDetailClient({
                         : "text-[var(--amber)]",
                   )}
                 >
-                  <Money cents={interestSavingCashDueCents(current, activePromos)} />
+                  <Money
+                    cents={isOpen ? currentOwedCents : interestSavingCashDueCents(current, activePromos)}
+                  />
                 </div>
                 <div className="mt-1.5 text-[12px] text-[var(--text-2)]">
                   Closed <DateLabel iso={current.statementDate} format="short" /> · Due{" "}
@@ -495,7 +496,7 @@ export function CardDetailClient({
                             <DateLabel iso={s.dueDate} format="short" />
                           </td>
                           <td className="py-2 text-right">
-                            {isStatementOpen(s) ? (
+                            {(owedById.get(s.id) ?? 0) > 0 ? (
                               <span
                                 className={cn(
                                   "font-semibold",

@@ -3,7 +3,7 @@ import { requirePageUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { buildProjection } from "@/lib/projection-server";
 import { listPaychecks, listPromos, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance, getSettings } from "@/lib/repos";
-import { interestSavingCashDueCents, isStatementOpen } from "@/lib/credit-cards";
+import { interestSavingOwedByStatement } from "@/lib/credit-cards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHead } from "@/components/ui/page-head";
 import {
@@ -82,22 +82,18 @@ export default async function DashboardPage() {
 
   // Credit card "due to avoid interest" totals — the Interest Saving Balance
   // for cards with active 0% promos, the full statement cash due otherwise.
-  const promosByCard = new Map<string, typeof ccPromos>();
-  for (const p of ccPromos) {
-    const list = promosByCard.get(p.cardId) ?? [];
-    list.push(p);
-    promosByCard.set(p.cardId, list);
-  }
-  const openStatements = ccStatements.filter(isStatementOpen);
-  const ccTotalDue = openStatements.reduce(
-    (s, x) => s + interestSavingCashDueCents(x, promosByCard.get(x.cardId) ?? []),
-    0,
-  );
+  // A recorded partial payment leaves its residual due on the card's NEWEST
+  // statement only (older remainders roll into the newer balance).
+  const owedById = interestSavingOwedByStatement(ccStatements, ccPromos);
+  const owedStatements = ccStatements
+    .map((x) => ({ ...x, owedCents: owedById.get(x.id) ?? 0 }))
+    .filter((x) => x.owedCents > 0);
+  const ccTotalDue = owedStatements.reduce((s, x) => s + x.owedCents, 0);
   const ccNextDue =
-    openStatements.length > 0
-      ? [...openStatements].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0]
+    owedStatements.length > 0
+      ? [...owedStatements].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0]
       : null;
-  const ccOverdueCount = openStatements.filter((s) => s.dueDate < today).length;
+  const ccOverdueCount = owedStatements.filter((s) => s.dueDate < today).length;
 
   // A bonus is income but not a payday — keep it out of the "next payday" tile.
   const upcomingPaychecks = paychecks.filter((p) => p.payDate >= today && !p.isOneTime);

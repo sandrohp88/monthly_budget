@@ -579,7 +579,8 @@ INTEREST AlertBar (`findUncoveredCardDues`). Moving parts:
 
 - Never log passwords, tokens, or full auth headers
 - Argon2id parameters live in `lib/auth.ts` — don't weaken them
-- Login rate limiting is in `lib/rate-limit.ts` — don't disable for "convenience"
+- Login rate limiting is in `lib/rate-limit.ts` — don't disable for "convenience". Its bucket map is capped (`MAX_BUCKETS`) and full buckets are dropped; evicting a bucket resets that key to full, so eviction must stay closest-to-full first (relative deficit, `deficit / capacity`). The whole Playwright suite uses exactly 5 credential POSTs per run (the burst); `ensureAuth` keeps the session in `data/e2e-auth-state.json` so a retry never logs in again — never loosen the limiter for tests.
+- `authorize()` runs an Argon2 verify against a dummy hash for unknown emails, so login timing doesn't reveal which accounts exist — keep both paths equally expensive. The dummy hash starts at module load of `lib/auth.ts` (Node-only).
 - All DB queries go through repos that take a `userId` — preserve that boundary
 - The middleware (`middleware.ts`) gates the `(app)` group; new routes inherit it
 - When adding admin-only endpoints: `await requireAdmin()` first thing
@@ -1015,7 +1016,16 @@ unique index so those shares can point at the same draft. When the sum isn't
 clear enough to guess, Transactions → Split on the deposit
 (`draft_allocations.target_kind = paycheck`) is the user's answer; that
 split is exhaustive and a portion below 70% of plan does not mark the income
-received. Un-marking received on `/paychecks` (or archiving the row) clears
+received. The sync's re-apply (`applyIncomeAllocations(..., { automatic: true })`)
+never REOPENS an income the split still names while the deposit is still a
+posted credit, even when a bank correction makes the split invalid or the
+income's date/amount moved: that money is in the live balance, so reopening
+projects it twice (review 2026-11-10 PAY-1). A bank correction of the deposit
+(`findInvalidSplitDraftIds`) and a moved pay date
+(`findOrphanedAllocationDraftIds`) are flagged for review on Transactions. A
+later change to the income's planned amount keeps it received with NO flag:
+the money arrived and the recorded amount is unchanged; the user un-marks
+received on `/paychecks` if that is wrong. Un-marking received on `/paychecks` (or archiving the row) clears
 `settledByDraftId` so the deposit can re-settle — un-mark every income that
 deposit settled, or the draft stays consumed. Auto-reconciled rows show an
 AUTO pill next to RECEIVED.
@@ -1196,6 +1206,13 @@ due. `interestSavingCashDueCents(statement, promos)` in `lib/credit-cards.ts`
 owns this; the due markers, dashboard/wallet/detail dues, `paidWithoutInterest`,
 `looksLikePaid`, and `settleStatementWithDraft` matching all run through it, so
 paying the ISB reads as "paid, no interest" and auto-reconciles.
+The pages' "still due" numbers, next-due pick, overdue flags and
+`currentStatementOf` use `interestSavingOwedByStatement`: no payment recorded →
+full ISB if `isStatementOpen`; payment recorded on the card's NEWEST statement →
+residual max(0, ISB − paid) (0 when draft-settled within
+`STATEMENT_MATCH_TOLERANCE_CENTS`); payment recorded on an OLDER statement → 0
+(statements are cumulative; the remainder is in the newer balance). The due
+markers still use the per-statement residual for every statement.
 
 **The adjustment only fires when `statementBalance ≥ Σ promo remaining`** — the
 tell that the balance embeds the principal. PayPal-style statements (which bill

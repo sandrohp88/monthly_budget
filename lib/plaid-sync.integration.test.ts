@@ -31,9 +31,14 @@ vi.mock("./plaid-client", () => ({
 }));
 
 import { __resetDbCacheForTests, getDb, runMigrations } from "./db/client";
-import { users } from "./db/schema";
+import { settings, users } from "./db/schema";
 import { newId } from "./ids";
+import { buildProjection } from "./projection-server";
 import {
+  applyIncomeAllocations,
+  findInvalidSplitDraftIds,
+  findOrphanedAllocationDraftIds,
+  reopenPaychecksSettledByDraft,
   createCreditCard,
   createPaycheck,
   createPlaidItem,
@@ -1570,6 +1575,220 @@ describe("syncPlaidTransactions paycheck reconciliation", () => {
     const result = await syncPlaidTransactions(user.id, item.id);
     expect(result.paychecksReconciled).toBe(0);
     expect((await getPaycheck(user.id, paycheck.id))!.actualReceived).toBe(false);
+  });
+});
+
+// Review 2026-11-10 PAY-1: a deposit split across a paycheck and a bonus that
+// later went stale (a bank correction, a moved pay date) reopened both rows on
+// the next sync, and the projection added the whole deposit again as expected
+// income on top of a live balance that already held it.
+describe("syncPlaidTransactions with a stale income split", () => {
+  const payDate = addDaysIso(TODAY, 4);
+
+  async function setCheckingBalance(userId: string, itemId: string, balanceCents: number) {
+    await upsertPlaidAccount({
+      id: "acct_checking",
+      itemId,
+      userId,
+      name: "Checking",
+      mask: "4242",
+      type: "depository",
+      subtype: "checking",
+      balanceCents,
+      useAsStartingBalance: true,
+      updatedAt: Date.now(),
+    });
+  }
+
+  async function sync(
+    userId: string,
+    itemId: string,
+    delta: { added?: unknown[]; modified?: unknown[]; removed?: unknown[] } = {},
+  ) {
+    __plaidMock.transactionsSync.mockResolvedValue({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: delta.added ?? [],
+        modified: delta.modified ?? [],
+        removed: delta.removed ?? [],
+      },
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+    return syncPlaidTransactions(userId, itemId);
+  }
+
+  const incomeOn = async (userId: string, date: string) =>
+    (await buildProjection(userId))?.rows.find((row) => row.date === date)?.incomeCents ?? 0;
+
+  /** $3,000 posted today, split $2,000 paycheck + $1,000 bonus, both settled. */
+  async function seedSettledSplit(shares = { paycheck: 2000_00, bonus: 1000_00 }) {
+    const user = await makeUser();
+    await getDb()
+      .insert(settings)
+      .values({
+        id: newId(),
+        userId: user.id,
+        startingBalanceCents: 0,
+        defaultPaycheckCents: 0,
+        firstPaydayDate: payDate,
+        payFrequencyDays: 14,
+        projectionMonths: 2,
+        currency: "USD",
+        timezone: DEFAULT_TIMEZONE,
+      })
+      .run();
+    const { item } = await seedCheckingAccount(user.id);
+    // The live balance already contains the deposit.
+    await setCheckingBalance(user.id, item.id, 3000_00);
+    const paycheck = await createPaycheck(user.id, { payDate, amountCents: 2000_00, note: null });
+    const bonus = await createPaycheck(user.id, {
+      payDate,
+      amountCents: 1000_00,
+      note: "Bonus",
+      isOneTime: true,
+    });
+    await upsertPlaidDraft({
+      id: "dep_stale",
+      userId: user.id,
+      accountId: "acct_checking",
+      date: TODAY,
+      description: "ACME CORP DIRECT DEP",
+      originalDescription: "ACME CORP DIRECT DEP",
+      amountCents: -3000_00,
+      plaidCategory: null,
+      merchantName: null,
+      pending: false,
+      status: "approved",
+      kind: "expense",
+    });
+    await replaceDraftAllocations(user.id, "dep_stale", [
+      { targetKind: "paycheck", targetId: paycheck.id, targetDate: payDate, amountCents: shares.paycheck },
+      { targetKind: "paycheck", targetId: bonus.id, targetDate: payDate, amountCents: shares.bonus },
+    ]);
+    const result = await sync(user.id, item.id, {
+      added: [depositTxn({ transaction_id: "dep_stale", date: TODAY, amount: -3000 })],
+    });
+    return { user, item, paycheck, bonus, result };
+  }
+
+  const settledBy = (draftId: string, amountCents: number) => ({
+    actualReceived: true,
+    actualAmountCents: amountCents,
+    settledByDraftId: draftId,
+  });
+  const reopened = {
+    actualReceived: false,
+    actualAmountCents: null,
+    actualDate: null,
+    settledByDraftId: null,
+  };
+
+  it("baseline: the settled split projects no income on the pay date", async () => {
+    const { user, result } = await seedSettledSplit();
+    expect(result.paychecksReconciled).toBe(2);
+    expect(await incomeOn(user.id, payDate)).toBe(0);
+  });
+
+  it("a $10 bank correction keeps both incomes received and flags the split for review", async () => {
+    const { user, item, paycheck, bonus } = await seedSettledSplit();
+    await setCheckingBalance(user.id, item.id, 2990_00);
+
+    await sync(user.id, item.id, {
+      modified: [depositTxn({ transaction_id: "dep_stale", date: TODAY, amount: -2990 })],
+    });
+
+    expect((await getPlaidDraft(user.id, "dep_stale"))!.amountCents).toBe(-2990_00);
+    expect(await getPaycheck(user.id, paycheck.id)).toMatchObject(settledBy("dep_stale", 2000_00));
+    expect(await getPaycheck(user.id, bonus.id)).toMatchObject(settledBy("dep_stale", 1000_00));
+    expect(await incomeOn(user.id, payDate)).toBe(0);
+    expect([...(await findInvalidSplitDraftIds(user.id))]).toEqual(["dep_stale"]);
+
+    // Later syncs do not reopen them either.
+    await sync(user.id, item.id);
+    expect(await getPaycheck(user.id, paycheck.id)).toMatchObject(settledBy("dep_stale", 2000_00));
+    expect(await incomeOn(user.id, payDate)).toBe(0);
+  });
+
+  it("moving a received paycheck's date keeps it received and flags the split for review", async () => {
+    const { user, item, paycheck, bonus } = await seedSettledSplit();
+    const moved = addDaysIso(payDate, -1);
+    // What PATCH /api/paychecks/[id] writes when the row stays received.
+    await updatePaycheck(user.id, paycheck.id, {
+      payDate: moved,
+      amountCents: 2000_00,
+      note: null,
+      actualReceived: true,
+      actualAmountCents: 2000_00,
+    });
+
+    await sync(user.id, item.id);
+
+    expect(await getPaycheck(user.id, paycheck.id)).toMatchObject(settledBy("dep_stale", 2000_00));
+    expect(await getPaycheck(user.id, bonus.id)).toMatchObject(settledBy("dep_stale", 1000_00));
+    expect(await incomeOn(user.id, moved)).toBe(0);
+    expect(await incomeOn(user.id, payDate)).toBe(0);
+    expect([...(await findOrphanedAllocationDraftIds(user.id))]).toEqual(["dep_stale"]);
+  });
+
+  it("a new split still does not mark an income received for a portion below the floor", async () => {
+    // $1,000 of a $2,000 paycheck is below the 70% floor; the bonus is whole.
+    const { user, paycheck, bonus, result } = await seedSettledSplit({
+      paycheck: 1000_00,
+      bonus: 1000_00,
+    });
+    expect(result.paychecksReconciled).toBe(1);
+    expect(await getPaycheck(user.id, paycheck.id)).toMatchObject(reopened);
+    expect(await getPaycheck(user.id, bonus.id)).toMatchObject(settledBy("dep_stale", 1000_00));
+  });
+
+  it("a deposit Plaid removes still reopens every income it settled", async () => {
+    const { user, item, paycheck, bonus } = await seedSettledSplit();
+    await sync(user.id, item.id, { removed: [{ transaction_id: "dep_stale" }] });
+    expect(await getPaycheck(user.id, paycheck.id)).toMatchObject(reopened);
+    expect(await getPaycheck(user.id, bonus.id)).toMatchObject(reopened);
+  });
+
+  it("un-marking received on a stale split reopens the row and the next sync leaves it open", async () => {
+    const { user, item, paycheck, bonus } = await seedSettledSplit();
+    await sync(user.id, item.id, {
+      modified: [depositTxn({ transaction_id: "dep_stale", date: TODAY, amount: -2990 })],
+    });
+    // What PATCH /api/paychecks/[id] writes when the user un-marks received.
+    await updatePaycheck(user.id, paycheck.id, {
+      payDate,
+      amountCents: 2000_00,
+      note: null,
+      actualReceived: false,
+      settledByDraftId: null,
+      actualDate: null,
+      actualAmountCents: null,
+    });
+
+    await sync(user.id, item.id);
+
+    expect(await getPaycheck(user.id, paycheck.id)).toMatchObject(reopened);
+    expect(await getPaycheck(user.id, bonus.id)).toMatchObject(settledBy("dep_stale", 1000_00));
+  });
+
+  it("removing an income from the split still reopens it, and clearing the split reopens the rest", async () => {
+    const { user, item, paycheck, bonus } = await seedSettledSplit();
+    // PUT /api/plaid/drafts/[id]/allocations with only the bonus left.
+    await replaceDraftAllocations(user.id, "dep_stale", [
+      { targetKind: "paycheck", targetId: bonus.id, targetDate: payDate, amountCents: 1000_00 },
+    ]);
+    await applyIncomeAllocations(user.id, "dep_stale");
+    expect(await getPaycheck(user.id, paycheck.id)).toMatchObject(reopened);
+    expect(await getPaycheck(user.id, bonus.id)).toMatchObject(settledBy("dep_stale", 1000_00));
+
+    await sync(user.id, item.id);
+    expect(await getPaycheck(user.id, paycheck.id)).toMatchObject(reopened);
+
+    // PUT with no allocations: the route releases every income.
+    await replaceDraftAllocations(user.id, "dep_stale", []);
+    await reopenPaychecksSettledByDraft(user.id, "dep_stale");
+    expect(await getPaycheck(user.id, bonus.id)).toMatchObject(reopened);
   });
 });
 

@@ -35,7 +35,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           .from(users)
           .where(eq(users.email, parsed.data.email.toLowerCase()))
           .get();
-        if (!row) return null;
+        if (!row) {
+          // Same argon2 cost as a wrong password, so response time does not
+          // reveal which emails have an account.
+          await argon2.verify(await getDummyHash(), parsed.data.password);
+          return null;
+        }
 
         const ok = await argon2.verify(row.passwordHash, parsed.data.password);
         if (!ok) return null;
@@ -54,6 +59,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 export async function hashPassword(plain: string): Promise<string> {
   return argon2.hash(plain, { type: argon2.argon2id, memoryCost: 19_456, timeCost: 2 });
 }
+
+// A hash with the real parameters, verified against when the email has no
+// account. Computed once per process; never logged. A failed hash is not
+// cached, so the next login retries it.
+let dummyHash: Promise<string> | null = null;
+function getDummyHash(): Promise<string> {
+  dummyHash ??= hashPassword("no-such-account-dummy-password").catch((err: unknown) => {
+    dummyHash = null;
+    throw err;
+  });
+  return dummyHash;
+}
+// Start it at module load so the first unknown-email login does not pay
+// hash + verify. Safe: this module is Node-only (argon2 and better-sqlite3
+// are top-level imports; middleware imports auth.config.ts, never this file).
+// The catch keeps a failure from becoming an unhandled rejection.
+getDummyHash().catch(() => {});
 
 /**
  * The signed-in user, verified against the database (deleted users, revoked

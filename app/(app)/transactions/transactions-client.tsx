@@ -436,7 +436,7 @@ export function TransactionsClient({
                         }
                         title={
                           invalidSplits.has(txn.id)
-                            ? "The bank changed this transaction and its split no longer fits. It counts toward nothing until you fix or clear it."
+                            ? "The bank changed this transaction and its split no longer fits. Review it, then fix or clear the split."
                             : orphanedSplits.has(txn.id)
                               ? "Something this split points to was moved or removed, so that part counts toward nothing. Link it again."
                               : txn.amountCents < 0
