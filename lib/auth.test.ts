@@ -31,13 +31,21 @@ vi.mock("./db/client", () => ({
 
 import "./auth";
 
+// Static imports run first, so this is what loading lib/auth.ts did.
+const hashCallsAtImport = [...argon2Mock.hash.mock.calls];
+
 beforeEach(() => {
-  argon2Mock.hash.mockClear();
   argon2Mock.verify.mockClear();
   userRow.current = undefined;
 });
 
 describe("Credentials authorize: no account-existence timing leak", () => {
+  it("starts the dummy hash at module load, with the real Argon2id parameters", () => {
+    expect(hashCallsAtImport).toEqual([
+      [expect.any(String), { type: argon2Mock.argon2id, memoryCost: 19_456, timeCost: 2 }],
+    ]);
+  });
+
   it("runs argon2 verify for an unknown email and still returns null", async () => {
     const result = await captured.authorize!({
       email: "nobody@example.com",
@@ -47,20 +55,13 @@ describe("Credentials authorize: no account-existence timing leak", () => {
     expect(result).toBeNull();
     expect(argon2Mock.verify).toHaveBeenCalledTimes(1);
     expect(argon2Mock.verify).toHaveBeenCalledWith("$argon2id$dummy", "guess-123");
-    // The dummy hash uses the app's real Argon2id parameters.
-    expect(argon2Mock.hash).toHaveBeenCalledWith(expect.any(String), {
-      type: argon2Mock.argon2id,
-      memoryCost: 19_456,
-      timeCost: 2,
-    });
   });
 
   it("computes the dummy hash once per process", async () => {
     await captured.authorize!({ email: "a@example.com", password: "guess-123" });
     await captured.authorize!({ email: "b@example.com", password: "guess-456" });
 
-    // At most one hash: zero when an earlier test already filled the cache.
-    expect(argon2Mock.hash.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(argon2Mock.hash).toHaveBeenCalledTimes(1); // the one at module load
     expect(argon2Mock.verify).toHaveBeenCalledTimes(2);
   });
 
@@ -86,5 +87,19 @@ describe("Credentials authorize: no account-existence timing leak", () => {
       name: "Known",
       sessionVersion: 3,
     });
+  });
+
+  it("does not cache or crash on a failed eager hash; the next login retries it", async () => {
+    vi.resetModules();
+    argon2Mock.hash.mockClear();
+    argon2Mock.hash.mockRejectedValueOnce(new Error("argon2 unavailable"));
+    await import("./auth"); // fresh module: its eager hash rejects
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const result = await captured.authorize!({ email: "x@example.com", password: "guess-789" });
+
+    expect(result).toBeNull();
+    expect(argon2Mock.hash).toHaveBeenCalledTimes(2);
+    expect(argon2Mock.verify).toHaveBeenCalledWith("$argon2id$dummy", "guess-789");
   });
 });

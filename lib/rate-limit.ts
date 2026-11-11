@@ -11,9 +11,10 @@
  *   the ones that have refilled since. This changes no limiting decision.
  * - At most MAX_BUCKETS keys are kept. Evicting a bucket resets its key to
  *   full, i.e. hands that key `capacity - tokens` extra requests, so eviction
- *   goes smallest deficit first (closest to full) and, among equals, least
- *   recently used first. A throttled key is evicted only once every other
- *   kept bucket is at least as throttled.
+ *   goes smallest relative deficit (`(capacity - tokens) / capacity`) first,
+ *   i.e. closest to full, and among equals least recently used first. A
+ *   throttled key is evicted only once every other kept bucket is at least
+ *   as throttled.
  */
 
 type Bucket = {
@@ -59,9 +60,11 @@ function sweepFull(now: number): void {
 function evictForInsert(now: number): void {
   sweepFull(now);
   if (buckets.size < MAX_BUCKETS) return;
+  // Relative deficit, so limiters with different capacities compare fairly:
+  // 6 of 30 used (0.2) goes before 5 of 5 used (1.0).
   const byDeficit = [...buckets].map(([key, bucket]) => ({
     key,
-    deficit: bucket.capacity - tokensAt(bucket, now, bucket),
+    deficit: (bucket.capacity - tokensAt(bucket, now, bucket)) / bucket.capacity,
   }));
   // Array.prototype.sort is stable, so equal deficits keep LRU order.
   byDeficit.sort((a, b) => a.deficit - b.deficit);

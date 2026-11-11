@@ -71,6 +71,11 @@ function getDummyHash(): Promise<string> {
   });
   return dummyHash;
 }
+// Start it at module load so the first unknown-email login does not pay
+// hash + verify. Safe: this module is Node-only (argon2 and better-sqlite3
+// are top-level imports; middleware imports auth.config.ts, never this file).
+// The catch keeps a failure from becoming an unhandled rejection.
+getDummyHash().catch(() => {});
 
 /**
  * The signed-in user, verified against the database (deleted users, revoked

@@ -91,6 +91,20 @@ describe("bucket memory stays bounded", () => {
     expect(takeToken(victim, LOGIN_RATE_LIMIT)).toBe(false);
   });
 
+  it("evicts a nearly full capacity-30 bucket before a drained capacity-5 one", () => {
+    const webhook = { capacity: 30, refillPerSecond: 1 };
+    const victim = "login:198.51.100.3";
+    for (let i = 0; i < 5; i++) takeToken(victim, LOGIN_RATE_LIMIT); // 5 of 5 used
+    // Fill to the cap with webhook buckets that used 6 of 30 (deficit 6 > 5).
+    for (let i = 0; i < MAX_BUCKETS - 1; i++) {
+      for (let t = 0; t < 6; t++) takeToken(`plaid-webhook:10.1.${i >> 8}.${i & 255}`, webhook);
+    }
+    expect(bucketCountForTests()).toBe(MAX_BUCKETS);
+    takeToken("login:new-key", LOGIN_RATE_LIMIT); // overflow -> eviction
+    expect(bucketCountForTests()).toBeLessThanOrEqual(MAX_BUCKETS);
+    expect(takeToken(victim, LOGIN_RATE_LIMIT)).toBe(false);
+  });
+
   it("evicts nearly-full buckets before a throttled one when the cap overflows", () => {
     const victim = "login:198.51.100.2";
     for (let i = 0; i < 5; i++) takeToken(victim, LOGIN_RATE_LIMIT);

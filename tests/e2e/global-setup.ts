@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import { AUTH_STATE_FILE } from "./auth";
 
 /**
  * Wipes the test SQLite DB before Playwright starts the web server, so /setup
@@ -15,6 +16,8 @@ export default async function globalSetup() {
   const cwd = process.cwd();
   const dataDir = path.resolve(cwd, "data");
   fs.mkdirSync(dataDir, { recursive: true });
+  // The saved session belongs to the user the wipe below deletes.
+  fs.rmSync(AUTH_STATE_FILE, { force: true });
 
   const dbPath = path.join(dataDir, "test.db");
   if (!fs.existsSync(dbPath)) return; // first run — server will create it.

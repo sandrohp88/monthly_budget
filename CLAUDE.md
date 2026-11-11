@@ -579,8 +579,8 @@ INTEREST AlertBar (`findUncoveredCardDues`). Moving parts:
 
 - Never log passwords, tokens, or full auth headers
 - Argon2id parameters live in `lib/auth.ts` — don't weaken them
-- Login rate limiting is in `lib/rate-limit.ts` — don't disable for "convenience". Its bucket map is capped (`MAX_BUCKETS`) and full buckets are dropped; evicting a bucket resets that key to full, so eviction must stay closest-to-full first. The whole Playwright suite gets 5 credential POSTs per run.
-- `authorize()` runs an Argon2 verify against a dummy hash for unknown emails, so login timing doesn't reveal which accounts exist — keep both paths equally expensive
+- Login rate limiting is in `lib/rate-limit.ts` — don't disable for "convenience". Its bucket map is capped (`MAX_BUCKETS`) and full buckets are dropped; evicting a bucket resets that key to full, so eviction must stay closest-to-full first (relative deficit, `deficit / capacity`). The whole Playwright suite uses exactly 5 credential POSTs per run (the burst); `ensureAuth` keeps the session in `data/e2e-auth-state.json` so a retry never logs in again — never loosen the limiter for tests.
+- `authorize()` runs an Argon2 verify against a dummy hash for unknown emails, so login timing doesn't reveal which accounts exist — keep both paths equally expensive. The dummy hash starts at module load of `lib/auth.ts` (Node-only).
 - All DB queries go through repos that take a `userId` — preserve that boundary
 - The middleware (`middleware.ts`) gates the `(app)` group; new routes inherit it
 - When adding admin-only endpoints: `await requireAdmin()` first thing
