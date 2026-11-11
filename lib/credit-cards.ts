@@ -204,6 +204,26 @@ export function interestSavingCashDueCents(
   return Math.min(base, Math.max(s.minimumPaymentCents ?? 0, isb, 0));
 }
 
+/**
+ * Interest-saving cash still owed on ONE statement: `interestSavingCashDueCents`
+ * minus whatever is recorded paid, floored at 0 — the same number the
+ * projection's due marker carries. A PARTIALLY paid statement keeps its
+ * residual (which `isStatementOpen` cannot express); a statement paid at least
+ * its interest-saving amount owes 0. Every "due to avoid interest" total, next
+ * due pick and overdue flag in the UI should run through this.
+ */
+export function interestSavingOwedCents(
+  s: Pick<
+    CreditCardStatementRow,
+    "statementBalanceCents" | "minimumPaymentCents" | "dueDate" | "paidAmountCents"
+  >,
+  promos: ReadonlyArray<
+    Pick<CreditCardPromoRow, "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive">
+  >,
+): number {
+  return Math.max(0, interestSavingCashDueCents(s, promos) - (s.paidAmountCents ?? 0));
+}
+
 /** What archiving a card would drop out of the projection. */
 export type OpenStatementObligation = {
   /** Interest-saving cash still owed across the card's unsettled statements. */
@@ -235,7 +255,7 @@ export function openStatementObligation(
   let count = 0;
   let earliestDueDate: string | null = null;
   for (const s of statements) {
-    const owed = Math.max(0, interestSavingCashDueCents(s, promos) - (s.paidAmountCents ?? 0));
+    const owed = interestSavingOwedCents(s, promos);
     if (owed <= 0) continue;
     cents += owed;
     count += 1;
@@ -270,13 +290,18 @@ export function totalDue(statements: ReadonlyArray<CreditCardStatementRow>): num
 
 /**
  * Pick the most relevant statement to surface on the card UI:
- *   1. Earliest unpaid (so user sees what's due soonest)
+ *   1. Earliest with interest-saving cash still owed (`interestSavingOwedCents`
+ *      > 0 — unpaid OR partly paid), so the user sees what's due soonest
  *   2. Otherwise, most recent paid (so they see history)
+ * Pass the card's promos so a statement paid to its ISB reads as settled.
  */
 export function currentStatementOf(
   statements: ReadonlyArray<CreditCardStatementRow>,
+  promos: ReadonlyArray<
+    Pick<CreditCardPromoRow, "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive">
+  > = [],
 ): CreditCardStatementRow | undefined {
-  const unpaid = statements.filter(isStatementOpen);
+  const unpaid = statements.filter((s) => interestSavingOwedCents(s, promos) > 0);
   if (unpaid.length > 0) {
     return [...unpaid].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
   }

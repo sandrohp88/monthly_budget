@@ -7,6 +7,7 @@ import {
   dueDateFromStatement,
   estimateCurrentCycle,
   interestSavingCashDueCents,
+  interestSavingOwedCents,
   isStatementOpen,
   nextDayOfMonthOnOrAfter,
   nextStatementDateOnOrAfter,
@@ -1080,5 +1081,118 @@ describe("openStatementObligation", () => {
       promo({ id: "ep4", remainingAmountCents: 210_32, endDate: "2027-01-07", monthlyPaymentCents: 35_06 }),
     ];
     expect(openStatementObligation([s], plans).cents).toBe(832_26);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// interestSavingOwedCents — the per-statement residual the dashboard, wallet
+// and card-detail "due to avoid interest" numbers use. Must match the
+// projection's due marker: max(0, ISB − paid).
+// ────────────────────────────────────────────────────────────────────────────
+describe("interestSavingOwedCents", () => {
+  const equalPayPlans = [
+    promo({ id: "ep1", remainingAmountCents: 73_37, endDate: "2026-10-07", monthlyPaymentCents: null }),
+    promo({ id: "ep2", remainingAmountCents: 123_23, endDate: "2026-11-07", monthlyPaymentCents: 30_82 }),
+    promo({ id: "ep3", remainingAmountCents: 89_09, endDate: "2026-12-07", monthlyPaymentCents: 17_82 }),
+    promo({ id: "ep4", remainingAmountCents: 210_32, endDate: "2027-01-07", monthlyPaymentCents: 35_06 }),
+  ];
+  const chase = (over: Partial<CreditCardStatementRow> = {}) =>
+    statement({
+      statementBalanceCents: 1220_11,
+      minimumPaymentCents: 143_16,
+      dueDate: "2026-08-07",
+      ...over,
+    });
+
+  it("owes the full cash due on an unpaid statement", () => {
+    expect(interestSavingOwedCents(statement({ statementBalanceCents: 1000_00 }), [])).toBe(1000_00);
+  });
+
+  it("owes the residual of a partly paid statement ($1,000 − $400 = $600)", () => {
+    const s = statement({
+      statementBalanceCents: 1000_00,
+      paidAmountCents: 400_00,
+      paidDate: "2025-02-05",
+    });
+    // The old page filter dropped it entirely; the residual is still owed.
+    expect(isStatementOpen(s)).toBe(false);
+    expect(interestSavingOwedCents(s, [])).toBe(600_00);
+  });
+
+  it("owes nothing once exactly the cash due is paid", () => {
+    const s = statement({ statementBalanceCents: 1000_00, paidAmountCents: 1000_00, paidDate: "2025-02-05" });
+    expect(interestSavingOwedCents(s, [])).toBe(0);
+    expect(paidWithoutInterest(s)).toBe(true);
+  });
+
+  it("never goes negative when overpaid", () => {
+    const s = statement({ statementBalanceCents: 1000_00, paidAmountCents: 1500_00, paidDate: "2025-02-05" });
+    expect(interestSavingOwedCents(s, [])).toBe(0);
+  });
+
+  it("owes nothing once the Interest Saving Balance is paid on a promo card", () => {
+    const s = chase({ paidAmountCents: 832_26, paidDate: "2026-08-05" });
+    expect(paidWithoutInterest(s, equalPayPlans)).toBe(true);
+    expect(interestSavingOwedCents(s, equalPayPlans)).toBe(0);
+  });
+
+  it("owes the ISB residual (not the full-balance residual) on a promo card", () => {
+    expect(interestSavingOwedCents(chase(), equalPayPlans)).toBe(832_26);
+    // $500 paid against an $832.26 ISB → $332.26 still owed to avoid interest.
+    expect(
+      interestSavingOwedCents(chase({ paidAmountCents: 500_00, paidDate: "2026-08-01" }), equalPayPlans),
+    ).toBe(332_26);
+  });
+
+  it("owes nothing on a zero or negative (credit) balance with no minimum", () => {
+    expect(interestSavingOwedCents(statement({ statementBalanceCents: 0 }), [])).toBe(0);
+    expect(interestSavingOwedCents(statement({ statementBalanceCents: -25_00 }), [])).toBe(0);
+  });
+
+  it("owes the PayPal minimum on a $0-balance statement until it is paid", () => {
+    const s = statement({ statementBalanceCents: 0, minimumPaymentCents: 35_00 });
+    expect(interestSavingOwedCents(s, [])).toBe(35_00);
+    const paid = statement({
+      statementBalanceCents: 0,
+      minimumPaymentCents: 35_00,
+      paidAmountCents: 35_00,
+      paidDate: "2025-02-05",
+    });
+    expect(interestSavingOwedCents(paid, [])).toBe(0);
+  });
+
+  it("matches openStatementObligation for every statement", () => {
+    const list = [
+      statement({ id: "a", statementBalanceCents: 1000_00, paidAmountCents: 400_00 }),
+      statement({ id: "b", statementBalanceCents: 200_00 }),
+      statement({ id: "c", statementBalanceCents: 75_00, paidAmountCents: 75_00 }),
+    ];
+    const sum = list.reduce((t, s) => t + interestSavingOwedCents(s, []), 0);
+    expect(sum).toBe(openStatementObligation(list, []).cents);
+    expect(sum).toBe(800_00);
+  });
+
+  it("currentStatementOf surfaces a partly paid statement as the one still due", () => {
+    const partial = statement({
+      id: "partial",
+      statementDate: "2025-01-15",
+      dueDate: "2025-02-10",
+      statementBalanceCents: 1000_00,
+      paidAmountCents: 400_00,
+      paidDate: "2025-02-05",
+    });
+    // A newer statement paid in full must not hide the older residual.
+    const paid = statement({
+      id: "paid",
+      statementDate: "2025-02-15",
+      dueDate: "2025-03-10",
+      paidAmountCents: 100_000,
+      paidDate: "2025-03-05",
+    });
+    expect(currentStatementOf([paid, partial], [])?.id).toBe("partial");
+    // A statement paid to its ISB is settled, so the fallback still applies.
+    const isbPaid = chase({ id: "isb", statementDate: "2026-06-10", paidAmountCents: 832_26, paidDate: "2026-08-05" });
+    const newer = chase({ id: "newer", statementDate: "2026-07-10", paidAmountCents: 1220_11, paidDate: "2026-08-05" });
+    expect(currentStatementOf([isbPaid, newer], equalPayPlans)?.id).toBe("newer");
   });
 });

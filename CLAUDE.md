@@ -1194,6 +1194,10 @@ due. `interestSavingCashDueCents(statement, promos)` in `lib/credit-cards.ts`
 owns this; the due markers, dashboard/wallet/detail dues, `paidWithoutInterest`,
 `looksLikePaid`, and `settleStatementWithDraft` matching all run through it, so
 paying the ISB reads as "paid, no interest" and auto-reconciles.
+Any "still due" number, next-due pick or overdue flag uses
+`interestSavingOwedCents` (= max(0, ISB − paidAmountCents), the due marker's
+math), never `isStatementOpen` + full ISB: a partly paid statement keeps its
+residual.
 
 **The adjustment only fires when `statementBalance ≥ Σ promo remaining`** — the
 tell that the balance embeds the principal. PayPal-style statements (which bill
