@@ -4,6 +4,7 @@ import {
   generateDates,
   inferCadence,
   isSchedulable,
+  monthlyDayFor,
   planSchedule,
   sequenceLabel,
   sequenceRemovalIds,
@@ -81,6 +82,64 @@ describe("inferCadence", () => {
   it("needs two dates to say anything", () => {
     expect(inferCadence(["2026-09-11"])).toBeNull();
     expect(inferCadence([])).toBeNull();
+  });
+
+  it("reads a month-end run clamped by short months as monthly on its largest day", () => {
+    // What generateDates makes for "monthly on the 31st": the 30-day months and
+    // February clamp. Every date is min(31, days in month), so it IS monthly.
+    expect(
+      inferCadence([
+        "2026-11-30",
+        "2026-12-31",
+        "2027-01-31",
+        "2027-02-28",
+        "2027-03-31",
+        "2027-04-30",
+        "2027-05-31",
+      ]),
+    ).toEqual({ kind: "monthly", day: 31 });
+    expect(
+      inferCadence(["2026-12-30", "2027-01-30", "2027-02-28", "2027-03-30", "2027-04-30"]),
+    ).toEqual({ kind: "monthly", day: 30 });
+    expect(inferCadence(["2027-01-29", "2027-02-28", "2027-03-29"])).toEqual({
+      kind: "monthly",
+      day: 29,
+    });
+  });
+
+  it("reads month-end runs across a leap February", () => {
+    expect(inferCadence(["2028-01-31", "2028-02-29", "2028-03-31", "2028-04-30"])).toEqual({
+      kind: "monthly",
+      day: 31,
+    });
+    expect(inferCadence(["2028-01-30", "2028-02-29", "2028-03-30"])).toEqual({
+      kind: "monthly",
+      day: 30,
+    });
+    expect(inferCadence(["2028-01-29", "2028-02-29", "2028-03-29"])).toEqual({
+      kind: "monthly",
+      day: 29,
+    });
+  });
+
+  it("keeps a run on the 28th as day 28, not the month end", () => {
+    expect(
+      inferCadence(["2026-12-28", "2027-01-28", "2027-02-28", "2027-03-28", "2027-04-28"]),
+    ).toEqual({ kind: "monthly", day: 28 });
+  });
+
+  it("does not call a run monthly when a date is not the clamped month day", () => {
+    // Every 31 days from Jan 31: Mar 3 is not min(31, 31) — this run is
+    // genuinely day-spaced, and it skips February.
+    expect(inferCadence(["2027-01-31", "2027-03-03", "2027-04-03"])).toEqual({
+      kind: "everyDays",
+      days: 31,
+    });
+    // A 30-day run that drifts off the 30th is not monthly either.
+    expect(inferCadence(["2026-11-30", "2026-12-30", "2027-01-29"])).toEqual({
+      kind: "everyDays",
+      days: 30,
+    });
   });
 });
 
@@ -357,5 +416,99 @@ describe("sequenceRemovalIds", () => {
     ];
     expect(sequenceRemovalIds(rows, "", TODAY)).toEqual(["next", "later"]);
     expect(sequenceRemovalIds(rows, "Partner", TODAY)).toEqual(["other"]);
+  });
+});
+
+describe("month-end monthly schedule round-trip", () => {
+  // The user made "Once a month" anchored on 2026-12-31 on 2026-11-10.
+  const today = "2026-11-10";
+  const through = "2027-05-31";
+  const dates = generateDates({
+    anchor: "2026-12-31",
+    cadence: { kind: "monthly", day: 31 },
+    from: today,
+    through,
+  });
+  const rows = dates.map((d, i) => pay({ id: `m${i}`, payDate: d, amountCents: 2500_00 }));
+
+  it("summarizes the run as monthly on the 31st", () => {
+    expect(dates).toEqual([
+      "2026-11-30",
+      "2026-12-31",
+      "2027-01-31",
+      "2027-02-28",
+      "2027-03-31",
+      "2027-04-30",
+      "2027-05-31",
+    ]);
+    const [seq] = summarizeSequences(rows, today);
+    expect(seq!.cadence).toEqual({ kind: "monthly", day: 31 });
+    expect(describeCadence(seq!.cadence)).toBe("monthly on the 31st");
+  });
+
+  it("an amount-only edit restates every upcoming row and moves no payday", () => {
+    // What "Edit this schedule" seeds: anchor = next payday, cadence = the
+    // inferred one, and the user changes only the amount.
+    const [seq] = summarizeSequences(rows, today);
+    const anchor = seq!.nextPayDate!;
+    const plan = planSchedule({
+      existing: rows,
+      label: "",
+      anchor,
+      cadence: seq!.cadence!,
+      amountCents: 2600_00,
+      from: today,
+      through,
+      today,
+    });
+    expect(plan.entries.filter((e) => e.action !== "update")).toEqual([]);
+    expect(plan.entries.map((e) => e.payDate)).toEqual(dates); // the last one (05-31) too
+    expect(plan.entries.map((e) => e.amountCents)).toEqual(dates.map(() => 2600_00));
+    // The dialog rebuilds the monthly cadence from its anchor; it must land on
+    // the same day, or the edit above is not what the user gets.
+    expect(monthlyDayFor(anchor, seq!.cadence)).toBe(31);
+  });
+
+  it("re-picking 'Once a month' on the clamped next payday keeps the 31st", () => {
+    // The next payday is Nov 30 — the 31st clamped. Reading the day off that
+    // date would make the run "monthly on the 30th" and move every 31st.
+    const [seq] = summarizeSequences(rows, today);
+    const day = monthlyDayFor(seq!.nextPayDate!, seq!.cadence);
+    expect(day).toBe(31);
+    const plan = planSchedule({
+      existing: rows,
+      label: "",
+      anchor: seq!.nextPayDate!,
+      cadence: { kind: "monthly", day },
+      amountCents: 2500_00,
+      from: today,
+      through,
+      today,
+    });
+    expect(plan.entries).toEqual([]);
+  });
+});
+
+describe("monthlyDayFor", () => {
+  const day31 = { kind: "monthly", day: 31 } as const;
+
+  it("keeps the schedule's day when the anchor is that day clamped to a short month", () => {
+    expect(monthlyDayFor("2026-11-30", day31)).toBe(31);
+    expect(monthlyDayFor("2027-02-28", day31)).toBe(31);
+    expect(monthlyDayFor("2028-02-29", { kind: "monthly", day: 30 })).toBe(30);
+  });
+
+  it("follows the anchor's day when the user picks another day", () => {
+    expect(monthlyDayFor("2026-12-15", day31)).toBe(15);
+    // Dec 30 is not a clamped 31st (December has 31 days).
+    expect(monthlyDayFor("2026-12-30", day31)).toBe(30);
+    // A smaller schedule day never pulls the anchor's day down.
+    expect(monthlyDayFor("2026-11-30", { kind: "monthly", day: 15 })).toBe(30);
+  });
+
+  it("reads the anchor's day when there is no monthly schedule to keep", () => {
+    expect(monthlyDayFor("2026-11-30", null)).toBe(30);
+    expect(monthlyDayFor("2026-11-30", { kind: "everyDays", days: 14 })).toBe(30);
+    expect(monthlyDayFor("", null)).toBe(1);
   });
 });
