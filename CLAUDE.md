@@ -891,7 +891,15 @@ stamp-on-failure backoff as the balance pull.
   whichever direction you left stale.
 - ❌ Don't assume the refresh is synchronous enough to guarantee data. If the
   extraction outruns the call, Plaid fires `SYNC_UPDATES_AVAILABLE` and the
-  webhook drives another sync — the design tolerates both.
+  webhook drives another sync — the design tolerates both. That webhook often
+  lands while the same sync is still on its balance/liabilities calls, after
+  its cursor read, so `handlePlaidWebhook` must never drop it: a webhook for an
+  item whose sync is in flight marks the item dirty (`action: "queued"`), and
+  exactly one follow-up sync runs when the current one ends, even if it failed
+  (any number of webhooks → one follow-up; a webhook during the follow-up →
+  one more). The flag is in memory: a restart loses a pending follow-up. The
+  follow-up's `/transactions/refresh` is throttled (correct — the data is
+  already extracted); it still reads the cursor and applies the new rows.
 - Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
 
 ### Credit card linkage (Plaid → `credit_cards`)
