@@ -26,7 +26,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { describeCadence, type PaycheckCadence, type PaycheckPlan } from "@/lib/paycheck-schedule";
+import {
+  describeCadence,
+  monthlyDayFor,
+  type PaycheckCadence,
+  type PaycheckPlan,
+} from "@/lib/paycheck-schedule";
 import type { PaycheckRow } from "@/lib/db/schema";
 
 /** The repeat options, in the order people actually reach for them. */
@@ -91,12 +96,13 @@ export function ScheduleDialog({
 
   const cadence: PaycheckCadence = React.useMemo(() => {
     if (repeat === "monthly") {
-      const day = Number(anchorDate.slice(8, 10)) || 1;
-      return { kind: "monthly", day };
+      // From the seeded run's day, not just the date: a clamped next payday
+      // (Nov 30 of a 31st run) must not lower the day.
+      return { kind: "monthly", day: monthlyDayFor(anchorDate, seed?.cadence ?? null) };
     }
     if (repeat === "custom") return { kind: "everyDays", days: Math.max(1, customDays) };
     return { kind: "everyDays", days: Number(repeat) };
-  }, [repeat, customDays, anchorDate]);
+  }, [repeat, customDays, anchorDate, seed]);
 
   const body = React.useMemo(
     () => ({

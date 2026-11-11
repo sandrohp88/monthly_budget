@@ -106,24 +106,27 @@ function mode(values: number[]): number | null {
  *
  * Monthly is checked first and separately from day-gaps: month lengths make a
  * monthly run land on gaps of 28-31 days, so a naive "most common gap" reads a
- * perfectly regular monthly series as noise. A run whose dates all share one
+ * perfectly regular monthly series as noise. A run whose dates all sit on one
  * day-of-month IS monthly, whatever the day counts say.
+ *
+ * "One day-of-month" is the run's LARGEST day D, clamped the way
+ * `generateDates` clamps: every date must equal min(D, days in its month). So
+ * Nov 30, Dec 31, Feb 28 reads as monthly on the 31st — the run "Once a month"
+ * on the 31st generates — while a run that is all 28ths stays on the 28th.
  */
 export function inferCadence(dates: readonly string[]): PaycheckCadence | null {
   if (dates.length < 2) return null;
   const sorted = [...dates].sort();
 
-  const days = sorted.map((d) => Number(d.slice(8, 10)));
-  const uniqueDays = new Set(days);
-  if (uniqueDays.size === 1) {
-    // Every date on the same day-of-month. Confirm the months actually step by
-    // one, so a coincidental pair (Jan 1, Jun 1) isn't read as monthly.
-    const months = sorted.map((d) => {
-      const [y, m] = d.split("-").map(Number);
-      return y! * 12 + m!;
-    });
+  const parts = sorted.map((d) => d.split("-").map(Number) as [number, number, number]);
+  const monthDay = Math.max(...parts.map(([, , d]) => d));
+  if (parts.every(([y, m, d]) => d === Math.min(monthDay, daysInMonthUtc(y, m)))) {
+    // Every date on the same (clamped) day-of-month. Confirm the months
+    // actually step by one, so a coincidental pair (Jan 1, Jun 1) isn't read
+    // as monthly.
+    const months = parts.map(([y, m]) => y * 12 + m);
     const steps = months.slice(1).map((m, i) => m - months[i]!);
-    if (steps.every((s) => s === 1)) return { kind: "monthly", day: days[0]! };
+    if (steps.every((s) => s === 1)) return { kind: "monthly", day: monthDay };
   }
 
   const gaps = sorted
@@ -143,6 +146,23 @@ export function inferCadence(dates: readonly string[]): PaycheckCadence | null {
       : [...gaps].sort((a, b) => a - b)[Math.floor((gaps.length - 1) / 2)]!;
   if (best <= 0) return null;
   return { kind: "everyDays", days: best };
+}
+
+/**
+ * The day-of-month a "Once a month" schedule uses, read from the dialog's
+ * payday date. Normally that date's day. But when editing a monthly run on,
+ * say, the 31st, the next payday can be Nov 30 or Feb 28 — the 31st clamped to
+ * a short month. Reading the day off that date would lower the run to the
+ * 30th/28th and move every later payday, so a month's LAST day that is the
+ * clamped form of the existing schedule's larger day keeps that day.
+ */
+export function monthlyDayFor(anchorDate: string, existing: PaycheckCadence | null): number {
+  const [y, m, d] = anchorDate.split("-").map(Number);
+  if (!y || !m || !d) return 1;
+  if (existing?.kind === "monthly" && existing.day > d && d === daysInMonthUtc(y, m)) {
+    return existing.day;
+  }
+  return d;
 }
 
 /** Human wording for a cadence — shared by the dialog and the summary row. */
