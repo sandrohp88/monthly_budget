@@ -17,6 +17,15 @@ import {
   oneTimeExpenses,
   paychecks,
   creditCardStatements,
+  billPaymentOverrides,
+  billPaymentStates,
+  variableBills,
+  variableBillCards,
+  creditCardPaymentOverrides,
+  categories,
+  creditCardPromos,
+  creditCardPromoPayments,
+  assets,
 } from "./db/schema";
 import { newId } from "./ids";
 import { buildProjection } from "./projection-server";
@@ -32,7 +41,29 @@ import {
   upsertCreditCardPaymentOverride,
   upsertPlaidAccount,
 } from "./repos";
-import { BACKUP_SCHEMA_VERSION, backupImportSchema, type BackupImportInput } from "./validation";
+import {
+  BACKUP_SCHEMA_VERSION,
+  MAX_ABS_CENTS,
+  assetCreateSchema,
+  backupImportSchema,
+  billCreateSchema,
+  billPaymentOverrideSchema,
+  billPaymentStateSchema,
+  cardPaymentOpSchema,
+  categoryCreateSchema,
+  creditCardCreateSchema,
+  creditCardPaymentOverrideSchema,
+  extraCreateSchema,
+  paycheckCreateSchema,
+  paycheckUpdateSchema,
+  promoCreateSchema,
+  promoPaymentCreateSchema,
+  settingsUpdateSchema,
+  statementCreateSchema,
+  statementUpdateSchema,
+  variableBillCreateSchema,
+  type BackupImportInput,
+} from "./validation";
 import { and, eq } from "drizzle-orm";
 
 let dbDir: string;
@@ -474,6 +505,364 @@ describe("backup import / semantic round trip", () => {
     expect(projectionAfter?.rows).toEqual(projectionBefore?.rows);
     expect(projectionAfter?.startingBalanceCents).toBe(projectionBefore?.startingBalanceCents);
     expect(projectionAfter?.projectionMonths).toBe(projectionBefore?.projectionMonths);
+  });
+
+  // DATA-1 (audit 2026-11-10): export and import must share one value domain.
+  // A statement PATCHed to a negative balance (a card carrying a credit) used
+  // to export fine and then fail the import schema, so the user's backup and
+  // the pre-import snapshot silently stopped restoring. Every row below is
+  // first parsed by the WRITE schema that guards its real write path, so the
+  // seed holds only values the app can actually store — at their bounds.
+  async function seedBoundaries(userId: string) {
+    const db = getDb();
+    const ok = <T,>(schema: { parse: (v: unknown) => T }, input: unknown): T => schema.parse(input);
+    const MAX = MAX_ABS_CENTS;
+    const long = (n: number) => "x".repeat(n);
+
+    db.insert(settings)
+      .values({
+        id: newId(),
+        userId,
+        ...ok(settingsUpdateSchema, {
+          startingBalanceCents: -MAX,
+          startingBalanceAsOf: "2026-09-01",
+          defaultPaycheckCents: 0,
+          firstPaydayDate: "2026-09-25",
+          payFrequencyDays: 60,
+          projectionMonths: 36,
+          currency: "USD",
+          timezone: "UTC",
+        }),
+      })
+      .run();
+
+    db.insert(creditCards)
+      .values({
+        id: "lo",
+        userId,
+        ...ok(creditCardCreateSchema, {
+          name: "Card in credit",
+          statementDay: 1,
+          dueDay: 31,
+          gracePeriodDays: 0,
+          currentBalanceCents: 0,
+          creditLimitCents: null,
+          notes: null,
+        }),
+      })
+      .run();
+    db.insert(creditCards)
+      .values({
+        id: "hi",
+        userId,
+        ...ok(creditCardCreateSchema, {
+          name: long(80),
+          statementDay: 31,
+          dueDay: 1,
+          statementCycleMode: "interval_days",
+          statementCycleAnchorDate: "2026-09-01",
+          statementCycleIntervalDays: 366,
+          gracePeriodDays: 60,
+          currentBalanceCents: MAX,
+          creditLimitCents: MAX,
+          autoPay: true,
+          notes: long(500),
+        }),
+      })
+      .run();
+
+    db.insert(bills)
+      .values({
+        id: "bill-lo",
+        userId,
+        ...ok(billCreateSchema, {
+          name: "Free tier",
+          category: "Other",
+          amountCents: 0,
+          intervalMonths: 1,
+          anchorDate: "2026-09-01",
+          matchAlias: null,
+          notes: null,
+        }),
+      })
+      .run();
+    db.insert(bills)
+      .values({
+        id: "bill-hi",
+        userId,
+        ...ok(billCreateSchema, {
+          name: long(80),
+          category: long(50),
+          amountCents: MAX,
+          intervalMonths: 120,
+          anchorDate: "2026-09-01",
+          paidViaCardId: "hi",
+          matchAlias: long(200),
+          notes: long(500),
+        }),
+      })
+      .run();
+    db.insert(billPaymentOverrides)
+      .values({
+        id: "bpo",
+        userId,
+        billId: "bill-lo",
+        ...ok(billPaymentOverrideSchema, { dueDate: "2026-10-01", amountCents: 0, notes: null }),
+      })
+      .run();
+    db.insert(billPaymentStates)
+      .values({
+        id: "bps-0",
+        userId,
+        billId: "bill-lo",
+        ...ok(billPaymentStateSchema, {
+          dueDate: "2026-10-01",
+          state: "sent",
+          amountCents: 0,
+          markedDate: "2026-09-30",
+        }),
+      })
+      .run();
+    db.insert(billPaymentStates)
+      .values({
+        id: "bps-null",
+        userId,
+        billId: "bill-hi",
+        ...ok(billPaymentStateSchema, {
+          dueDate: "2026-10-01",
+          state: "paid_externally",
+          amountCents: null,
+          markedDate: "2026-09-30",
+          notes: null,
+        }),
+      })
+      .run();
+
+    const { cardIds: vbCards, ...vb } = ok(variableBillCreateSchema, {
+      name: "Card-paid groceries",
+      category: "Food",
+      amountCents: 0,
+      intervalMonths: 120,
+      anchorDate: "2026-09-01",
+      cardIds: ["lo"],
+      notes: null,
+    });
+    db.insert(variableBills).values({ id: "vb", userId, ...vb }).run();
+    for (const cardId of vbCards) {
+      db.insert(variableBillCards).values({ id: newId(), userId, variableBillId: "vb", cardId }).run();
+    }
+
+    db.insert(creditCardPaymentOverrides)
+      .values({
+        id: "cpo-0",
+        userId,
+        cardId: "lo",
+        ...ok(creditCardPaymentOverrideSchema, { dueDate: "2026-10-31", amountCents: 0, notes: null }),
+      })
+      .run();
+    const put = ok(cardPaymentOpSchema, { op: "put", cardId: "hi", dueDate: "2026-11-01", amountCents: MAX });
+    if (put.op !== "put") throw new Error("unreachable");
+    db.insert(creditCardPaymentOverrides)
+      .values({ id: "cpo-max", userId, cardId: put.cardId, dueDate: put.dueDate, amountCents: put.amountCents })
+      .run();
+
+    db.insert(paychecks)
+      .values({
+        id: "clawback",
+        userId,
+        ...ok(paycheckCreateSchema, { payDate: "2026-10-15", amountCents: -MAX, note: long(120), isOneTime: true }),
+      })
+      .run();
+    db.insert(paychecks)
+      .values({
+        id: "zero-pay",
+        userId,
+        ...ok(paycheckUpdateSchema, {
+          payDate: "2026-10-01",
+          amountCents: 0,
+          note: null,
+          actualReceived: true,
+          actualAmountCents: -MAX,
+        }),
+      })
+      .run();
+
+    db.insert(oneTimeExpenses)
+      .values({
+        id: "refund",
+        userId,
+        ...ok(extraCreateSchema, {
+          date: "2026-10-02",
+          description: "Refund",
+          amountCents: -MAX,
+          category: "Other",
+          paidViaCardId: "lo",
+          notes: null,
+        }),
+      })
+      .run();
+    db.insert(oneTimeExpenses)
+      .values({
+        id: "big-extra",
+        userId,
+        ...ok(extraCreateSchema, {
+          date: "2026-10-03",
+          description: long(120),
+          amountCents: MAX,
+          category: long(50),
+          notes: long(500),
+        }),
+      })
+      .run();
+
+    db.insert(categories)
+      .values({
+        id: "cat-neg",
+        userId,
+        ...ok(categoryCreateSchema, { name: long(50), color: "#4ade80", kind: "income", budgetAmountCents: -MAX }),
+      })
+      .run();
+    db.insert(categories)
+      .values({
+        id: "cat-zero",
+        userId,
+        ...ok(categoryCreateSchema, { name: "Zero", color: "#000000", budgetAmountCents: 0 }),
+      })
+      .run();
+
+    // The defect's case: created at $0 / minimum 0, then PATCHed to a credit
+    // balance of -$25 (PATCH /api/credit-cards/statements/{id}). The Plaid
+    // liabilities sync stores the same negative value unclamped.
+    db.insert(creditCardStatements)
+      .values({
+        id: "credit",
+        cardId: "lo",
+        ...ok(statementCreateSchema, {
+          statementDate: "2026-09-01",
+          dueDate: "2026-09-30",
+          statementBalanceCents: 0,
+          minimumPaymentCents: 0,
+          notes: null,
+        }),
+        ...ok(statementUpdateSchema, { statementBalanceCents: -2500 }),
+      })
+      .run();
+    db.insert(creditCardStatements)
+      .values({
+        id: "max",
+        cardId: "hi",
+        ...ok(statementCreateSchema, {
+          statementDate: "2026-09-30",
+          dueDate: "2026-10-31",
+          statementBalanceCents: MAX,
+          minimumPaymentCents: MAX,
+          notes: long(500),
+        }),
+        ...ok(statementUpdateSchema, { paidAmountCents: -MAX, paidDate: "2026-10-30" }),
+      })
+      .run();
+
+    // Same default the promos POST route applies to an omitted remaining.
+    const promoRow = (input: unknown) => {
+      const p = ok(promoCreateSchema, input);
+      return { ...p, remainingAmountCents: p.remainingAmountCents ?? p.originalAmountCents };
+    };
+    db.insert(creditCardPromos)
+      .values({
+        id: "promo-lo",
+        userId,
+        cardId: "lo",
+        ...promoRow({
+          description: "Paid off",
+          originalAmountCents: 1,
+          remainingAmountCents: 0,
+          startDate: "2026-09-01",
+          endDate: "2026-09-01",
+          monthlyPaymentCents: null,
+          notes: null,
+          authoritativeSource: null,
+        }),
+      })
+      .run();
+    db.insert(creditCardPromos)
+      .values({
+        id: "promo-hi",
+        userId,
+        cardId: "hi",
+        ...promoRow({
+          description: long(120),
+          originalAmountCents: MAX,
+          remainingAmountCents: MAX,
+          startDate: "2026-09-01",
+          endDate: "2027-09-01",
+          monthlyPaymentCents: MAX,
+          notes: long(500),
+          authoritativeSource: "manual_reconciliation",
+        }),
+      })
+      .run();
+    db.insert(creditCardPromoPayments)
+      .values({
+        id: "pp-1",
+        userId,
+        promoId: "promo-lo",
+        ...ok(promoPaymentCreateSchema, { dueDate: "2026-09-30", amountCents: 1, note: null }),
+      })
+      .run();
+    db.insert(creditCardPromoPayments)
+      .values({
+        id: "pp-max",
+        userId,
+        promoId: "promo-hi",
+        ...ok(promoPaymentCreateSchema, { dueDate: "2026-10-31", amountCents: MAX, note: long(500) }),
+      })
+      .run();
+
+    db.insert(assets)
+      .values({
+        id: "liability",
+        userId,
+        ...ok(assetCreateSchema, { name: "Underwater", valueCents: -MAX, category: "vehicle", asOfDate: "2026-09-01" }),
+      })
+      .run();
+    db.insert(assets)
+      .values({
+        id: "house",
+        userId,
+        ...ok(assetCreateSchema, {
+          name: long(80),
+          valueCents: MAX,
+          category: "real_estate",
+          notes: long(500),
+          asOfDate: "2026-09-01",
+        }),
+      })
+      .run();
+  }
+
+  it("restores every boundary value a write path accepts (one value domain)", async () => {
+    const user = await makeUser("a@example.com");
+    await seedBoundaries(user.id);
+    const before = await exportAll(user.id);
+
+    const parsed = backupImportSchema.safeParse(JSON.parse(JSON.stringify(before)));
+    // List every rejected field, so a future gap names itself.
+    expect(
+      parsed.success ? [] : parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`),
+    ).toEqual([]);
+
+    // Drift the defect's row so the restore has to put it back.
+    getDb()
+      .update(creditCardStatements)
+      .set({ statementBalanceCents: 0 })
+      .where(eq(creditCardStatements.id, "credit"))
+      .run();
+    await importAll(user.id, parsed.data!);
+
+    const after = await exportAll(user.id);
+    expect(comparable(after)).toEqual(comparable(before));
+    expect(after.creditCardStatements.find((s) => s.id === "credit")?.statementBalanceCents).toBe(-2500);
+    expect(after.creditCards.find((c) => c.id === "lo")?.creditLimitCents).toBeNull();
   });
 });
 
