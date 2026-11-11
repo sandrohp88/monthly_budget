@@ -79,6 +79,7 @@ export function CardDetailClient({
   linkedBillCount,
   paymentsByPromoId,
   scheduledCardPayments,
+  promoCashProjectedCents,
   mask,
   institution,
   accountBalanceCents,
@@ -90,8 +91,13 @@ export function CardDetailClient({
   estimate: CycleEstimate | null;
   linkedBillCount: number;
   paymentsByPromoId: Record<string, PromoScheduledPayment[]>;
-  /** Pending calendar paydowns on this card (credit the promo balance). */
+  /** Pending calendar paydowns on this card. */
   scheduledCardPayments: Array<{ date: string; amountCents: number }>;
+  /**
+   * Promo cash the projection still debits for this card after those paydowns
+   * (engine output, `promoCashByCard`); null when no projection was built.
+   */
+  promoCashProjectedCents: number | null;
   mask: string | null;
   institution: string | null;
   accountBalanceCents: number | null;
@@ -150,12 +156,10 @@ export function CardDetailClient({
 
   const activePromos = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);
   const promoRemainingCents = activePromos.reduce((s, p) => s + p.remainingAmountCents, 0);
-  // Calendar paydowns are applied to the card and then credited against the
-  // promo balance, so promo schedules can be fully/partly covered before they
-  // reach the calendar. Surface that in the planner instead of leaving the user
-  // to wonder why their promo payments don't show.
+  // Calendar paydowns cover the card's due marker first and only then promo
+  // cash (§17a), so the planner never derives "left to cover" itself: it shows
+  // the promo cash the projection still debits after them.
   const scheduledCardPaymentCents = scheduledCardPayments.reduce((s, p) => s + p.amountCents, 0);
-  const promoLeftToCoverCents = Math.max(0, promoRemainingCents - scheduledCardPaymentCents);
 
   const openStatements = statements.filter(isStatementOpen);
   // Cash needed to avoid interest — the Interest Saving Balance when the card
@@ -580,19 +584,15 @@ export function CardDetailClient({
                       </React.Fragment>
                     ))}
                     ).{" "}
-                    {promoLeftToCoverCents === 0 ? (
-                      <>
-                        That covers this card&apos;s full promo balance, so promo payment plans
-                        below are absorbed by those payments and won&apos;t show separately on the
-                        calendar.
-                      </>
+                    {promoCashProjectedCents === null ? null : promoCashProjectedCents === 0 ? (
+                      <>After them, the projection shows no promo cash left for this card.</>
                     ) : (
                       <>
-                        They cover part of the promo balance —{" "}
+                        After them, the projection still shows{" "}
                         <span className="font-semibold tabular text-[var(--text-0)]">
-                          <Money cents={promoLeftToCoverCents} />
+                          <Money cents={promoCashProjectedCents} />
                         </span>{" "}
-                        still to plan.
+                        of promo cash for this card — see the calendar.
                       </>
                     )}
                   </div>

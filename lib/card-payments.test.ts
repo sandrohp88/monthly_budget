@@ -313,11 +313,18 @@ describe("scheduled paydowns (pays-down overrides)", () => {
     const june = markersOf(r).find((e) => e.date === "2026-06-10");
     const july = markersOf(r).find((e) => e.date === "2026-07-10");
     expect(june).toMatchObject({ estimated: true, paymentDueCents: 200_00, scheduledCoverCents: 200_00 });
-    // Same running balance, same $200 — a run rate, not a second credit.
+    // This PR keeps the pre-existing carried-balance rule for estimate cover:
+    // estimate markers are treated as ONE carried balance, so the same $200
+    // shows as cover on 06-10 and on 07-10. For a card with ongoing spending
+    // that over-credits 07-10 and hides its alert. Whether a later cycle's
+    // estimate should be covered by an earlier paydown is an open question
+    // recorded in the 2026-11-10 review; behavior unchanged here.
     expect(july).toMatchObject({ estimated: true, paymentDueCents: 200_00, scheduledCoverCents: 200_00 });
     expect(cashOf(r).find((e) => e.date === "2026-05-10")?.amountCents).toBe(50_00);
     expect(cashOf(r).find((e) => e.date === "2026-06-10")?.amountCents).toBe(50_00);
     expect(cashTotal(r)).toBe(300_00);
+    // The card page's promo planner reads this: the full $100 is still owed.
+    expect(r.promoCashByCard).toEqual({ c1: 100_00 });
   });
 
   it("a paydown dragged after its target still replaces that target's promo chunk", () => {
@@ -1078,8 +1085,8 @@ describe("projectCardPayments — one budget per paydown across every generator 
       const statementCover = markersOf(after)
         .filter((m) => !m.estimated)
         .reduce((s, m) => s + (m.scheduledCoverCents ?? 0), 0);
-      // Estimated cycles share one running balance: the same cover repeats on
-      // every later cycle (gotcha 26), so it is one credit, not one per cycle.
+      // Math.max deliberately counts the carried estimate balance once, so this
+      // does not test the per-cycle question (see the 2026-11-10 review).
       const estimateCover = Math.max(
         0,
         ...markersOf(after)
@@ -1103,6 +1110,28 @@ describe("projectCardPayments — one budget per paydown across every generator 
       }
     });
   }
+
+  it("promoCashByCard is the promo cash the projection still debits", () => {
+    // Read by the card page's promo planner instead of its own arithmetic.
+    const promoCash = (r: Result) =>
+      cashOf(r)
+        .filter((e) => e.description.includes("promo"))
+        .reduce((s, e) => s + e.amountCents, 0);
+    const cases: Array<{ overrides: CreditCardPaymentOverrideRow[]; expected: number }> = [
+      { overrides: [], expected: 100_00 },
+      // Marker first: a 200 paydown leaves both 50 chunks owed.
+      { overrides: [paydown("a", "2026-05-20", 200_00)], expected: 100_00 },
+      { overrides: [paydown("a", "2026-05-20", 250_00)], expected: 50_00 },
+      { overrides: [paydown("a", "2026-05-05", 400_00)], expected: 0 },
+      // A $0 skip on 06-10 projects no cash there.
+      { overrides: [override({ dueDate: "2026-06-10", amountCents: 0 })], expected: 50_00 },
+    ];
+    for (const { overrides, expected } of cases) {
+      const r = projectCardPayments({ ...estimateWithPromo, cardPaymentOverrides: overrides });
+      expect(r.promoCashByCard["c1"] ?? 0).toBe(expected);
+      expect(promoCash(r)).toBe(expected);
+    }
+  });
 });
 
 describe("projectCardPayments — a plain planned payment covers a statement marker", () => {

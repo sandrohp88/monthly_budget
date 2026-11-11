@@ -77,6 +77,12 @@ export type ProjectCardPaymentsResult = {
   promoDriftByCard: Record<string, number>;
   /** Variable-bill category names keyed by `cardId:dueDate` (for the UI). */
   variableBillCategoriesByKey: Record<string, string[]>;
+  /**
+   * Per-card promo cash this projection still debits, after paydowns, plan
+   * prepayment and skips (cards with none are absent). The card page's promo
+   * planner reads this so its text can never disagree with the calendar.
+   */
+  promoCashByCard: Record<string, number>;
 };
 
 const overrideKey = (cardId: string, dueDate: string) => `${cardId}:${dueDate}`;
@@ -889,6 +895,11 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   // Skipped chunks carry no cash but must stay visible (resettable).
   const promoCashExtras = promoExtras.filter((e) => e.amountCents > 0 || e.skipped);
   const variableCashExtras = variableBillExtras.filter((e) => e.amountCents > 0 || e.skipped);
+  const promoCashByCard: Record<string, number> = {};
+  for (const e of promoCashExtras) {
+    if (e.sourceId == null || e.amountCents <= 0) continue;
+    promoCashByCard[e.sourceId] = (promoCashByCard[e.sourceId] ?? 0) + e.amountCents;
+  }
 
   const markerExtras: OneTimeExpense[] = markers.map((m) => {
     const cover = Math.min(coverByMarker.get(m) ?? 0, m.owedCents);
@@ -980,6 +991,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     extras: [...markerExtras, ...cashExtras],
     promoDriftByCard,
     variableBillCategoriesByKey,
+    promoCashByCard,
   };
 }
 
