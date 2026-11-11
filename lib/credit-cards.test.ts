@@ -19,6 +19,7 @@ import {
   promoScheduledPayments,
   promoMonthlyChunkAt,
   promoWhatIf,
+  statementCashDueCents,
   summarizeStatementBalances,
   totalDue,
 } from "./credit-cards";
@@ -1080,5 +1081,42 @@ describe("openStatementObligation", () => {
       promo({ id: "ep4", remainingAmountCents: 210_32, endDate: "2027-01-07", monthlyPaymentCents: 35_06 }),
     ];
     expect(openStatementObligation([s], plans).cents).toBe(832_26);
+  });
+});
+
+// DATA-1: a negative statement balance is a legitimate credit (the issuer owes
+// the user, after an overpayment or a refund). PATCH and the Plaid liabilities
+// sync store it as-is, and a backup now restores it, so every reader must see
+// "nothing due" — never a negative amount due.
+describe("negative statement balance (card carries a credit)", () => {
+  const credit = (over: Partial<CreditCardStatementRow> = {}) =>
+    statement({ statementBalanceCents: -25_00, dueDate: "2026-08-07", ...over });
+
+  it("has no cash due and is not open", () => {
+    expect(statementCashDueCents(credit())).toBe(0);
+    expect(statementCashDueCents(credit({ minimumPaymentCents: 0 }))).toBe(0);
+    expect(isStatementOpen(credit())).toBe(false);
+    expect(totalDue([credit(), statement({ id: "s2", statementBalanceCents: 40_00 })])).toBe(40_00);
+  });
+
+  it("has no interest-saving cash due, with or without promos", () => {
+    const plan = promo({ remainingAmountCents: 100_00, endDate: "2026-12-07", monthlyPaymentCents: 20_00 });
+    expect(interestSavingCashDueCents(credit(), [])).toBe(0);
+    expect(interestSavingCashDueCents(credit({ minimumPaymentCents: 0 }), [plan])).toBe(0);
+    expect(paidWithoutInterest(credit(), [plan])).toBe(true);
+  });
+
+  it("adds nothing to the open obligation, even with a recorded payment", () => {
+    expect(openStatementObligation([credit()], [])).toEqual({ cents: 0, count: 0, earliestDueDate: null });
+    expect(
+      openStatementObligation([credit({ paidAmountCents: 10_00, paidDate: "2026-08-01" })], []),
+    ).toEqual({ cents: 0, count: 0, earliestDueDate: null });
+    // It does not net down another statement's obligation either.
+    expect(
+      openStatementObligation(
+        [credit(), statement({ id: "s2", statementBalanceCents: 40_00, dueDate: "2026-09-07" })],
+        [],
+      ),
+    ).toEqual({ cents: 40_00, count: 1, earliestDueDate: "2026-09-07" });
   });
 });

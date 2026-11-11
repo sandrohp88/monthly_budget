@@ -786,7 +786,10 @@ const importCreditCardStatementSchema = z.object({
   statementDate: isoDate,
   dueDate: isoDate,
   dueDateUserOverride: z.boolean().optional(),
-  statementBalanceCents: cents.refine((n) => n >= 0, "Balance must be non-negative"),
+  // Negative = the card carries a credit (overpayment, refund). PATCH and the
+  // Plaid liabilities sync store it, so the backup must restore it; readers
+  // treat it as nothing due (statementCashDueCents).
+  statementBalanceCents: cents,
   minimumPaymentCents: cents.nullable().optional(),
   paidAmountCents: cents.nullable().optional(),
   paidDate: isoDate.nullable().optional(),
