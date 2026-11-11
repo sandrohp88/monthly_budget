@@ -1258,7 +1258,9 @@ allocations reserve the remainder. `awaitingPost` keeps the raw bank balance
 visible alongside the planning balance and prevents date-based phantom settlement.
 
 `lib/card-payment-reconciliation.ts` is pure. Automatic matches require exact
-cents, a unique pairing within -3/+14 days, and either card-name/payment wording
+cents (or within `NEAR_AMOUNT_CENTS` = $1, which settles the plan in full; exact
+pairs resolve first, and a plan or debit with any exact candidate never enters
+the near pass), a unique pairing within -3/+14 days, and either card-name/payment wording
 or a matching posted receipt on the explicitly linked card within three days of
 the checking debit. Card-side receipts alone NEVER release checking cash. Only
 active depository starting-balance accounts provide source debits. Ambiguous or

@@ -52,8 +52,8 @@ export type CardPaymentReceipt = { cardId: string; date: string; amountCents: nu
 /** Posted CHECKING debits only, supplied by the user-scoped balance-account
  * query. A card-side credit or a paid statement cannot prove checking posted.
  * Explicit allocations win; automatic matches require the amount (exact, or
- * within NEAR_AMOUNT_CENTS, which settles the plan in full), a
- * unique pairing within -3/+14 days, and a name: the card nickname with
+ * within NEAR_AMOUNT_CENTS, which settles the plan in full; exact pairs are
+ * resolved first), a unique pairing within -3/+14 days, and a name: the card nickname with
  * payment wording, or the card's issuer with payment or transfer wording
  * (banks usually describe the issuer: "Capital One Online Pmt" pays a
  * Quicksilver, "Paypal Inst Xfer" pays PayPal Credit). Ambiguity keeps cash
@@ -88,7 +88,7 @@ export function reconcilePlannedCardPayments(
     if (linked > 0 && Math.abs(planned - linked) <= NEAR_AMOUNT_CENTS) posted.set(key, planned);
   }
 
-  const pairs: Array<{ key: string; draftId: string; cents: number }> = [];
+  const pairs: Array<{ key: string; draftId: string; cents: number; exact: boolean }> = [];
   for (const p of plans) {
     const key = cardPaymentKey(p.cardId, p.date);
     if (explicitlyAssigned.has(key)) continue;
@@ -114,13 +114,24 @@ export function reconcilePlannedCardPayments(
         r.amountCents === d.amountCents && Math.abs(daysBetween(d.date, r.date)) <= 3);
       if (!namedPayment && !receipt) continue;
       // A near-amount match settles the plan in full (see NEAR_AMOUNT_CENTS).
-      pairs.push({ key, draftId: d.id, cents: p.amountCents });
+      pairs.push({ key, draftId: d.id, cents: p.amountCents, exact });
     }
   }
-  for (const pair of pairs) {
-    if (pairs.filter((p) => p.key === pair.key).length !== 1) continue;
-    if (pairs.filter((p) => p.draftId === pair.draftId).length !== 1) continue;
-    posted.set(pair.key, pair.cents);
-  }
+  // Exact cents decide first, so the dollar tolerance cannot make two exact
+  // payments look ambiguous ($500.00 and $500.50 on two Chase cards). A plan
+  // or debit with ANY exact candidate is decided by the exact pass alone: if
+  // that pass leaves it unmatched, the near pass must not guess it away.
+  const settleUnique = (candidates: typeof pairs) => {
+    for (const pair of candidates) {
+      if (candidates.filter((p) => p.key === pair.key).length !== 1) continue;
+      if (candidates.filter((p) => p.draftId === pair.draftId).length !== 1) continue;
+      posted.set(pair.key, pair.cents);
+    }
+  };
+  const exactPairs = pairs.filter((p) => p.exact);
+  settleUnique(exactPairs);
+  const decidedKeys = new Set(exactPairs.map((p) => p.key));
+  const decidedDrafts = new Set(exactPairs.map((p) => p.draftId));
+  settleUnique(pairs.filter((p) => !p.exact && !decidedKeys.has(p.key) && !decidedDrafts.has(p.draftId)));
   return posted;
 }
