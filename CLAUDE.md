@@ -602,9 +602,11 @@ INTEREST AlertBar (`findUncoveredCardDues`). Moving parts:
 10. **Export/import** — extend `exportAll()`, the `import*Schema` in `lib/validation.ts` **and**
     `importInsideTransaction()` in `lib/repos.ts`, then bump `BACKUP_SCHEMA_VERSION`. Every new
     user-authored column must survive the round trip — `lib/repos.import.test.ts` ("semantic round
-    trip") compares export → import → export and the projection; extend its seed. Import is
-    two-step: `POST /api/backup/import` previews, `?confirm=1` snapshots to `data/pre-import/`
-    and then replaces.
+    trip") compares export → import → export and the projection; extend its seed. The import
+    schema must accept every value ANY write path can store (write schemas, Plaid sync) — one
+    rejected field fails the whole restore; extend `seedBoundaries` there with the field's bounds,
+    each parsed by its write schema. Import is two-step: `POST /api/backup/import` previews,
+    `?confirm=1` snapshots to `data/pre-import/` and then replaces.
 11. **README** — update the deploy guide if needed
 12. `npm run check` then commit
 

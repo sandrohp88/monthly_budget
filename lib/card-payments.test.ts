@@ -1108,3 +1108,33 @@ describe("projectCardPayments — userScheduled flag", () => {
     expect(merged?.userScheduled).toBe(true);
   });
 });
+
+// DATA-1: a negative statement balance (the card carries a credit) is stored
+// and restored as-is; the projection must treat it as nothing due.
+describe("projectCardPayments — negative statement balance", () => {
+  it("raises no due marker and debits no cash, on time or overdue", () => {
+    for (const dueDate of ["2026-06-10", "2026-05-01"]) {
+      const r = projectCardPayments({
+        ...EMPTY,
+        activeCards: [card()],
+        statements: [stmt({ statementBalanceCents: -25_00, minimumPaymentCents: 0, dueDate })],
+      });
+      expect(markersOf(r)).toEqual([]);
+      expect(cashTotal(r)).toBe(0);
+    }
+  });
+
+  it("does not inflate the open-cycle estimate", () => {
+    // Live balance $300; a -$25 credit statement must not count as -$25 unpaid
+    // (which would grow the estimate to $325).
+    const r = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+      statements: [stmt({ statementBalanceCents: -25_00, dueDate: "2026-05-01" })],
+    });
+    const june = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(june).toMatchObject({ estimated: true, paymentDueCents: 300_00 });
+    expect(markersOf(r).every((e) => (e.paymentDueCents ?? 0) >= 0)).toBe(true);
+    expect(cashTotal(r)).toBe(0);
+  });
+});
