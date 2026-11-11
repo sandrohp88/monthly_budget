@@ -6,9 +6,10 @@ const TEST_PASSWORD = "supersecret1";
 type Cookies = Parameters<ReturnType<Page["context"]>["addCookies"]>[0];
 
 // One credential POST per run: the app rate-limits logins per IP (leaky
-// bucket, 5 attempts refilling at 0.1/s — see middleware.ts), so a fresh
-// login per spec gets the tail of the suite rate-limited once the specs run
-// fast. The suite is single-worker, so module state survives across tests.
+// bucket: a burst of 5, then 5 per 15 minutes — see LOGIN_RATE_LIMIT in
+// lib/rate-limit.ts), so a fresh login per spec gets the tail of the suite
+// rate-limited. The whole suite must stay at 5 credential POSTs or fewer.
+// The suite is single-worker, so module state survives across tests.
 let savedCookies: Cookies | null = null;
 
 /**

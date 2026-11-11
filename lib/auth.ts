@@ -35,7 +35,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           .from(users)
           .where(eq(users.email, parsed.data.email.toLowerCase()))
           .get();
-        if (!row) return null;
+        if (!row) {
+          // Same argon2 cost as a wrong password, so response time does not
+          // reveal which emails have an account.
+          await argon2.verify(await getDummyHash(), parsed.data.password);
+          return null;
+        }
 
         const ok = await argon2.verify(row.passwordHash, parsed.data.password);
         if (!ok) return null;
@@ -53,6 +58,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
 export async function hashPassword(plain: string): Promise<string> {
   return argon2.hash(plain, { type: argon2.argon2id, memoryCost: 19_456, timeCost: 2 });
+}
+
+// A hash with the real parameters, verified against when the email has no
+// account. Computed once per process; never logged. A failed hash is not
+// cached, so the next login retries it.
+let dummyHash: Promise<string> | null = null;
+function getDummyHash(): Promise<string> {
+  dummyHash ??= hashPassword("no-such-account-dummy-password").catch((err: unknown) => {
+    dummyHash = null;
+    throw err;
+  });
+  return dummyHash;
 }
 
 /**
