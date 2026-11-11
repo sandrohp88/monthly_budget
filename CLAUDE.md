@@ -1019,8 +1019,12 @@ received. The sync's re-apply (`applyIncomeAllocations(..., { automatic: true })
 never REOPENS an income the split still names while the deposit is still a
 posted credit, even when a bank correction makes the split invalid or the
 income's date/amount moved: that money is in the live balance, so reopening
-projects it twice (review 2026-11-10 PAY-1). Transactions flags the split
-instead. Un-marking received on `/paychecks` (or archiving the row) clears
+projects it twice (review 2026-11-10 PAY-1). A bank correction of the deposit
+(`findInvalidSplitDraftIds`) and a moved pay date
+(`findOrphanedAllocationDraftIds`) are flagged for review on Transactions. A
+later change to the income's planned amount keeps it received with NO flag:
+the money arrived and the recorded amount is unchanged; the user un-marks
+received on `/paychecks` if that is wrong. Un-marking received on `/paychecks` (or archiving the row) clears
 `settledByDraftId` so the deposit can re-settle — un-mark every income that
 deposit settled, or the draft stays consumed. Auto-reconciled rows show an
 AUTO pill next to RECEIVED.

@@ -3213,9 +3213,13 @@ export async function reopenPaychecksSettledByDraft(
  * split no longer fits (a bank correction) or the income moved (a new pay
  * date or plan amount). The money arrived and the live balance holds it:
  * reopening would project it again as expected income (review 2026-11-10
- * PAY-1). Transactions flags such a split for review (findInvalidSplitDraftIds,
- * findOrphanedAllocationDraftIds). A removed or no-longer-posted deposit, an
- * income dropped from the split, and an explicit user save still reopen.
+ * PAY-1). A bank correction of the deposit (findInvalidSplitDraftIds) and a
+ * moved pay date (findOrphanedAllocationDraftIds) are flagged for review on
+ * Transactions. A later change to the income's planned amount keeps it
+ * received WITHOUT a flag: the money did arrive and the recorded amount is
+ * unchanged; the user un-marks received on /paychecks if that is wrong.
+ * A removed or no-longer-posted deposit, an income dropped from the split,
+ * and an explicit user save still reopen.
  */
 export async function applyIncomeAllocations(
   userId: string,
