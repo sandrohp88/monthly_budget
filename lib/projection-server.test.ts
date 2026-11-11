@@ -1194,6 +1194,52 @@ describe("buildProjection pending posting (money out, not yet posted)", () => {
     expect(projection?.rows.find((r) => r.date === "2026-05-04")?.balanceCents).toBe(10_000_00);
   });
 
+  it("debits an old unposted sent mark today so the walk agrees with In flight", async () => {
+    // findHeldOccurrences reaches back to a `sent` mark of any age, so the
+    // In flight band counts it. The day walk used to look back only one bill
+    // interval before the start month, so a February mark on a May start
+    // never debited: In flight said $300 was held while today's balance
+    // still contained it.
+    const user = await makeUser();
+    await seedLinked(user.id, 10_000_00);
+    const bill = await createBill(user.id, {
+      name: "Storage Unit",
+      category: "Housing",
+      amountCents: 300_00,
+      intervalMonths: 1,
+      anchorDate: "2026-01-20",
+      autoPay: true,
+      paidViaCardId: null,
+      notes: null,
+      isActive: true,
+    });
+    await upsertBillPaymentState(user.id, bill!.id, {
+      dueDate: "2026-02-20",
+      state: "sent",
+      amountCents: null,
+      markedDate: "2026-02-21",
+      notes: null,
+    });
+
+    const projection = await buildProjection(user.id);
+    expect(projection?.startDate).toBe("2026-05-04");
+    expect(projection?.pendingPosting.totalHeldCents).toBe(300_00);
+    const today = projection?.rows.find((r) => r.date === "2026-05-04");
+    expect(today?.events).toContainEqual(
+      expect.objectContaining({
+        label: "Storage Unit",
+        amountCents: 300_00,
+        awaitingPost: true,
+        heldSinceDate: "2026-02-20",
+      }),
+    );
+    // Today's balance plus what is in flight is the bank balance again.
+    expect((today?.balanceCents ?? 0) + (projection?.pendingPosting.totalHeldCents ?? 0)).toBe(
+      10_000_00,
+    );
+    expect(today?.postedBalanceCents).toBe(10_000_00);
+  });
+
   it("holds the larger of the two when the bank sees more pending than bills explain", async () => {
     // $2,000 bill marked sent, but the bank shows $2,500 pending: the extra
     // $500 is some other unposted spend and still has to come out.

@@ -911,6 +911,168 @@ describe("soft vs posted balance", () => {
   });
 });
 
+describe("held occurrences older than one bill interval", () => {
+  // findHeldOccurrences scans back to `sent` marks of any age, and the
+  // "In flight" total counts them. The day walk must debit every one of them
+  // too, or the projection reads high by exactly the money that already left.
+  const heldEvents = (rows: ReturnType<typeof computeProjection>) =>
+    rows.flatMap((r) => r.events.map((e) => ({ date: r.date, ...e }))).filter((e) => e.awaitingPost);
+
+  it("rides a `sent` occurrence two months old forward to the start date", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startingBalanceCents: 1000_00,
+      startDate: "2026-11-01",
+      endDate: "2026-11-03",
+      bills: [
+        {
+          id: "b1",
+          name: "Rent",
+          amountCents: 200_00,
+          intervalMonths: 1,
+          anchorDate: "2026-01-30",
+          settledBeforeDate: "2026-11-01",
+          heldOccurrences: [
+            { date: "2026-09-30", amountCents: 200_00, reason: "sent", holdDate: "2026-10-01" },
+          ],
+        },
+      ],
+    });
+    expect(rows[0]).toMatchObject({
+      date: "2026-11-01",
+      balanceCents: 800_00,
+      // The bank has not moved it yet, so the posted series must not count it.
+      postedBalanceCents: 1000_00,
+    });
+    expect(rows[0]!.events).toEqual([
+      expect.objectContaining({
+        kind: "bill",
+        label: "Rent",
+        amountCents: 200_00,
+        sourceId: "b1",
+        sourceType: "bill",
+        originalAmountCents: 200_00,
+        awaitingPost: true,
+        heldSinceDate: "2026-09-30",
+      }),
+    ]);
+    expect(heldEvents(rows)).toHaveLength(1);
+    expect(rows[rows.length - 1]).toMatchObject({ balanceCents: 800_00, postedBalanceCents: 1000_00 });
+  });
+
+  it("debits a held occurrence three intervals old exactly once", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startingBalanceCents: 1000_00,
+      startDate: "2026-11-01",
+      endDate: "2026-11-30",
+      bills: [
+        {
+          id: "b1",
+          name: "Gym",
+          amountCents: 50_00,
+          intervalMonths: 1,
+          anchorDate: "2026-01-15",
+          settledBeforeDate: "2026-11-01",
+          heldOccurrences: [
+            { date: "2026-08-15", amountCents: 45_00, reason: "sent", holdDate: "2026-08-16" },
+          ],
+        },
+      ],
+    });
+    const held = heldEvents(rows);
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({ date: "2026-11-01", amountCents: 45_00, heldSinceDate: "2026-08-15" });
+    // 1000 − 45 held − 50 for the regular 2026-11-15 occurrence.
+    expect(rows[rows.length - 1]).toMatchObject({ balanceCents: 905_00, postedBalanceCents: 950_00 });
+  });
+
+  it("debits an old and an in-window held occurrence of one bill once each", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startingBalanceCents: 1000_00,
+      startDate: "2026-11-01",
+      endDate: "2026-11-10",
+      bills: [
+        {
+          id: "b1",
+          name: "Phone",
+          amountCents: 80_00,
+          intervalMonths: 1,
+          anchorDate: "2026-01-05",
+          settledBeforeDate: "2026-11-01",
+          heldOccurrences: [
+            { date: "2026-08-05", amountCents: 80_00, reason: "sent", holdDate: "2026-08-06" },
+            { date: "2026-11-05", amountCents: 80_00, reason: "unconfirmed", holdDate: "2026-11-05" },
+          ],
+        },
+      ],
+    });
+    const held = heldEvents(rows);
+    expect(held).toHaveLength(2);
+    expect(held).toEqual([
+      expect.objectContaining({ date: "2026-11-01", amountCents: 80_00, heldSinceDate: "2026-08-05" }),
+      expect.objectContaining({ date: "2026-11-05", amountCents: 80_00 }),
+    ]);
+    expect(held[1]!.heldSinceDate).toBeUndefined();
+    // Every event in the walk is one of the two held debits — nothing twice.
+    expect(rows.flatMap((r) => r.events)).toHaveLength(2);
+    expect(rows[rows.length - 1]).toMatchObject({ balanceCents: 840_00, postedBalanceCents: 1000_00 });
+  });
+
+  it("reaches back across a quarterly bill's intervals", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startingBalanceCents: 1000_00,
+      startDate: "2026-11-01",
+      endDate: "2026-11-30",
+      bills: [
+        {
+          id: "b1",
+          name: "Water",
+          amountCents: 150_00,
+          intervalMonths: 3,
+          anchorDate: "2026-01-20",
+          settledBeforeDate: "2026-11-01",
+          heldOccurrences: [
+            { date: "2026-04-20", amountCents: 150_00, reason: "sent", holdDate: "2026-04-21" },
+          ],
+        },
+      ],
+    });
+    const held = heldEvents(rows);
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({ date: "2026-11-01", amountCents: 150_00, heldSinceDate: "2026-04-20" });
+    // No quarterly occurrence falls in November; only the held debit moves cash.
+    expect(rows.flatMap((r) => r.events)).toHaveLength(1);
+    expect(rows[rows.length - 1]).toMatchObject({ balanceCents: 850_00, postedBalanceCents: 1000_00 });
+  });
+
+  it("still drops unheld occurrences older than the window", () => {
+    const rows = computeProjection({
+      ...baseInput(),
+      startingBalanceCents: 1000_00,
+      startDate: "2026-11-01",
+      endDate: "2026-11-03",
+      bills: [
+        {
+          id: "b1",
+          name: "Rent",
+          amountCents: 200_00,
+          intervalMonths: 1,
+          anchorDate: "2026-01-30",
+          heldOccurrences: [
+            { date: "2026-06-30", amountCents: 200_00, reason: "sent", holdDate: "2026-07-01" },
+          ],
+        },
+      ],
+    });
+    // Only the one held occurrence; the unheld July–October dates stay out.
+    expect(rows.flatMap((r) => r.events)).toHaveLength(1);
+    expect(rows[rows.length - 1]!.balanceCents).toBe(800_00);
+  });
+});
+
 describe("card-charged bill and extra markers", () => {
   it("emits zero-cash markers for a card-charged bill without moving the balance", () => {
     const rows = computeProjection({
