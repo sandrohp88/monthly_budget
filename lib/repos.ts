@@ -2298,9 +2298,24 @@ export async function listPlaidAccountsByItem(itemId: string): Promise<PlaidAcco
  * explicitly maps a Plaid credit account to a manual card (existing or new)
  * via the accounts page. This prevents silent duplicates when the user already
  * has manually-tracked cards.
+ *
+ * Balance pair provenance (migration 0044): a write that carries
+ * `balanceCents` also sets `liveBalanceAt` — to `data.liveBalanceAt` when the
+ * pair came from a live pull, else to null. A CACHED payload passes
+ * `opts.keepLiveBalanceAfter`: if the stored pair was written by a live pull
+ * after that instant, the pair (and its stamp) is kept and only the other
+ * fields update. Both halves of the pair are kept or replaced together.
  */
-export async function upsertPlaidAccount(data: NewPlaidAccount): Promise<void> {
+export async function upsertPlaidAccount(
+  data: NewPlaidAccount,
+  opts: { keepLiveBalanceAfter?: number } = {},
+): Promise<void> {
   const db = getDb();
+  const writesBalance = data.balanceCents !== undefined;
+  const keepLive =
+    writesBalance && opts.keepLiveBalanceAfter !== undefined
+      ? sql`(${plaidAccounts.liveBalanceAt} IS NOT NULL AND ${plaidAccounts.liveBalanceAt} > ${opts.keepLiveBalanceAfter})`
+      : null;
   await db
     .insert(plaidAccounts)
     .values({ ...data, updatedAt: Date.now() })
@@ -2311,7 +2326,9 @@ export async function upsertPlaidAccount(data: NewPlaidAccount): Promise<void> {
         mask: data.mask,
         type: data.type,
         subtype: data.subtype,
-        balanceCents: data.balanceCents,
+        balanceCents: keepLive
+          ? sql`CASE WHEN ${keepLive} THEN ${plaidAccounts.balanceCents} ELSE excluded.balance_cents END`
+          : data.balanceCents,
         // Deliberately NOT coalesced, unlike limitCents below.
         // `availableBalanceCents` is only meaningful paired with the
         // `balanceCents` written in this same statement — their difference is
@@ -2321,7 +2338,14 @@ export async function upsertPlaidAccount(data: NewPlaidAccount): Promise<void> {
         // (institution stopped computing it) must therefore clear it;
         // `undefined` from a caller that doesn't deal in balances is dropped
         // by drizzle and leaves the column alone.
-        availableBalanceCents: data.availableBalanceCents,
+        availableBalanceCents: keepLive
+          ? sql`CASE WHEN ${keepLive} THEN ${plaidAccounts.availableBalanceCents} ELSE excluded.available_balance_cents END`
+          : data.availableBalanceCents,
+        liveBalanceAt: keepLive
+          ? sql`CASE WHEN ${keepLive} THEN ${plaidAccounts.liveBalanceAt} ELSE NULL END`
+          : writesBalance
+            ? (data.liveBalanceAt ?? null)
+            : undefined,
         // Never let a payload without a limit erase one we already know.
         // `/transactions/sync` account objects frequently carry no `limit`
         // even when `/accounts/get` does, and callers that don't deal in

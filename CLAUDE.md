@@ -370,6 +370,7 @@ weird gets emitted before merging.
 - `0041_user_session_version` — `users.session_version`: revocable sessions. The JWT carries the version it was issued at; `lib/session-user.ts` rejects mismatches, deleted users and stale roles.
 - `0042_one_time_income` — `paychecks.is_one_time`: one-time income (bonuses) lives on `paychecks` so it projects and deposit-reconciles like a paycheck, but `isScheduledPaycheck` (lib/paycheck-schedule.ts) keeps it out of every schedule read/write — otherwise a schedule edit moves a bonus onto a payday and restates its amount. Set at creation only. Backup v13.
 - `0043_shared_deposit_income` — drops `paychecks_settled_by_draft_unique_idx` (from 0029). One posted deposit may settle a scheduled paycheck and one-time income together; each row stores its own share. No row rewrite. Shares are capped in `settlePaycheckSharesWithDraft`.
+- `0044_live_balance_at` — `plaid_accounts.live_balance_at`: epoch ms of the SUCCESSFUL live pull that wrote the stored `balance_cents`/`available_balance_cents` pair, null when the pair is cached. Per-account success stamp (unlike 0038's per-item attempt stamp). While younger than `LIVE_BALANCE_TRUST_MS` (1 h), cached payloads keep the pair. Not in the backup. See §17 "Cached vs live balances".
 
 ---
 
@@ -850,6 +851,14 @@ because the endpoint is **billed per call** (~$0.05–$0.15) and capped at
   turn a bounded cost into an unbounded one.
 - ❌ Don't run it BEFORE `refreshAccountsFromPlaid`. That writes the cached
   balance and would clobber the live one you just paid for.
+- Cached writes still run on EVERY sync, and inside the 5-minute throttle the
+  live pull writes nothing. So a cached payload may not overwrite a balance
+  pair that a live pull wrote less than `LIVE_BALANCE_TRUST_MS` (1 hour, one
+  BALANCE_LIMIT window) ago: `upsertPlaidAccount(…, { keepLiveBalanceAfter })`,
+  stamp `plaid_accounts.live_balance_at` (migration 0044). The pair is kept or
+  replaced as one; name, type and `limit_cents` still update. After an hour
+  with no successful live pull the cached pair is used again. A cached payload
+  with `current = null` writes no balance pair at all (same as the live path).
 - ❌ Don't treat `balances.last_updated_datetime` as a freshness signal — Plaid
   returns it **only for Capital One** (`ins_128026`). It was null for Alliant,
   which is why the staleness was undetectable from the payload.

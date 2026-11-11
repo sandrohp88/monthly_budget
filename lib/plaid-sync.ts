@@ -67,6 +67,23 @@ import { toCents, looksLikePaid, plaidErrorCode } from "./plaid-helpers";
 
 const PLAID_TRANSACTION_HISTORY_DAYS = 730;
 
+/**
+ * The balance pair from a CACHED account payload (`/transactions/sync`'s
+ * `data.accounts` or `/accounts/get`). With no `current` the payload tells us
+ * nothing: both halves are omitted, so the stored pair stays together — the
+ * live path skips such a payload the same way (review 2026-11-10 PLAID-7).
+ */
+function cachedBalancePair(balances: {
+  current?: number | null;
+  available?: number | null;
+}): { balanceCents?: number; availableBalanceCents?: number | null } {
+  if (balances.current == null) return {};
+  return {
+    balanceCents: toCents(balances.current),
+    availableBalanceCents: balances.available != null ? toCents(balances.available) : null,
+  };
+}
+
 export interface SyncResult {
   added: number;
   modified: number;
@@ -645,25 +662,25 @@ async function syncPlaidTransactionsUnlocked(
         // (refreshAccountsFromPlaid), not from here.
         for (const acct of data.accounts ?? []) {
           if (!accountIds.has(acct.account_id)) continue;
-          const balance = acct.balances.current ?? null;
-          await upsertPlaidAccount({
-            id: acct.account_id,
-            itemId: item.id,
-            userId,
-            name: acct.name,
-            mask: acct.mask ?? null,
-            type: acct.type,
-            subtype: acct.subtype ?? null,
-            balanceCents: balance !== null ? toCents(balance) : null,
-            // Written here (not only in refreshAccountsFromPlaid) because
-            // current and available must always come from the SAME payload —
-            // their difference is the pending float, and a fresh current
-            // against a stale available invents one out of nothing.
-            availableBalanceCents:
-              acct.balances.available != null ? toCents(acct.balances.available) : null,
-            limitCents: acct.balances.limit != null ? toCents(acct.balances.limit) : null,
-            updatedAt: Date.now(),
-          });
+          await upsertPlaidAccount(
+            {
+              id: acct.account_id,
+              itemId: item.id,
+              userId,
+              name: acct.name,
+              mask: acct.mask ?? null,
+              type: acct.type,
+              subtype: acct.subtype ?? null,
+              // Written here (not only in refreshAccountsFromPlaid) because
+              // current and available must always come from the SAME payload —
+              // their difference is the pending float, and a fresh current
+              // against a stale available invents one out of nothing.
+              ...cachedBalancePair(acct.balances),
+              limitCents: acct.balances.limit != null ? toCents(acct.balances.limit) : null,
+              updatedAt: Date.now(),
+            },
+            { keepLiveBalanceAfter: Date.now() - LIVE_BALANCE_TRUST_MS },
+          );
         }
 
         // Added transactions -> approved ledger rows.
@@ -1018,23 +1035,23 @@ export async function refreshAccountsFromPlaid(
       // Only accounts we already track — linking new ones stays an explicit
       // user action on /accounts (see "Why we DON'T auto-create a card").
       if (!knownIds.has(acct.account_id)) continue;
-      const balance = acct.balances.current ?? null;
       const limitCents = acct.balances.limit != null ? toCents(acct.balances.limit) : null;
-      await upsertPlaidAccount({
-        id: acct.account_id,
-        itemId,
-        userId,
-        name: acct.name,
-        mask: acct.mask ?? null,
-        type: acct.type,
-        subtype: acct.subtype ?? null,
-        balanceCents: balance !== null ? toCents(balance) : null,
-        // Same payload as balanceCents — see the column doc in schema.ts.
-        availableBalanceCents:
-          acct.balances.available != null ? toCents(acct.balances.available) : null,
-        limitCents,
-        updatedAt: Date.now(),
-      });
+      await upsertPlaidAccount(
+        {
+          id: acct.account_id,
+          itemId,
+          userId,
+          name: acct.name,
+          mask: acct.mask ?? null,
+          type: acct.type,
+          subtype: acct.subtype ?? null,
+          // Same payload for both halves — see the column doc in schema.ts.
+          ...cachedBalancePair(acct.balances),
+          limitCents,
+          updatedAt: Date.now(),
+        },
+        { keepLiveBalanceAfter: Date.now() - LIVE_BALANCE_TRUST_MS },
+      );
       accountsUpdated += 1;
 
       // Seed the linked card's credit line while it has none. Manual wins
@@ -1145,6 +1162,25 @@ export async function refreshItemTransactions(
  */
 export const BALANCE_REFRESH_MIN_INTERVAL_MS = 5 * 60_000;
 
+/**
+ * How long a successful live balance outranks Plaid's CACHED one. Every sync
+ * writes the cached payload (sync loop, then `refreshAccountsFromPlaid`)
+ * before the live pull, and inside the throttle above the live pull writes
+ * nothing — so without this, the second sync within five minutes (typically
+ * the SYNC_UPDATES_AVAILABLE webhook our own `/transactions/refresh` caused)
+ * put the stale cached figure straight back (review 2026-11-10 PLAID-1).
+ *
+ * Why one hour, not the 5-minute throttle: the first pull after the throttle
+ * can fail (BALANCE_LIMIT under bursty webhooks), and one failed attempt must
+ * not hand the anchor back to a cache measured $267 wrong. One hour is Plaid's
+ * own BALANCE_LIMIT window (30/hour per item), so a rate-limit failure has
+ * cleared inside it. If no live pull has succeeded for a whole hour, the live
+ * path is broken for another reason (institution down, product not offered)
+ * and the account falls back to the documented degraded mode: the cached
+ * balance. An old live value is not better than the cache forever.
+ */
+export const LIVE_BALANCE_TRUST_MS = 60 * 60_000;
+
 export type LiveBalanceRefreshResult = {
   accountsRefreshed: number;
   /** Why no call was made, or null when one was attempted. */
@@ -1231,6 +1267,8 @@ export async function refreshLiveBalancesForItem(
         availableBalanceCents:
           acct.balances.available != null ? toCents(acct.balances.available) : null,
         limitCents: acct.balances.limit != null ? toCents(acct.balances.limit) : null,
+        // Marks the pair as live, so the next syncs' cached writes keep it.
+        liveBalanceAt: now,
         updatedAt: now,
       });
       accountsRefreshed += 1;
