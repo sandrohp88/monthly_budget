@@ -140,6 +140,24 @@ export function dueDateFromStatement(
   return nextDayOfMonthOnOrAfter(earliest, dueDay);
 }
 
+/**
+ * Absolute-cents tolerance for auto-matching a payment to a statement. A real
+ * "pay the statement balance" autopay reports the exact balance; this only
+ * absorbs sub-dollar noise (Plaid's float dollar amounts, issuer rounding) —
+ * deliberately NOT a percentage, so a partial payment (even 90%+ of the
+ * balance, e.g. $460 against a $505.10 statement) never gets treated as
+ * clearing the statement. A true partial is left unmatched: there's no data
+ * model for "partially paid, $X still owed" (isStatementOpen in
+ * lib/credit-cards.ts treats ANY recorded paidAmountCents as resolved,
+ * regardless of amount), so recording a partial would misrepresent the
+ * statement as settled rather than actually track the residual.
+ *
+ * Shared by `settleStatementWithDraft` (lib/repos.ts) and
+ * `interestSavingOwedByStatement`: a draft-settled statement whose residual is
+ * within this tolerance was paid in full, not "short by $0.65".
+ */
+export const STATEMENT_MATCH_TOLERANCE_CENTS = 100;
+
 /** A statement is open only when cash is actually due and no payment is recorded. */
 export function isStatementOpen(s: CreditCardStatementRow): boolean {
   return statementCashDueCents(s) > 0 && s.paidAmountCents == null;
@@ -205,12 +223,11 @@ export function interestSavingCashDueCents(
 }
 
 /**
- * Interest-saving cash still owed on ONE statement: `interestSavingCashDueCents`
- * minus whatever is recorded paid, floored at 0 — the same number the
- * projection's due marker carries. A PARTIALLY paid statement keeps its
- * residual (which `isStatementOpen` cannot express); a statement paid at least
- * its interest-saving amount owes 0. Every "due to avoid interest" total, next
- * due pick and overdue flag in the UI should run through this.
+ * Interest-saving cash still owed on ONE statement, read in isolation:
+ * `interestSavingCashDueCents` minus whatever is recorded paid, floored at 0 —
+ * the same number the projection's due marker carries. It ignores the card's
+ * other statements, so the UI's due numbers use `interestSavingOwedByStatement`
+ * (which applies the newest-statement rule) rather than this directly.
  */
 export function interestSavingOwedCents(
   s: Pick<
@@ -222,6 +239,55 @@ export function interestSavingOwedCents(
   >,
 ): number {
   return Math.max(0, interestSavingCashDueCents(s, promos) - (s.paidAmountCents ?? 0));
+}
+
+type PromoForOwed = Pick<
+  CreditCardPromoRow,
+  "cardId" | "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive"
+>;
+
+/**
+ * What each statement still owes to avoid interest, as the dashboard, wallet
+ * and card detail show it (statement id → cents; 0 = nothing due). Statements
+ * may span several cards; "newest" and promos are taken per `cardId`.
+ *
+ * - No recorded payment: the full `interestSavingCashDueCents` when
+ *   `isStatementOpen`, else 0 (unchanged).
+ * - Recorded payment, NEWEST statement of its card (latest `statementDate`):
+ *   the residual `interestSavingOwedCents` — a partial payment still leaves
+ *   cash due. A draft-settled statement whose residual is within
+ *   `STATEMENT_MATCH_TOLERANCE_CENTS` was paid in full (0).
+ * - Recorded payment, OLDER statement: 0. Issuer statements are cumulative —
+ *   an unpaid remainder rolls into the next statement's balance — so counting
+ *   it here too would double-count it, and nothing could ever clear it
+ *   (`settleStatementWithDraft` never touches a statement with a payment). It
+ *   also keeps a later promo reconcile from re-opening an old ISB-paid cycle.
+ *
+ * The projection's due markers (`projectCardPayments`) still use the plain
+ * per-statement residual for every statement.
+ */
+export function interestSavingOwedByStatement(
+  statements: ReadonlyArray<CreditCardStatementRow>,
+  promos: ReadonlyArray<PromoForOwed>,
+): Map<string, number> {
+  const newestByCard = new Map<string, string>();
+  for (const s of statements) {
+    const newest = newestByCard.get(s.cardId);
+    if (newest == null || s.statementDate > newest) newestByCard.set(s.cardId, s.statementDate);
+  }
+  const owed = new Map<string, number>();
+  for (const s of statements) {
+    const cardPromos = promos.filter((p) => p.cardId === s.cardId);
+    let cents = 0;
+    if (s.paidAmountCents == null) {
+      cents = isStatementOpen(s) ? interestSavingCashDueCents(s, cardPromos) : 0;
+    } else if (s.statementDate === newestByCard.get(s.cardId)) {
+      cents = interestSavingOwedCents(s, cardPromos);
+      if (s.settledByDraftId != null && cents <= STATEMENT_MATCH_TOLERANCE_CENTS) cents = 0;
+    }
+    owed.set(s.id, cents);
+  }
+  return owed;
 }
 
 /** What archiving a card would drop out of the projection. */
@@ -290,18 +356,18 @@ export function totalDue(statements: ReadonlyArray<CreditCardStatementRow>): num
 
 /**
  * Pick the most relevant statement to surface on the card UI:
- *   1. Earliest with interest-saving cash still owed (`interestSavingOwedCents`
- *      > 0 — unpaid OR partly paid), so the user sees what's due soonest
+ *   1. Earliest with cash still owed per `interestSavingOwedByStatement`
+ *      (unpaid, or the newest statement partly paid), so the user sees what's
+ *      due soonest
  *   2. Otherwise, most recent paid (so they see history)
  * Pass the card's promos so a statement paid to its ISB reads as settled.
  */
 export function currentStatementOf(
   statements: ReadonlyArray<CreditCardStatementRow>,
-  promos: ReadonlyArray<
-    Pick<CreditCardPromoRow, "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive">
-  > = [],
+  promos: ReadonlyArray<PromoForOwed> = [],
 ): CreditCardStatementRow | undefined {
-  const unpaid = statements.filter((s) => interestSavingOwedCents(s, promos) > 0);
+  const owed = interestSavingOwedByStatement(statements, promos);
+  const unpaid = statements.filter((s) => (owed.get(s.id) ?? 0) > 0);
   if (unpaid.length > 0) {
     return [...unpaid].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
   }

@@ -7,6 +7,7 @@ import {
   openStatementObligation,
   statementCashDueCents,
   type OpenStatementObligation,
+  STATEMENT_MATCH_TOLERANCE_CENTS,
 } from "./credit-cards";
 import {
   assets,
@@ -1721,19 +1722,8 @@ export async function listStatementsForUser(
   return all;
 }
 
-/**
- * Absolute-cents tolerance for auto-matching a payment to a statement. A real
- * "pay the statement balance" autopay reports the exact balance; this only
- * absorbs sub-dollar noise (Plaid's float dollar amounts, issuer rounding) —
- * deliberately NOT a percentage, so a partial payment (even 90%+ of the
- * balance, e.g. $460 against a $505.10 statement) never gets treated as
- * clearing the statement. A true partial is left unmatched: there's no data
- * model for "partially paid, $X still owed" (isStatementOpen in
- * lib/credit-cards.ts treats ANY recorded paidAmountCents as resolved,
- * regardless of amount), so recording a partial would misrepresent the
- * statement as settled rather than actually track the residual.
- */
-const STATEMENT_MATCH_TOLERANCE_CENTS = 100;
+// STATEMENT_MATCH_TOLERANCE_CENTS lives in lib/credit-cards.ts (the due pages
+// use it too, to treat a draft-settled near-match as paid in full).
 
 /**
  * Has `draftId` already settled (or been consumed by) a statement anywhere in

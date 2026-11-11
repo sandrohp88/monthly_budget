@@ -3,7 +3,7 @@ import { requirePageUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { buildProjection } from "@/lib/projection-server";
 import { listPaychecks, listPromos, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance, getSettings } from "@/lib/repos";
-import { interestSavingOwedCents } from "@/lib/credit-cards";
+import { interestSavingOwedByStatement } from "@/lib/credit-cards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHead } from "@/components/ui/page-head";
 import {
@@ -81,17 +81,12 @@ export default async function DashboardPage() {
   ]);
 
   // Credit card "due to avoid interest" totals — the Interest Saving Balance
-  // for cards with active 0% promos, the full statement cash due otherwise,
-  // minus anything recorded paid (a partly paid statement still owes its
-  // residual, exactly like the projection's due marker).
-  const promosByCard = new Map<string, typeof ccPromos>();
-  for (const p of ccPromos) {
-    const list = promosByCard.get(p.cardId) ?? [];
-    list.push(p);
-    promosByCard.set(p.cardId, list);
-  }
+  // for cards with active 0% promos, the full statement cash due otherwise.
+  // A recorded partial payment leaves its residual due on the card's NEWEST
+  // statement only (older remainders roll into the newer balance).
+  const owedById = interestSavingOwedByStatement(ccStatements, ccPromos);
   const owedStatements = ccStatements
-    .map((x) => ({ ...x, owedCents: interestSavingOwedCents(x, promosByCard.get(x.cardId) ?? []) }))
+    .map((x) => ({ ...x, owedCents: owedById.get(x.id) ?? 0 }))
     .filter((x) => x.owedCents > 0);
   const ccTotalDue = owedStatements.reduce((s, x) => s + x.owedCents, 0);
   const ccNextDue =

@@ -10,7 +10,7 @@ import {
 } from "@/lib/repos";
 import {
   currentCycleWindow,
-  interestSavingOwedCents,
+  interestSavingOwedByStatement,
 } from "@/lib/credit-cards";
 import { buildCardSpending, type CardSpendingSummary } from "@/lib/card-spending";
 import { DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
@@ -44,13 +44,11 @@ export default async function CreditCardsPage() {
         : undefined;
 
       // Due to avoid interest: the Interest Saving Balance when the card has
-      // active 0% promos, the full statement cash due otherwise, minus anything
-      // recorded paid — a partly paid statement still owes its residual.
-      const openStatements = statements.filter((x) => interestSavingOwedCents(x, promos) > 0);
-      const dueCents = openStatements.reduce(
-        (s, x) => s + interestSavingOwedCents(x, promos),
-        0,
-      );
+      // active 0% promos, the full statement cash due otherwise. A recorded
+      // partial payment leaves its residual due on the NEWEST statement only.
+      const owedById = interestSavingOwedByStatement(statements, promos);
+      const openStatements = statements.filter((x) => (owedById.get(x.id) ?? 0) > 0);
+      const dueCents = openStatements.reduce((s, x) => s + (owedById.get(x.id) ?? 0), 0);
       const dueDate =
         openStatements.map((s) => s.dueDate).sort((a, b) => a.localeCompare(b))[0] ?? null;
 

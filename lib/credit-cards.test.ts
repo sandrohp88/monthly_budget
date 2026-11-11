@@ -7,6 +7,7 @@ import {
   dueDateFromStatement,
   estimateCurrentCycle,
   interestSavingCashDueCents,
+  interestSavingOwedByStatement,
   interestSavingOwedCents,
   isStatementOpen,
   nextDayOfMonthOnOrAfter,
@@ -20,6 +21,7 @@ import {
   promoScheduledPayments,
   promoMonthlyChunkAt,
   promoWhatIf,
+  STATEMENT_MATCH_TOLERANCE_CENTS,
   statementCashDueCents,
   summarizeStatementBalances,
   totalDue,
@@ -1173,28 +1175,162 @@ describe("interestSavingOwedCents", () => {
     expect(sum).toBe(800_00);
   });
 
-  it("currentStatementOf surfaces a partly paid statement as the one still due", () => {
-    const partial = statement({
-      id: "partial",
-      statementDate: "2025-01-15",
-      dueDate: "2025-02-10",
-      statementBalanceCents: 1000_00,
-      paidAmountCents: 400_00,
-      paidDate: "2025-02-05",
-    });
-    // A newer statement paid in full must not hide the older residual.
-    const paid = statement({
-      id: "paid",
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// interestSavingOwedByStatement — the newest-statement rule the dashboard,
+// wallet and card detail use. Issuer statements are cumulative: an unpaid
+// remainder rolls into the next statement's balance, so only the card's
+// NEWEST statement with a recorded payment can still owe a residual.
+// ────────────────────────────────────────────────────────────────────────────
+describe("interestSavingOwedByStatement", () => {
+  const equalPayPlans = [
+    promo({ id: "ep1", remainingAmountCents: 73_37, endDate: "2026-10-07", monthlyPaymentCents: null }),
+    promo({ id: "ep2", remainingAmountCents: 123_23, endDate: "2026-11-07", monthlyPaymentCents: 30_82 }),
+    promo({ id: "ep3", remainingAmountCents: 89_09, endDate: "2026-12-07", monthlyPaymentCents: 17_82 }),
+    promo({ id: "ep4", remainingAmountCents: 210_32, endDate: "2027-01-07", monthlyPaymentCents: 35_06 }),
+  ];
+  // Jan: $1,000 with $400 paid. The issuer carries the $600 into Feb.
+  const jan = statement({
+    id: "jan",
+    statementDate: "2025-01-15",
+    dueDate: "2025-02-10",
+    statementBalanceCents: 1000_00,
+    paidAmountCents: 400_00,
+    paidDate: "2025-02-05",
+  });
+  const feb = (over: Partial<CreditCardStatementRow> = {}) =>
+    statement({
+      id: "feb",
       statementDate: "2025-02-15",
       dueDate: "2025-03-10",
-      paidAmountCents: 100_000,
-      paidDate: "2025-03-05",
+      statementBalanceCents: 905_00,
+      ...over,
     });
-    expect(currentStatementOf([paid, partial], [])?.id).toBe("partial");
+  const total = (m: Map<string, number>) => [...m.values()].reduce((a, b) => a + b, 0);
+
+  it("an older partly paid statement owes nothing once a newer one is paid in full", () => {
+    const owed = interestSavingOwedByStatement(
+      [jan, feb({ paidAmountCents: 905_00, paidDate: "2025-03-05" })],
+      [],
+    );
+    expect(owed.get("jan")).toBe(0);
+    expect(owed.get("feb")).toBe(0);
+    expect(total(owed)).toBe(0);
+    // Nothing is due, so the card UI falls back to the most recent statement.
+    expect(currentStatementOf([jan, feb({ paidAmountCents: 905_00, paidDate: "2025-03-05" })])?.id).toBe(
+      "feb",
+    );
+  });
+
+  it("an older partly paid statement owes nothing next to a newer UNPAID one (its ISB carries it)", () => {
+    const owed = interestSavingOwedByStatement([jan, feb()], []);
+    expect(owed.get("jan")).toBe(0);
+    expect(owed.get("feb")).toBe(905_00);
+    expect(currentStatementOf([jan, feb()])?.id).toBe("feb");
+  });
+
+  it("the newest statement partly paid owes its residual ($1,000 − $400 = $600)", () => {
+    const older = statement({
+      id: "dec",
+      statementDate: "2024-12-15",
+      dueDate: "2025-01-10",
+      paidAmountCents: 100_000,
+      paidDate: "2025-01-05",
+    });
+    const owed = interestSavingOwedByStatement([older, jan], []);
+    expect(owed.get("jan")).toBe(600_00);
+    expect(owed.get("dec")).toBe(0);
+    expect(currentStatementOf([older, jan])?.id).toBe("jan");
+  });
+
+  it("statements with no recorded payment count in full, as before", () => {
+    const owed = interestSavingOwedByStatement(
+      [statement({ id: "a", statementDate: "2025-01-15" }), feb()],
+      [],
+    );
+    expect(owed.get("a")).toBe(100_000);
+    expect(owed.get("feb")).toBe(905_00);
+    // A zero/credit statement with nothing recorded owes nothing.
+    expect(
+      interestSavingOwedByStatement([statement({ id: "z", statementBalanceCents: 0 })], []).get("z"),
+    ).toBe(0);
+  });
+
+  it("a draft-settled near match is paid in full; a manual partial of the same size is not", () => {
+    // Posted $902.35 against a $903.00 statement: inside the $1.00 match tolerance.
+    const settled = feb({
+      statementBalanceCents: 903_00,
+      paidAmountCents: 902_35,
+      paidDate: "2025-03-05",
+      settledByDraftId: "draft-1",
+    });
+    expect(interestSavingOwedByStatement([settled], []).get("feb")).toBe(0);
+    const manual = { ...settled, settledByDraftId: null };
+    expect(interestSavingOwedByStatement([manual], []).get("feb")).toBe(65);
+    // The tolerance edge: exactly $1.00 short is settled, $1.01 short is not.
+    expect(
+      interestSavingOwedByStatement([{ ...settled, paidAmountCents: 902_00 }], []).get("feb"),
+    ).toBe(0);
+    expect(STATEMENT_MATCH_TOLERANCE_CENTS).toBe(100);
+    expect(
+      interestSavingOwedByStatement([{ ...settled, paidAmountCents: 901_99 }], []).get("feb"),
+    ).toBe(101);
+  });
+
+  it("an old statement paid at its ISB stays settled after a promo is reconciled downward", () => {
+    const chase = (over: Partial<CreditCardStatementRow>) =>
+      statement({ statementBalanceCents: 1220_11, minimumPaymentCents: 143_16, ...over });
+    const july = chase({
+      id: "july",
+      statementDate: "2026-07-10",
+      dueDate: "2026-08-07",
+      paidAmountCents: 832_26,
+      paidDate: "2026-08-05",
+    });
+    const august = chase({
+      id: "august",
+      statementDate: "2026-08-10",
+      dueDate: "2026-09-07",
+      paidAmountCents: 1220_11,
+      paidDate: "2026-09-05",
+    });
+    // Later the issuer list lowers ep4's remaining: July's ISB, recomputed
+    // from TODAY's promo rows, now reads higher than what was paid.
+    const reconciled = equalPayPlans.map((p) =>
+      p.id === "ep4" ? { ...p, remainingAmountCents: 100_00 } : p,
+    );
+    expect(interestSavingOwedCents(july, reconciled)).toBeGreaterThan(0);
+    const owed = interestSavingOwedByStatement([july, august], reconciled);
+    expect(owed.get("july")).toBe(0);
+    expect(owed.get("august")).toBe(0);
     // A statement paid to its ISB is settled, so the fallback still applies.
-    const isbPaid = chase({ id: "isb", statementDate: "2026-06-10", paidAmountCents: 832_26, paidDate: "2026-08-05" });
-    const newer = chase({ id: "newer", statementDate: "2026-07-10", paidAmountCents: 1220_11, paidDate: "2026-08-05" });
-    expect(currentStatementOf([isbPaid, newer], equalPayPlans)?.id).toBe("newer");
+    expect(currentStatementOf([july, august], equalPayPlans)?.id).toBe("august");
+  });
+
+  it("groups by card: newest and promos are per card (dashboard input)", () => {
+    // Card c1: Jan partly paid, Feb newer and paid in full → 0. Its promo
+    // must not leak into card c2's ISB.
+    const c1Promo = promo({ id: "c1p", cardId: "c1", remainingAmountCents: 300_00, monthlyPaymentCents: 50_00 });
+    // Card c2: one $500 statement with $100 paid, OLDER than c1's Feb but the
+    // newest on its own card → owes $400.
+    const c2 = statement({
+      id: "c2-jan",
+      cardId: "c2",
+      statementDate: "2025-01-20",
+      dueDate: "2025-02-15",
+      statementBalanceCents: 500_00,
+      paidAmountCents: 100_00,
+      paidDate: "2025-02-01",
+    });
+    const owed = interestSavingOwedByStatement(
+      [jan, feb({ paidAmountCents: 905_00, paidDate: "2025-03-05" }), c2],
+      [c1Promo],
+    );
+    expect(owed.get("jan")).toBe(0);
+    expect(owed.get("feb")).toBe(0);
+    expect(owed.get("c2-jan")).toBe(400_00);
+    expect(total(owed)).toBe(400_00);
   });
 });
 

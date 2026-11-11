@@ -34,7 +34,7 @@ import {
   currentStatementOf,
   daysBetween,
   interestSavingCashDueCents,
-  interestSavingOwedCents,
+  interestSavingOwedByStatement,
   nextStatementDateOnOrAfter,
   paidWithoutInterest,
   promoMonthlyChunkAt,
@@ -158,12 +158,10 @@ export function CardDetailClient({
   const promoLeftToCoverCents = Math.max(0, promoRemainingCents - scheduledCardPaymentCents);
 
   // Cash still needed to avoid interest — the Interest Saving Balance when the
-  // card has active 0% promos, the full statement cash due otherwise, minus
-  // anything recorded paid (a partly paid statement still owes its residual).
-  const openDueCents = statements.reduce(
-    (s, x) => s + interestSavingOwedCents(x, activePromos),
-    0,
-  );
+  // card has active 0% promos, the full statement cash due otherwise. A
+  // recorded partial payment leaves its residual due on the NEWEST statement.
+  const owedById = interestSavingOwedByStatement(statements, activePromos);
+  const openDueCents = statements.reduce((s, x) => s + (owedById.get(x.id) ?? 0), 0);
   const balanceCents =
     card.currentBalanceCents ??
     accountBalanceCents ??
@@ -173,7 +171,7 @@ export function CardDetailClient({
 
   // Current statement state — the page's headline: what to pay to avoid interest.
   const current = currentStatementOf(statements, activePromos);
-  const currentOwedCents = current ? interestSavingOwedCents(current, activePromos) : 0;
+  const currentOwedCents = current ? (owedById.get(current.id) ?? 0) : 0;
   const isOpen = currentOwedCents > 0;
   const days = current ? daysBetween(today, current.dueDate) : null;
   const safe = current ? paidWithoutInterest(current, activePromos) : false;
@@ -494,7 +492,7 @@ export function CardDetailClient({
                             <DateLabel iso={s.dueDate} format="short" />
                           </td>
                           <td className="py-2 text-right">
-                            {interestSavingOwedCents(s, activePromos) > 0 ? (
+                            {(owedById.get(s.id) ?? 0) > 0 ? (
                               <span
                                 className={cn(
                                   "font-semibold",
