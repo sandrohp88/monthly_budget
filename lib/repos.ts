@@ -3197,8 +3197,25 @@ export async function reopenPaychecksSettledByDraft(
  * draft had settled that the split no longer names. A draft with no paycheck
  * allocations is left alone — automatic matching owns those settlements.
  * Returns how many incomes were newly marked received.
+ *
+ * `automatic` is the sync's re-apply. There, an income the split still names
+ * stays received while the deposit is still a posted credit, even when the
+ * split no longer fits (a bank correction) or the income moved (a new pay
+ * date or plan amount). The money arrived and the live balance holds it:
+ * reopening would project it again as expected income (review 2026-11-10
+ * PAY-1). A bank correction of the deposit (findInvalidSplitDraftIds) and a
+ * moved pay date (findOrphanedAllocationDraftIds) are flagged for review on
+ * Transactions. A later change to the income's planned amount keeps it
+ * received WITHOUT a flag: the money did arrive and the recorded amount is
+ * unchanged; the user un-marks received on /paychecks if that is wrong.
+ * A removed or no-longer-posted deposit, an income dropped from the split,
+ * and an explicit user save still reopen.
  */
-export async function applyIncomeAllocations(userId: string, draftId: string): Promise<number> {
+export async function applyIncomeAllocations(
+  userId: string,
+  draftId: string,
+  opts: { automatic?: boolean } = {},
+): Promise<number> {
   const draft = await getPlaidDraft(userId, draftId);
   if (!draft) return 0;
   const allocations = await listDraftAllocations(userId, draftId);
@@ -3257,10 +3274,14 @@ export async function applyIncomeAllocations(userId: string, draftId: string): P
     if (matchSum > -draft.amountCents) return 0;
   }
 
+  const keepStillNamed = opts.automatic === true && postedCredit;
+  const namedIds = new Set(targetIds);
+
   let newly = 0;
   db.transaction((tx) => {
     for (const row of settledRows) {
       if (matchById.has(row.id)) continue;
+      if (keepStillNamed && namedIds.has(row.id)) continue;
       tx.update(paychecks)
         .set({
           actualReceived: false,

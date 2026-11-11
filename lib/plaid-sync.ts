@@ -440,7 +440,9 @@ async function reconcilePaycheckDeposits(userId: string, today: string): Promise
     const portions = allocationsByDraft.get(draft.id);
     if (!portions?.some((portion) => portion.targetKind === "paycheck")) continue;
     explicitDraftIds.add(draft.id);
-    const marked = await applyIncomeAllocations(userId, draft.id);
+    // Automatic: a stale split never reopens incomes this posted deposit
+    // already settled (see applyIncomeAllocations).
+    const marked = await applyIncomeAllocations(userId, draft.id, { automatic: true });
     if (marked > 0) {
       settled += marked;
       log.info(
