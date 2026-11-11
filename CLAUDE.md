@@ -1015,7 +1015,12 @@ unique index so those shares can point at the same draft. When the sum isn't
 clear enough to guess, Transactions → Split on the deposit
 (`draft_allocations.target_kind = paycheck`) is the user's answer; that
 split is exhaustive and a portion below 70% of plan does not mark the income
-received. Un-marking received on `/paychecks` (or archiving the row) clears
+received. The sync's re-apply (`applyIncomeAllocations(..., { automatic: true })`)
+never REOPENS an income the split still names while the deposit is still a
+posted credit, even when a bank correction makes the split invalid or the
+income's date/amount moved: that money is in the live balance, so reopening
+projects it twice (review 2026-11-10 PAY-1). Transactions flags the split
+instead. Un-marking received on `/paychecks` (or archiving the row) clears
 `settledByDraftId` so the deposit can re-settle — un-mark every income that
 deposit settled, or the draft stays consumed. Auto-reconciled rows show an
 AUTO pill next to RECEIVED.
