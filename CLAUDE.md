@@ -602,9 +602,11 @@ INTEREST AlertBar (`findUncoveredCardDues`). Moving parts:
 10. **Export/import** — extend `exportAll()`, the `import*Schema` in `lib/validation.ts` **and**
     `importInsideTransaction()` in `lib/repos.ts`, then bump `BACKUP_SCHEMA_VERSION`. Every new
     user-authored column must survive the round trip — `lib/repos.import.test.ts` ("semantic round
-    trip") compares export → import → export and the projection; extend its seed. Import is
-    two-step: `POST /api/backup/import` previews, `?confirm=1` snapshots to `data/pre-import/`
-    and then replaces.
+    trip") compares export → import → export and the projection; extend its seed. The import
+    schema must accept every value ANY write path can store (write schemas, Plaid sync) — one
+    rejected field fails the whole restore; extend `seedBoundaries` there with the field's bounds,
+    each parsed by its write schema. Import is two-step: `POST /api/backup/import` previews,
+    `?confirm=1` snapshots to `data/pre-import/` and then replaces.
 11. **README** — update the deploy guide if needed
 12. `npm run check` then commit
 
@@ -1264,7 +1266,9 @@ allocations reserve the remainder. `awaitingPost` keeps the raw bank balance
 visible alongside the planning balance and prevents date-based phantom settlement.
 
 `lib/card-payment-reconciliation.ts` is pure. Automatic matches require exact
-cents, a unique pairing within -3/+14 days, and either card-name/payment wording
+cents (or within `NEAR_AMOUNT_CENTS` = $1, which settles the plan in full; exact
+pairs resolve first, and a plan or debit with any exact candidate never enters
+the near pass), a unique pairing within -3/+14 days, and either card-name/payment wording
 or a matching posted receipt on the explicitly linked card within three days of
 the checking debit. Card-side receipts alone NEVER release checking cash. Only
 active depository starting-balance accounts provide source debits. Ambiguous or

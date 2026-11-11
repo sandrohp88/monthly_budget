@@ -193,6 +193,83 @@ describe("reconcilePlannedCardPayments: issuer names", () => {
     expect(posted.get(key("sv"))).toBeUndefined();
   });
 
+  // Audit PAY-5 (2026-11-10): the $1 near-amount tolerance made two EXACT
+  // same-issuer payments look ambiguous, so neither plan settled.
+  describe("exact cents win before the near-amount tolerance", () => {
+    const chase = (cardId: string, cardName: string, amountCents: number) =>
+      plan(cardId, cardName, amountCents, "Chase");
+    const autopay = (id: string, amountCents: number) =>
+      debit(id, "CHASE CREDIT CRD AUTOPAY", amountCents);
+
+    it("settles two same-issuer plans each on its exact-cents debit, 50 cents apart", () => {
+      const posted = reconcilePlannedCardPayments(
+        [chase("freedom", "Freedom", 50_000), chase("sapphire", "Sapphire", 50_050)],
+        [autopay("d1", 50_000), autopay("d2", 50_050)],
+      );
+      expect(posted.get(key("freedom"))).toBe(50_000);
+      expect(posted.get(key("sapphire"))).toBe(50_050);
+      expect(posted.size).toBe(2);
+    });
+
+    it("still settles both when the amounts are more than a dollar apart", () => {
+      const posted = reconcilePlannedCardPayments(
+        [chase("freedom", "Freedom", 50_000), chase("sapphire", "Sapphire", 50_150)],
+        [autopay("d1", 50_000), autopay("d2", 50_150)],
+      );
+      expect(posted.get(key("freedom"))).toBe(50_000);
+      expect(posted.get(key("sapphire"))).toBe(50_150);
+    });
+
+    it("settles the exact matches first, then a near match among what remains", () => {
+      const posted = reconcilePlannedCardPayments(
+        [
+          chase("freedom", "Freedom", 50_000),
+          chase("sapphire", "Sapphire", 50_050),
+          chase("slate", "Slate", 70_000),
+        ],
+        [autopay("d1", 50_000), autopay("d2", 50_080), autopay("d3", 70_000)],
+      );
+      expect(posted.get(key("freedom"))).toBe(50_000);
+      // Near match: settles the plan in full, not the posted 500.80.
+      expect(posted.get(key("sapphire"))).toBe(50_050);
+      expect(posted.get(key("slate"))).toBe(70_000);
+    });
+
+    it("keeps two same-amount plans with two identical debits ambiguous", () => {
+      const posted = reconcilePlannedCardPayments(
+        [chase("freedom", "Freedom", 50_000), chase("sapphire", "Sapphire", 50_000)],
+        [autopay("d1", 50_000), autopay("d2", 50_000)],
+      );
+      expect(posted.size).toBe(0);
+    });
+
+    it("prefers the exact debit over a near one for a single plan", () => {
+      const posted = reconcilePlannedCardPayments(
+        [chase("freedom", "Freedom", 50_000)],
+        [autopay("near", 50_040), autopay("exact", 50_000)],
+      );
+      expect(posted.get(key("freedom"))).toBe(50_000);
+      expect(posted.size).toBe(1);
+    });
+
+    it("does not let the near pass rescue a plan or debit left ambiguous by the exact pass", () => {
+      // d1 is an exact candidate for both cards. d2 names only Freedom and is
+      // within a dollar. Picking Freedom <- d2 would be a guess made only
+      // because the exact pass could not decide.
+      const rescue = reconcilePlannedCardPayments(
+        [chase("freedom", "Freedom", 50_000), chase("sapphire", "Sapphire", 50_000)],
+        [autopay("d1", 50_000), debit("d2", "FREEDOM PAYMENT", 50_040)],
+      );
+      expect(rescue.size).toBe(0);
+      // One plan, two exact debits: the near debit does not break the tie.
+      const tie = reconcilePlannedCardPayments(
+        [chase("freedom", "Freedom", 50_000)],
+        [autopay("d1", 50_000), autopay("d2", 50_000), autopay("d3", 50_040)],
+      );
+      expect(tie.size).toBe(0);
+    });
+  });
+
   it("does not match an unrelated issuer", () => {
     const posted = reconcilePlannedCardPayments(
       [plan("qs", "Quicksilver", 5000, "Capital One")],
