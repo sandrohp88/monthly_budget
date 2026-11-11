@@ -82,7 +82,7 @@ export type ProjectionBundle = {
    * knows to reconcile.
    */
   promoDriftByCard: Record<string, number>;
-  /** Per-card promo cash still projected after paydowns/prepayment/skips (absent = none). */
+  /** Per-card promo cash still projected through `endDate` after paydowns/prepayment/skips (absent = none). */
   promoCashByCard: Record<string, number>;
   /** Category names for variable bill charge groups, keyed by `cardId:dueDate`. */
   variableBillCategoriesByKey: Record<string, string[]>;

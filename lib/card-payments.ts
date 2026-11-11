@@ -78,9 +78,11 @@ export type ProjectCardPaymentsResult = {
   /** Variable-bill category names keyed by `cardId:dueDate` (for the UI). */
   variableBillCategoriesByKey: Record<string, string[]>;
   /**
-   * Per-card promo cash this projection still debits, after paydowns, plan
-   * prepayment and skips (cards with none are absent). The card page's promo
-   * planner reads this so its text can never disagree with the calendar.
+   * Per-card promo cash this projection still debits through `endDate`, after
+   * paydowns, plan prepayment and skips (cards with none are absent). Chunks run
+   * to the promo deadline, but computeProjection drops events after `endDate`,
+   * so the window bound keeps this equal to what the calendar shows. The card
+   * page's promo planner reads it so its text can never disagree with the calendar.
    */
   promoCashByCard: Record<string, number>;
 };
@@ -897,7 +899,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   const variableCashExtras = variableBillExtras.filter((e) => e.amountCents > 0 || e.skipped);
   const promoCashByCard: Record<string, number> = {};
   for (const e of promoCashExtras) {
-    if (e.sourceId == null || e.amountCents <= 0) continue;
+    if (e.sourceId == null || e.amountCents <= 0 || e.date > endDate) continue;
     promoCashByCard[e.sourceId] = (promoCashByCard[e.sourceId] ?? 0) + e.amountCents;
   }
 

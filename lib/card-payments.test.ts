@@ -1131,6 +1131,15 @@ describe("projectCardPayments — one budget per paydown across every generator 
       expect(r.promoCashByCard["c1"] ?? 0).toBe(expected);
       expect(promoCash(r)).toBe(expected);
     }
+    // Chunks run to the promo deadline (12-31) but the calendar ends at
+    // EMPTY.endDate (08-01): only 05-10, 06-10 and 07-10 count.
+    const long = projectCardPayments({
+      ...EMPTY,
+      activeCards: [card()],
+      promos: [promo({ remainingAmountCents: 500_00, monthlyPaymentCents: 50_00 })],
+    });
+    expect(promoCash(long)).toBe(500_00);
+    expect(long.promoCashByCard).toEqual({ c1: 150_00 });
   });
 });
 
