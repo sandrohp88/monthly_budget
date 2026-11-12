@@ -97,7 +97,8 @@ test("sign-out removes this device's push subscription on the server and in the 
   const cookies = await page.context().cookies();
 
   await page.goto("/settings");
-  await expect(page.getByText("On this device")).toBeVisible();
+  // exact: "Enable/Disable on this device" buttons also contain the words.
+  await expect(page.getByText("On this device", { exact: true })).toBeVisible();
   await expect
     .poll(() => page.evaluate(async () => (await navigator.serviceWorker.getRegistration()) != null))
     .toBe(true);
