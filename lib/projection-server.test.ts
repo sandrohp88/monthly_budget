@@ -1003,6 +1003,94 @@ describe("buildProjection linked starting balance", () => {
     expect(p?.pendingPosting.totalHeldCents).toBe(903_00);
   });
 
+  async function chaseFixture() {
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 5000_00);
+    const plan = async (last4: string, amountCents: number) => {
+      const card = await createCreditCard(user.id, {
+        name: `Chase ****${last4}`,
+        statementDay: 15,
+        dueDay: 10,
+        currentBalanceCents: 1000_00,
+        autoPay: false,
+        isActive: true,
+      });
+      await upsertCreditCardPaymentOverride(user.id, card.id, {
+        dueDate: "2026-05-01",
+        amountCents,
+        notes: null,
+      });
+      return card;
+    };
+    const chaseBill = (name: string, amountCents: number) =>
+      createBill(user.id, {
+        name,
+        category: "Debt",
+        amountCents,
+        intervalMonths: 1,
+        anchorDate: "2026-05-05",
+        autoPay: true,
+        paidViaCardId: null,
+        notes: null,
+        isActive: true,
+      });
+    const debit = (id: string, description: string, amountCents: number) =>
+      upsertPlaidDraft({
+        id,
+        userId: user.id,
+        accountId: "checking",
+        date: "2026-05-02",
+        description,
+        originalDescription: null,
+        amountCents,
+        plaidCategory: null,
+        merchantName: null,
+        pending: false,
+        status: "approved",
+        kind: "expense",
+        linkedExpenseId: null,
+        linkedPromoId: null,
+      });
+    return { user, plan, chaseBill, debit };
+  }
+
+  it("a debit the card claims keeps settling its plan after bills take other debits", async () => {
+    // Claim pass: D2 is exact for P2 and P3 (ambiguous); D is the only near
+    // match left for P, so P settles from D. The bill then takes D2. A final
+    // pass that re-matched P without D2 saw D near P, P2 and P3 and dropped P:
+    // D was then credited to nothing and P stayed held (PR #166 review).
+    const { user, plan, chaseBill, debit } = await chaseFixture();
+    const p = await plan("1111", 500_00);
+    await plan("2222", 500_90);
+    await plan("3333", 500_90);
+    const bill = await chaseBill("Chase", 500_90);
+    await debit("d", "CHASE CREDIT CRD AUTOPAY", 500_40);
+    await debit("d2", "CHASE CREDIT CRD AUTOPAY", 500_90);
+    const proj = await buildProjection(user.id);
+    expect(proj?.billMatchesByDraftId.d2).toMatchObject({ billId: bill.id });
+    expect(proj?.billMatchesByDraftId.d).toBeUndefined();
+    const held = proj?.pendingPosting.cardPayments ?? [];
+    expect(held.map((c) => c.cardId)).not.toContain(p.id);
+    expect(held.map((c) => c.amountCents)).toEqual([500_90, 500_90]);
+    expect(proj?.pendingPosting.totalHeldCents).toBe(1001_80);
+  });
+
+  it("a debit the bill takes can still make a card plan unique in the final pass", async () => {
+    // Both debits are exact candidates for the plan, so the claim pass settles
+    // nothing. Only the auto loan names the "Chase Auto" bill; once it takes
+    // that debit, the autopay is the plan's only candidate.
+    const { user, plan, chaseBill, debit } = await chaseFixture();
+    await plan("1111", 500_00);
+    const bill = await chaseBill("Chase Auto", 500_00);
+    await debit("autopay", "CHASE CREDIT CRD AUTOPAY", 500_00);
+    await debit("loan", "CHASE AUTO PMT", 500_00);
+    const proj = await buildProjection(user.id);
+    expect(proj?.billMatchesByDraftId.loan).toMatchObject({ billId: bill.id });
+    expect(proj?.billMatchesByDraftId.autopay).toBeUndefined();
+    expect(proj?.pendingPosting.cardPayments).toEqual([]);
+    expect(proj?.pendingPosting.totalHeldCents).toBe(0);
+  });
+
   it("a split of the debit beats the card-plan heuristic for both of its targets", async () => {
     const { user, bill, cardId, loanEvent } = await discoverFixture({ cardPlan: true });
     await replaceDraftAllocations(user.id, "cardpay", [

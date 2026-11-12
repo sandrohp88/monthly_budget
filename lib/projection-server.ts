@@ -389,12 +389,13 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     // held and dropping the real loan payment (review 2026-11-10 PAY-2).
     // Manual links and splits stay on top: the card matcher already skips
     // drafts that carry either.
-    const cardClaimedDraftIds = matchPlannedCardPayments(
+    const cardClaim = matchPlannedCardPayments(
       plannedCardPayments,
       recentDrafts,
       new Set(),
       cardReceipts,
-    ).claimedDraftIds;
+    );
+    const cardClaimedDraftIds = cardClaim.claimedDraftIds;
     const matches = [
       ...allocated.bills,
       ...matchPaidBillOccurrences(reconcilableBills, recentDrafts, {
@@ -427,17 +428,25 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
         };
       }
     }
-    // Final card pass, minus the drafts bills took. It still settles every
-    // plan the claim pass above settled (those drafts never reach a bill, and
-    // removing other candidates cannot break a unique pair), and a bill's own
-    // debit can still resolve a plan that was ambiguous only because of it.
-    // No draft is credited to both a bill and a card plan.
+    // Plans the claim pass settled keep exactly that settlement. The final
+    // pass resolves only the plans left over, from the drafts left over:
+    // claimed drafts and the drafts bills took are both excluded, so a bill's
+    // own debit can still make a leftover plan unique, as before. A plan is
+    // settled once and a draft credited once. Explicit allocations never
+    // become claims, so they reach the final pass and win exactly as before.
+    // (Re-matching a claimed plan here could lose it: removing a bill's debit
+    // can shrink the exact pass and let near pairs make it ambiguous.)
     postedCardCents = reconcilePlannedCardPayments(
-      plannedCardPayments,
+      plannedCardPayments.filter(
+        (p) => !cardClaim.claimedPlanKeys.has(cardPaymentKey(p.cardId, p.date)),
+      ),
       recentDrafts,
-      new Set(Object.keys(billMatchesByDraftId)),
+      new Set([...Object.keys(billMatchesByDraftId), ...cardClaimedDraftIds]),
       cardReceipts,
     );
+    for (const key of cardClaim.claimedPlanKeys) {
+      postedCardCents.set(key, cardClaim.posted.get(key)!);
+    }
     // ── Money committed but not yet posted ──────────────────────────────
     // A due date passing is not evidence that a bill was paid. Plaid's live
     // balance is `balances.current`, which excludes pending debits, so an ACH

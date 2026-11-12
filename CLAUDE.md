@@ -1313,6 +1313,8 @@ active depository starting-balance accounts provide source debits. Ambiguous or
 unrecognized matches remain reserved; Transactions → **Split** can allocate a
 posted debit to a saved `card_payment` target. Allocations stay exhaustive so a
 bill, extra and card plan cannot reuse the same debit. Pending drafts cannot settle.
+A debit a tracked plan claims on its own evidence is taken before bill name/alias
+matching and keeps settling that plan; manual bill links and splits still win.
 
 Migration **0040** adds `credit_card_payment_overrides.track_posting`: new and
 edited plans opt in. At rollout only existing plans dated within the preceding

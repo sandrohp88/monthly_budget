@@ -173,12 +173,27 @@ describe("matchPaidBillOccurrences", () => {
       amountCents: 903_00,
     });
     expect(matchPaidBillOccurrences([loan], [cardPayment])).toEqual([]);
-    // A learned alias is still a heuristic: it gets the same ceiling.
-    expect(
-      matchPaidBillOccurrences([loan], [cardPayment], {
-        aliasesByBill: new Map([["loan", ["DISCOVER E-PAYMENT 4474"]]]),
-      }),
-    ).toEqual([]);
+  });
+
+  it("a learned alias gets the same over-payment ceiling as the name", () => {
+    // The bill's name is not in the descriptor: only the alias can match.
+    const loan = { id: "loan", name: "Personal Loan", amountCents: 150_00, intervalMonths: 1, anchorDate: "2026-05-10" };
+    const aliasesByBill = new Map([["loan", ["DISCOVER E-PAYMENT 4474"]]]);
+    const payment = (amountCents: number) =>
+      draft({ id: "pay", date: "2026-05-03", description: "DISCOVER E-PAYMENT 4474", merchantName: null, amountCents });
+    expect(matchPaidBillOccurrences([loan], [payment(150_00)])).toEqual([]);
+    expect(matchPaidBillOccurrences([loan], [payment(150_00)], { aliasesByBill })).toEqual([
+      expect.objectContaining({ billId: "loan", draftIds: ["pay"] }),
+    ]);
+    expect(matchPaidBillOccurrences([loan], [payment(903_00)], { aliasesByBill })).toEqual([]);
+  });
+
+  it("the over-payment ceiling is round(plan / SETTLE_MIN_FRACTION), inclusive", () => {
+    // $120.00 bill: cap = round(12000 / 0.35) = 34286 cents.
+    expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: 342_86 })])).toEqual([
+      expect.objectContaining({ paidAmountCents: 342_86 }),
+    ]);
+    expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: 342_87 })])).toEqual([]);
   });
 
   it("a debit 10% above the bill still settles it", () => {
