@@ -161,6 +161,71 @@ describe("matchPaidBillOccurrences", () => {
     ]);
   });
 
+  it("a debit far larger than the bill does not settle it by name alone", () => {
+    // Review 2026-11-10 PAY-2: a $903 Discover card payment named a $150
+    // "Discover" loan bill and marked it paid, dropping the loan's real cash.
+    const loan = { id: "loan", name: "Discover", amountCents: 150_00, intervalMonths: 1, anchorDate: "2026-05-10" };
+    const cardPayment = draft({
+      id: "cardpay",
+      date: "2026-05-03",
+      description: "DISCOVER E-PAYMENT 4474",
+      merchantName: null,
+      amountCents: 903_00,
+    });
+    expect(matchPaidBillOccurrences([loan], [cardPayment])).toEqual([]);
+  });
+
+  it("a learned alias gets the same over-payment ceiling as the name", () => {
+    // The bill's name is not in the descriptor: only the alias can match.
+    const loan = { id: "loan", name: "Personal Loan", amountCents: 150_00, intervalMonths: 1, anchorDate: "2026-05-10" };
+    const aliasesByBill = new Map([["loan", ["DISCOVER E-PAYMENT 4474"]]]);
+    const payment = (amountCents: number) =>
+      draft({ id: "pay", date: "2026-05-03", description: "DISCOVER E-PAYMENT 4474", merchantName: null, amountCents });
+    expect(matchPaidBillOccurrences([loan], [payment(150_00)])).toEqual([]);
+    expect(matchPaidBillOccurrences([loan], [payment(150_00)], { aliasesByBill })).toEqual([
+      expect.objectContaining({ billId: "loan", draftIds: ["pay"] }),
+    ]);
+    expect(matchPaidBillOccurrences([loan], [payment(903_00)], { aliasesByBill })).toEqual([]);
+  });
+
+  it("the over-payment ceiling is round(plan / SETTLE_MIN_FRACTION), inclusive", () => {
+    // $120.00 bill: cap = round(12000 / 0.35) = 34286 cents.
+    expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: 342_86 })])).toEqual([
+      expect.objectContaining({ paidAmountCents: 342_86 }),
+    ]);
+    expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: 342_87 })])).toEqual([]);
+  });
+
+  it("a debit 10% above the bill still settles it", () => {
+    expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: 132_00 })])).toEqual([
+      expect.objectContaining({ billId: "bill-nv", draftIds: ["txn-1"], paidAmountCents: 132_00 }),
+    ]);
+  });
+
+  it("a manual link settles the bill even when the debit is far larger", () => {
+    // The ceiling guards against a WRONG bill found by name. A manual link is
+    // the user's own statement of which bill the money paid.
+    const loan = { id: "loan", name: "Discover", amountCents: 150_00, intervalMonths: 1, anchorDate: "2026-05-10" };
+    expect(
+      matchPaidBillOccurrences(
+        [loan],
+        [draft({ id: "cardpay", date: "2026-05-03", amountCents: 903_00, linkedBillId: "loan" })],
+      ),
+    ).toEqual([expect.objectContaining({ billId: "loan", draftIds: ["cardpay"], paidAmountCents: 903_00 })]);
+  });
+
+  it("phase 2 does not fold a leftover draft past the over-payment ceiling", () => {
+    // $118.37 takes the $120 occurrence in phase 1. The leftover $300 debit
+    // alone fits the ceiling, but $418.37 on a $120 bill does not.
+    const matches = matchPaidBillOccurrences(
+      [nvEnergy],
+      [draft({ id: "fit", date: "2026-07-14" }), draft({ id: "big", date: "2026-07-15", amountCents: 300_00 })],
+    );
+    expect(matches).toEqual([
+      expect.objectContaining({ billId: "bill-nv", occurrenceDate: "2026-07-15", draftIds: ["fit"], paidAmountCents: 118_37 }),
+    ]);
+  });
+
   it("rejects refunds/credits (negative amounts)", () => {
     expect(matchPaidBillOccurrences([nvEnergy], [draft({ amountCents: -118_37 })])).toEqual([]);
   });
