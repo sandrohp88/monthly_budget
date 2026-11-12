@@ -1150,14 +1150,18 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
     ).toBeNull();
   });
 
-  it("KNOWN LIMITATION (PLAID-6): a re-keyed payment of a draft-settled statement lands on the hand-paid older cycle", async () => {
-    // Documents CURRENT behavior, not the desired one; tied to defect B
-    // (review finding PLAID-6). Plaid re-keys the payment that step 3 used to
-    // settle the current statement: the same sync adds it under a new id and
-    // removes the old id. The added loop runs first, while the current
-    // statement is still stamped by the old id, so the new id is consumed
-    // against the hand-paid older cycle; then the removal re-opens the
-    // current statement. The PR that fixes PLAID-6 should flip this test.
+  it("KNOWN LIMITATION (re-key loop order): a re-keyed payment of a draft-settled statement lands on the hand-paid older cycle", async () => {
+    // Documents CURRENT behavior, not the desired one. Plaid re-keys the
+    // payment that step 3 used to settle the current statement: one sync adds
+    // it under a new id and removes the old id. The cause is LOOP ORDER in
+    // syncPlaidTransactions (lib/plaid-sync.ts): the `added` loop runs before
+    // the `removed` loop, so the new id is matched while the current
+    // statement still carries the old id's stamp; it is therefore consumed on
+    // the hand-paid older cycle, and only then does the removal re-open the
+    // current statement. This is a separate issue from PLAID-6 (a removed
+    // stamped payment erases a MANUAL paid record): a provenance column for
+    // PLAID-6 alone will not flip this test; fixing it needs the removals to
+    // be applied before the additions are matched (or a re-match after them).
     const user = await makeUser();
     const token = encryptToken("access-token");
     const item = await createPlaidItem(user.id, {

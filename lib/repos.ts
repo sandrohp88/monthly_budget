@@ -1777,9 +1777,10 @@ function isUniqueViolation(e: unknown): boolean {
  *    only trustworthy source, §17a.)
  *
  * Steps 2 and 3 are one choice, not a sequence: of all statements matching
- * as (2) or (3), the payment goes to the newest one issued before the
- * payment date, so a hand-paid older cycle never takes the current cycle's
- * payment.
+ * as (2) or (3), a hand-paid row recording this same payment (amount + paid
+ * date within a week) wins; otherwise the payment goes to the newest one
+ * issued before the payment date, so a hand-paid older cycle never takes the
+ * current cycle's payment.
  *
  * Returns the newly-settled statement, or null when nothing was settled
  * (consumed, accounted, or no match).
@@ -1861,18 +1862,53 @@ export async function settleStatementWithDraft(
     withinWindow(s) &&
     matchesDue(s);
   const candidates = stmts.filter((s) => isAccounted(s) || isOpenMatch(s)); // newest-first
+
+  // Before the cycle rule: a hand-paid row whose OWN recorded payment (amount
+  // within tolerance AND paidDate within SAME_PAYMENT_MAX_DAYS of this
+  // payment) matches is evidence about the SAME payment, so it wins. The
+  // cycle rule is only an inference from statement dates, which on manual
+  // cards are estimates: Oct hand-paid $15.99 on 10-30, Nov entered as issued
+  // 10-28 (really 11-03) — the 10-30 payment is Oct's, not Nov's. The bound:
+  // bank posting lag is 0-3 business days, a weekend adds 2 and a bank
+  // holiday 1, so 7 days covers it while staying far below one cycle (a
+  // payment exactly one cycle after the recorded one, 31 days, never
+  // qualifies). Nearest paidDate wins; a NULL paidDate cannot use this path.
+  const SAME_PAYMENT_MAX_DAYS = 7;
+  const paidDaysAway = (s: CreditCardStatementRow) =>
+    Math.abs(new Date(s.paidDate!).getTime() - targetTime) / (1000 * 60 * 60 * 24);
+  const samePayment = candidates
+    .filter(
+      (s) =>
+        isAccounted(s) &&
+        s.paidDate != null &&
+        amountMatches(s.paidAmountCents!) &&
+        paidDaysAway(s) <= SAME_PAYMENT_MAX_DAYS,
+    )
+    .sort((a, b) => paidDaysAway(a) - paidDaysAway(b))[0];
+
   const chosen =
-    candidates.find((s) => s.statementDate < input.date) ?? candidates[candidates.length - 1];
+    samePayment ??
+    candidates.find((s) => s.statementDate < input.date) ??
+    candidates[candidates.length - 1];
   if (!chosen) return null;
 
   // Step 2 — already accounted: stamp for provenance, settle nothing new.
+  // Only stamp a row that is still unstamped: a pass that raced us with a
+  // different draft may have stamped it since `stmts` was read, and
+  // overwriting that stamp would free the other draft. Either way nothing
+  // was newly settled, so the result is null.
   const accounted = isAccounted(chosen) ? chosen : undefined;
   if (accounted) {
     try {
       await db
         .update(creditCardStatements)
         .set({ settledByDraftId: input.draftId })
-        .where(eq(creditCardStatements.id, accounted.id))
+        .where(
+          and(
+            eq(creditCardStatements.id, accounted.id),
+            isNull(creditCardStatements.settledByDraftId),
+          ),
+        )
         .run();
     } catch (e) {
       if (!isUniqueViolation(e)) throw e;
