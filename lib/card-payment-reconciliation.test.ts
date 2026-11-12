@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cardPaymentKey,
+  matchPlannedCardPayments,
   reconcilePlannedCardPayments,
   type PlannedCardPayment,
 } from "./card-payment-reconciliation";
@@ -62,6 +63,19 @@ describe("reconcilePlannedCardPayments", () => {
     expect(
       reconcilePlannedCardPayments([plan, { ...plan, cardId: "other-card" }], [draft]).size,
     ).toBe(0);
+  });
+  it("reports only the drafts it settled a plan with, for bill matching to skip", () => {
+    const settled = matchPlannedCardPayments([plan], [draft]);
+    expect([...settled.claimedDraftIds]).toEqual(["posted"]);
+    expect([...settled.claimedPlanKeys]).toEqual([cardPaymentKey("visa", "2026-09-04")]);
+    // Ambiguity settles nothing, so no draft is claimed away from bills.
+    expect(matchPlannedCardPayments([plan], [draft, { ...draft, id: "other" }]).claimedDraftIds.size).toBe(0);
+    // An explicit allocation credits the plan but is not a heuristic claim.
+    const split = { ...draft, allocations: [{ targetKind: "card_payment" as const, targetId: "visa", targetDate: "2026-09-04", amountCents: 20000 }] };
+    const explicit = matchPlannedCardPayments([plan], [split]);
+    expect(explicit.posted.get(cardPaymentKey("visa", "2026-09-04"))).toBe(20000);
+    expect(explicit.claimedDraftIds.size).toBe(0);
+    expect(explicit.claimedPlanKeys.size).toBe(0);
   });
   it("honors explicit partial allocations without adding a heuristic match on top", () => {
     const partial = {
