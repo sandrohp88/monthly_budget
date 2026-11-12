@@ -76,6 +76,11 @@ import {
   deletePushSubscriptionByEndpoint,
   deletePushSubscriptionById,
   markPushSubscriptionNotified,
+  listAllPushSubscriptions,
+  // users (session revocation)
+  updateUserPassword,
+  updateUserProfile,
+  deleteUser,
 } from "./repos";
 
 // ── per-test SQLite fixture ────────────────────────────────────────────────
@@ -1349,6 +1354,65 @@ describe("repos / statement paid transitions", () => {
 
     await deletePushSubscriptionByEndpoint(userId, "https://push.example/sub/1");
     expect(await listPushSubscriptions(userId)).toHaveLength(0);
+  });
+
+  it("push subscriptions: another user enabling push on the same browser takes over the one row and resets its dedupe state", async () => {
+    // AUTH-5: a shared device. User A enables push and is notified; later user
+    // B enables push in the same browser profile, so the push service hands
+    // out the same endpoint. The row must end up owned by B alone, and A's
+    // digest / last-notified time must not suppress B's first alert.
+    const { id: a } = await makeUser("push-a@example.com");
+    const { id: b } = await makeUser("push-b@example.com");
+    const endpoint = "https://push.example/sub/shared-tablet";
+
+    const first = await upsertPushSubscription(a, { endpoint, p256dh: "key-a", auth: "auth-a" });
+    await markPushSubscriptionNotified(first.id, "digest-of-a", 1_800_000_000_000);
+
+    const taken = await upsertPushSubscription(b, { endpoint, p256dh: "key-b", auth: "auth-b" });
+
+    expect(taken.userId).toBe(b);
+    expect(taken).toMatchObject({ p256dh: "key-b", auth: "auth-b", lastDigest: null, lastNotifiedAt: null });
+    expect(await listPushSubscriptions(a)).toHaveLength(0);
+    expect((await listPushSubscriptions(b)).map((s) => s.endpoint)).toEqual([endpoint]);
+
+    // The same user re-subscribing keeps the dedupe state (no re-nag).
+    await markPushSubscriptionNotified(taken.id, "digest-of-b", 1_800_000_100_000);
+    const again = await upsertPushSubscription(b, { endpoint, p256dh: "key-c", auth: "auth-c" });
+    expect(again).toMatchObject({ lastDigest: "digest-of-b", lastNotifiedAt: 1_800_000_100_000 });
+  });
+
+  it("push subscriptions: a password or role change (session revocation) deletes that user's subscriptions only", async () => {
+    // A sessionVersion bump ends the user's sessions on every device; the
+    // devices must not keep receiving that user's card alerts afterwards.
+    const { id: userId } = await makeUser("push-revoke@example.com");
+    const { id: otherId } = await makeUser("push-revoke-other@example.com");
+    const sub = (endpoint: string) => ({ endpoint, p256dh: "k", auth: "a" });
+
+    await upsertPushSubscription(userId, sub("https://push.example/sub/r1"));
+    await upsertPushSubscription(userId, sub("https://push.example/sub/r2"));
+    await upsertPushSubscription(otherId, sub("https://push.example/sub/other"));
+
+    await updateUserPassword(userId, "a-new-password");
+    expect(await listPushSubscriptions(userId)).toHaveLength(0);
+    expect(await listPushSubscriptions(otherId)).toHaveLength(1);
+
+    // A display-name edit does not revoke sessions, so it keeps the devices.
+    await upsertPushSubscription(userId, sub("https://push.example/sub/r3"));
+    await updateUserProfile(userId, { displayName: "Renamed" });
+    await updateUserProfile(userId, { role: "admin" }); // unchanged role: no bump
+    expect(await listPushSubscriptions(userId)).toHaveLength(1);
+
+    // A real role change revokes sessions and removes the devices.
+    await updateUserProfile(userId, { role: "member" });
+    expect(await listPushSubscriptions(userId)).toHaveLength(0);
+    expect(await listPushSubscriptions(otherId)).toHaveLength(1);
+  });
+
+  it("push subscriptions: deleting a user cascades to their subscriptions", async () => {
+    const { id: userId } = await makeUser("push-deleted@example.com");
+    await upsertPushSubscription(userId, { endpoint: "https://push.example/sub/gone", p256dh: "k", auth: "a" });
+    await deleteUser(userId);
+    expect(await listAllPushSubscriptions()).toHaveLength(0);
   });
 
   it("push subscriptions: prune by id removes a dead subscription", async () => {

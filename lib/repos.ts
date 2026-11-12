@@ -193,25 +193,34 @@ export async function updateUserProfile(
   if (Object.keys(update).length === 0) return (await listUsers()).find((u) => u.id === id);
   // A role change revokes the user's existing sessions (lib/session-user.ts);
   // a display-name edit does not.
+  // Revoking also drops the user's push subscriptions, in the same
+  // transaction: those devices are signed out and must not keep receiving
+  // this user's card alerts (review 2026-11-10 AUTH-5).
   const current = patch.role !== undefined ? await getUserById(id) : undefined;
   const bump = current !== undefined && current.role !== patch.role;
-  await db
-    .update(users)
-    .set(bump ? { ...update, sessionVersion: sql`${users.sessionVersion} + 1` } : update)
-    .where(eq(users.id, id))
-    .run();
+  db.transaction((tx) => {
+    tx.update(users)
+      .set(bump ? { ...update, sessionVersion: sql`${users.sessionVersion} + 1` } : update)
+      .where(eq(users.id, id))
+      .run();
+    if (bump) tx.delete(pushSubscriptions).where(eq(pushSubscriptions.userId, id)).run();
+  });
   return (await listUsers()).find((u) => u.id === id);
 }
 
 export async function updateUserPassword(id: string, newPassword: string): Promise<void> {
   const db = getDb();
   const hash = await hashPassword(newPassword);
-  // Revoke every existing session for this user, including the caller's.
-  await db
-    .update(users)
-    .set({ passwordHash: hash, sessionVersion: sql`${users.sessionVersion} + 1` })
-    .where(eq(users.id, id))
-    .run();
+  // Revoke every existing session for this user, including the caller's, and
+  // drop their push subscriptions with it: every device must sign in again
+  // and re-enable notifications (review 2026-11-10 AUTH-5).
+  db.transaction((tx) => {
+    tx.update(users)
+      .set({ passwordHash: hash, sessionVersion: sql`${users.sessionVersion} + 1` })
+      .where(eq(users.id, id))
+      .run();
+    tx.delete(pushSubscriptions).where(eq(pushSubscriptions.userId, id)).run();
+  });
 }
 
 export async function deleteUser(id: string): Promise<void> {
@@ -4141,7 +4150,9 @@ export async function listAllPushSubscriptions(): Promise<PushSubscriptionRow[]>
 /**
  * Idempotent per endpoint: re-subscribing from the same browser updates the
  * keys in place (push services rotate keys on re-subscribe) and re-homes the
- * row to the signed-in user.
+ * row to the signed-in user. An endpoint is one browser profile, so when a
+ * different user subscribes it, the row moves to them alone and the previous
+ * owner's dedupe state (lastDigest / lastNotifiedAt) is cleared.
  */
 export async function upsertPushSubscription(
   userId: string,
@@ -4161,6 +4172,7 @@ export async function upsertPushSubscription(
         p256dh: data.p256dh,
         auth: data.auth,
         userAgent: data.userAgent ?? existing.userAgent,
+        ...(existing.userId !== userId ? { lastDigest: null, lastNotifiedAt: null } : {}),
       })
       .where(eq(pushSubscriptions.id, existing.id));
     return (await db

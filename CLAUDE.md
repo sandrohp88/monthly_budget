@@ -554,7 +554,10 @@ INTEREST AlertBar (`findUncoveredCardDues`). Moving parts:
   read at runtime (never baked into the client bundle); rotating them
   invalidates every stored subscription, so devices must re-enable.
 - **Storage:** `push_subscriptions` (migration `0031`) — one row per device,
-  with `lastDigest`/`lastNotifiedAt` for dedupe.
+  with `lastDigest`/`lastNotifiedAt` for dedupe. An endpoint is one browser
+  profile: a different user subscribing it takes the row over and resets the
+  dedupe state. A password or role change (`sessionVersion` bump) deletes that
+  user's rows in the same transaction.
 - **Dispatch:** `lib/push.ts` (I/O) + `lib/push-payload.ts` (pure payload,
   digest, quiet-hours + 24h re-nag decision — unit-tested). Dead
   subscriptions (push service 404/410) are pruned on send.
@@ -571,7 +574,12 @@ INTEREST AlertBar (`findUncoveredCardDues`). Moving parts:
   cache page HTML, RSC or `/api/` responses: CacheStorage is per origin, not
   per user, and survives logout. Offline navigations get `/offline.html`. When
   you change what is cached, bump `CACHE_NAME`; activation deletes every other
-  cache. Sign-out goes through `lib/client-signout.ts`, which also clears caches.
+  cache. Sign-out goes through `lib/client-signout.ts`, which also clears caches
+  and, before `signOut` (the route needs the cookie), removes this device's push
+  subscription via `lib/client-push.ts` (DELETE `/api/push`, then
+  `unsubscribe()`; best-effort, time-bounded, never blocks sign-out). A session
+  that ends without client code (30-day expiry) keeps its row: the server has
+  no device/session tracking.
 
 ---
 
