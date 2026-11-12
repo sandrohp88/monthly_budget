@@ -619,6 +619,18 @@ export const plaidItems = sqliteTable(
      * (2/min + 120/hour per item here). See `refreshItemTransactions`.
      */
     transactionsRefreshedAt: integer("transactions_refreshed_at"),
+    /**
+     * Item health (migration 0045). `lastErrorCode` is a short stable code
+     * (Plaid's `error_code`, a webhook code such as PENDING_EXPIRATION, or
+     * UNKNOWN_ERROR) — never an error message, which can carry tokens. Null
+     * while the item is healthy. `firstErrorAt`/`lastErrorAt` are when the
+     * current problem was first and last seen (epoch ms). The last SUCCESSFUL
+     * sync is `lastSyncedAt`: it is written only after a completed cursor
+     * read. See lib/plaid-item-health.ts and CLAUDE.md §17 "Item health".
+     */
+    lastErrorCode: text("last_error_code"),
+    lastErrorAt: integer("last_error_at"),
+    firstErrorAt: integer("first_error_at"),
   },
   (t) => ({
     userActive: index("plaid_items_user_active_idx").on(t.userId, t.isActive),

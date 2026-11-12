@@ -39,6 +39,8 @@ import { Tile, TileGrid } from "@/components/ui/tile";
 import { cn } from "@/lib/cn";
 import { isSpecialFinancingCandidate } from "@/lib/plaid-promo-parser";
 import { looksLikeReversal } from "@/lib/plaid-transaction-kind";
+import { syncFailureMessage } from "@/lib/plaid-item-health";
+import type { SyncItemError } from "@/lib/plaid-sync";
 import type { DraftWithAccount } from "@/app/api/plaid/drafts/route";
 
 type FilterKey = "all" | "debits" | "credits" | "bills" | "card_payments" | "promos";
@@ -179,9 +181,17 @@ export function TransactionsClient({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({}),
       });
-      const json = (await res.json()) as { added?: number; modified?: number; error?: string };
+      const json = (await res.json()) as {
+        added?: number;
+        modified?: number;
+        itemErrors?: SyncItemError[];
+        error?: string;
+      };
       if (!res.ok) throw new Error(json.error ?? "Sync failed");
-      toast.success(`Sync complete - ${json.added ?? 0} new, ${json.modified ?? 0} updated`);
+      // A partial failure still answers 200: name the bank that failed
+      // instead of claiming the sync completed.
+      if ((json.itemErrors?.length ?? 0) > 0) toast.error(syncFailureMessage(json.itemErrors!));
+      else toast.success(`Sync complete - ${json.added ?? 0} new, ${json.modified ?? 0} updated`);
       await refresh();
       // The sync also changes projections, balances, statements, and reports.
       // Refreshing here invalidates Next's full client route cache, not just

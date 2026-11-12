@@ -9,10 +9,13 @@ import {
 import { getPlaidClient } from "./plaid-client";
 import { decryptToken } from "./plaid-crypto";
 import {
+  clearPlaidItemError,
   getPlaidItemByPlaidItemId,
   listActivePlaidItemsMissingPlaidItemId,
+  recordPlaidItemError,
   setPlaidItemPlaidItemId,
 } from "./repos";
+import { normalizeItemErrorCode } from "./plaid-item-health";
 import { syncPlaidTransactions } from "./plaid-sync";
 import type { PlaidWebhookInput } from "./validation";
 import { log } from "./log";
@@ -191,6 +194,37 @@ const SYNC_TRIGGER_CODES = new Set([
 ]);
 
 /**
+ * ITEM webhook codes that change the item's recorded health (migration 0045).
+ * They never trigger a sync: the item's data cannot be read while it is
+ * broken, and a repaired item syncs on its next transactions webhook or tap.
+ * Other ITEM codes (NEW_ACCOUNTS_AVAILABLE, WEBHOOK_UPDATE_ACKNOWLEDGED, …)
+ * stay ignored.
+ */
+const ITEM_HEALTH_CODES = new Set([
+  "ERROR",
+  "PENDING_EXPIRATION",
+  "PENDING_DISCONNECT",
+  "USER_PERMISSION_REVOKED",
+  "LOGIN_REPAIRED",
+]);
+
+/** The code to store for an ITEM webhook, or null to clear the error. */
+function itemHealthCode(payload: PlaidWebhookInput): string | null {
+  if (payload.webhook_code === "LOGIN_REPAIRED") return null;
+  if (payload.webhook_code === "ERROR") {
+    const error = (payload as { error?: unknown }).error;
+    const raw =
+      typeof error === "object" && error !== null
+        ? (error as { error_code?: unknown }).error_code
+        : undefined;
+    return normalizeItemErrorCode(raw);
+  }
+  // PENDING_EXPIRATION / PENDING_DISCONNECT / USER_PERMISSION_REVOKED: the
+  // webhook code itself is the stored code.
+  return payload.webhook_code;
+}
+
+/**
  * One sync per item at a time. Plaid can burst several webhooks for the same
  * item; running syncs concurrently against the same cursor does redundant
  * work, so a trigger that arrives while a sync is in flight only marks the
@@ -247,6 +281,8 @@ export type WebhookDeps = {
     accessTokenTag: string;
   }) => Promise<string>;
   sync: typeof syncPlaidTransactions;
+  recordItemError: typeof recordPlaidItemError;
+  clearItemError: typeof clearPlaidItemError;
 };
 
 async function defaultResolvePlaidItemId(item: {
@@ -266,6 +302,8 @@ const defaultDeps: WebhookDeps = {
   setItemPlaidItemId: setPlaidItemPlaidItemId,
   resolvePlaidItemId: defaultResolvePlaidItemId,
   sync: syncPlaidTransactions,
+  recordItemError: recordPlaidItemError,
+  clearItemError: clearPlaidItemError,
 };
 
 /**
@@ -292,6 +330,7 @@ async function resolveItem(plaidItemId: string, deps: WebhookDeps) {
 export type WebhookOutcome =
   | { action: "sync-started"; itemId: string }
   | { action: "queued"; itemId: string }
+  | { action: "health-updated"; itemId: string; code: string | null }
   | { action: "ignored"; reason: string };
 
 /**
@@ -304,6 +343,7 @@ export async function handlePlaidWebhook(
   payload: PlaidWebhookInput,
   deps: WebhookDeps = defaultDeps,
 ): Promise<WebhookOutcome> {
+  if (payload.webhook_type === "ITEM") return handleItemWebhook(payload, deps);
   if (payload.webhook_type !== "TRANSACTIONS") {
     log.info(`plaid-webhook: ignoring ${payload.webhook_type}/${payload.webhook_code}`);
     return { action: "ignored", reason: `unhandled type ${payload.webhook_type}` };
@@ -331,4 +371,37 @@ export async function handlePlaidWebhook(
   void runItemSyncs(item, deps);
 
   return { action: "sync-started", itemId: item.id };
+}
+
+/**
+ * ITEM webhooks record the item's health (review 2026-11-10 PLAID-2). The
+ * write is limited to the one item that Plaid's `item_id` resolves to, scoped
+ * by that item's own owner; nothing else in the payload chooses the row.
+ */
+async function handleItemWebhook(
+  payload: PlaidWebhookInput,
+  deps: WebhookDeps,
+): Promise<WebhookOutcome> {
+  if (!ITEM_HEALTH_CODES.has(payload.webhook_code)) {
+    log.info(`plaid-webhook: ignoring ITEM/${payload.webhook_code}`);
+    return { action: "ignored", reason: `unhandled code ${payload.webhook_code}` };
+  }
+  if (!payload.item_id) {
+    return { action: "ignored", reason: "missing item_id" };
+  }
+  const item = await resolveItem(payload.item_id, deps);
+  if (!item) {
+    log.warn(`plaid-webhook: no active item matches plaid item_id ${payload.item_id}`);
+    return { action: "ignored", reason: "unknown item" };
+  }
+
+  const code = itemHealthCode(payload);
+  if (code === null) {
+    await deps.clearItemError(item.userId, item.id, { keepPending: false });
+    log.info(`plaid-webhook: item ${item.id} login repaired — error cleared`);
+  } else {
+    await deps.recordItemError(item.userId, item.id, code, Date.now());
+    log.warn(`plaid-webhook: item ${item.id} reported ITEM/${payload.webhook_code} (${code})`);
+  }
+  return { action: "health-updated", itemId: item.id, code };
 }

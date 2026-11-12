@@ -371,6 +371,7 @@ weird gets emitted before merging.
 - `0042_one_time_income` — `paychecks.is_one_time`: one-time income (bonuses) lives on `paychecks` so it projects and deposit-reconciles like a paycheck, but `isScheduledPaycheck` (lib/paycheck-schedule.ts) keeps it out of every schedule read/write — otherwise a schedule edit moves a bonus onto a payday and restates its amount. Set at creation only. Backup v13. The projection carries it as `isOneTime` on the `kind: "paycheck"` event (cash unchanged); anything that derives a PAYDAY / pay cycle from events (insights, calendar PAYCHECK view, ledger sections) must use `isPaydayEvent`/`isPaydayRow`/`paydayDates` (lib/projection-insights.ts), never `kind === "paycheck"` alone.
 - `0043_shared_deposit_income` — drops `paychecks_settled_by_draft_unique_idx` (from 0029). One posted deposit may settle a scheduled paycheck and one-time income together; each row stores its own share. No row rewrite. Shares are capped in `settlePaycheckSharesWithDraft`.
 - `0044_live_balance_at` — `plaid_accounts.live_balance_at`: epoch ms of the SUCCESSFUL live pull that wrote the stored `balance_cents`/`available_balance_cents` pair, null when the pair is cached. Per-account success stamp (unlike 0038's per-item attempt stamp). While `live_balance_at >= plaid_items.balance_refreshed_at` (the latest attempt wrote the pair), cached payloads keep the pair. Not in the backup. See §17 "Cached vs live balances".
+- `0045_plaid_item_health` — `plaid_items.last_error_code` / `last_error_at` / `first_error_at`: the item's recorded health (a short stable code, never a message). The last SUCCESSFUL sync stays `last_synced_at` (written only after a completed cursor read). Not in the backup. See §17 "Item health".
 
 ---
 
@@ -764,7 +765,7 @@ In rough order of "what to try":
 
 Optional add-on that links real bank accounts via **Plaid** so the app can
 import transactions and use a live balance as the projection's starting point.
-The flow is polling-only — no webhook endpoint, no public callback URL needed.
+Syncs run on Plaid webhooks (`POST /api/plaid/webhook`, JWT-verified, see `lib/plaid-webhook.ts`) and on the manual Sync buttons. There is no timer.
 
 ### Required env vars
 ```
@@ -803,6 +804,15 @@ All encrypt/decrypt happens through `lib/plaid-crypto.ts`.
 - **A posted transaction supersedes its pending predecessor by id.** Plaid does NOT reuse the `transaction_id` when a pending transaction posts — it issues a new one and points back via `pending_transaction_id`. `supersedePendingPredecessor` dismisses the predecessor; skip it and the same charge is counted twice (once held, once posted). Measured 2026-08-11: 5 of 5 Citi and 2 of 6 Navy Federal posted rows carried that field, so this is the normal path, not an edge case.
 - Account balances are refreshed on every sync from the same response — but that response carries Plaid's **cached** balance. See "Cached vs live balances" below.
 - Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
+
+### Item health (broken connections must not be silent)
+Incident 2026-09-15: one bank login broke, every sync failed in the per-item
+catch, the Sync button still said "Sync complete", and the frozen balance kept
+anchoring the projection labelled "live" for a week (review 2026-11-10 PLAID-2).
+- The per-item catch in `syncPlaidTransactions` stores `normalizeItemErrorCode(plaidErrorCode(err))` (`UNKNOWN_ERROR` for non-Plaid errors) and returns it in `SyncResult.itemErrors`; a fully successful item clears it. Only failures that reach that catch count. The optional calls (`/transactions/refresh`, `/accounts/get`, the live balance pull, liabilities) catch their own errors and must stay non-fatal.
+- ITEM webhooks: `ERROR` stores the payload's code, `PENDING_EXPIRATION` / `PENDING_DISCONNECT` / `USER_PERMISSION_REVOKED` store the webhook code, `LOGIN_REPAIRED` clears. They never sync. A successful sync keeps a pending code (the bank still works until it expires).
+- `lib/plaid-item-health.ts` (pure) decides `ok | failing | stale | expiring`; stale = no success for `BANK_SYNC_STALE_AFTER_MS` (3 days). /accounts warns per item; the dashboard alerts only for items that feed the starting balance and drops the word "live" from the balance label. Nothing changes a number.
+- Plaid Link update mode is not built: the only recovery is unlink + link again. Don't render a Reconnect button until it exists.
 
 ### Client cache invalidation after manual sync
 Both manual sync entry points (`/accounts` and `/transactions`) must call
@@ -1193,7 +1203,7 @@ drawing it to the horizon.
 - ❌ Don't log access tokens (encrypted or plaintext) — `lib/log.ts` is fine for everything else.
 - ❌ Don't store the plaintext access token even briefly in the DB — encrypt before insert in the same function.
 - ❌ Don't bypass `getPlaidClient()` — it lazy-validates env vars and surfaces clear errors.
-- ❌ Don't add a webhook endpoint without explicit need — sync-on-load is enough for a single-family deploy and avoids exposing a public ingress.
+- ❌ Don't add a second webhook endpoint or weaken the JWT check in `verifyPlaidWebhook` — the one receiver is the only public Plaid ingress.
 
 ---
 

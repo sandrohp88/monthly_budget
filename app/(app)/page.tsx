@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requirePageUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { buildProjection } from "@/lib/projection-server";
-import { listPaychecks, listPromos, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance, getSettings } from "@/lib/repos";
+import { listPaychecks, listPromos, listStatementsForUser, computeCategoryUtilization, getPrimaryLinkedBalance, getSettings, listPlaidItems, listPlaidAccounts } from "@/lib/repos";
 import { interestSavingOwedByStatement } from "@/lib/credit-cards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHead } from "@/components/ui/page-head";
@@ -21,7 +21,8 @@ import { AlertBar } from "@/components/ui/alert-bar";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { ProjectionChart } from "@/components/projection-chart";
-import { addDaysIso, DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
+import { addDaysIso, DEFAULT_TIMEZONE, isoDateInTimeZone, todayIso } from "@/lib/dates";
+import { assessBankHealth, bankHealthReason } from "@/lib/plaid-item-health";
 import { findWorstDay } from "@/lib/projection";
 import { findUncoveredCardDues } from "@/lib/projection-insights";
 import { showsPostedBalance } from "@/lib/soft-balance";
@@ -70,15 +71,29 @@ export default async function DashboardPage() {
   const totalPromoDriftCents = Object.values(promoDriftByCard).reduce((s, n) => s + n, 0);
   const driftedCardCount = Object.keys(promoDriftByCard).length;
 
-  const today = todayIso(settings?.timezone ?? DEFAULT_TIMEZONE);
+  const timeZone = settings?.timezone ?? DEFAULT_TIMEZONE;
+  const today = todayIso(timeZone);
   const currentMonth = today.slice(0, 7);
-  const [paychecks, ccStatements, ccPromos, budgetUtilization, liveBalance] = await Promise.all([
-    listPaychecks(userId),
-    listStatementsForUser(userId),
-    listPromos(userId),
-    computeCategoryUtilization(userId, currentMonth),
-    getPrimaryLinkedBalance(userId),
-  ]);
+  const [paychecks, ccStatements, ccPromos, budgetUtilization, liveBalance, plaidItems, plaidAccounts] =
+    await Promise.all([
+      listPaychecks(userId),
+      listStatementsForUser(userId),
+      listPromos(userId),
+      computeCategoryUtilization(userId, currentMonth),
+      getPrimaryLinkedBalance(userId),
+      listPlaidItems(userId),
+      listPlaidAccounts(userId),
+    ]);
+
+  // Bank connections that feed the starting balance but are broken, stale or
+  // about to expire (review 2026-11-10 PLAID-2). Surfaced only: the balance
+  // number itself is unchanged; its label stops claiming "live".
+  const bankHealth = assessBankHealth({ items: plaidItems, accounts: plaidAccounts, now: Date.now() });
+  const anchorProblems = bankHealth.dashboard;
+  const staleAnchors = bankHealth.balanceOutOfDate;
+  const staleAnchorAsOf = staleAnchors.some((h) => h.lastSuccessAt == null)
+    ? null
+    : Math.min(...staleAnchors.map((h) => h.lastSuccessAt!));
 
   // Credit card "due to avoid interest" totals — the Interest Saving Balance
   // for cards with active 0% promos, the full statement cash due otherwise.
@@ -193,6 +208,20 @@ export default async function DashboardPage() {
               <>
                 posted <Money cents={postedNowCents} /> · <Money cents={inFlightCents} /> in flight
               </>
+            ) : liveBalance != null && staleAnchors.length > 0 ? (
+              <>
+                {staleAnchorAsOf != null ? (
+                  <>
+                    as of <DateLabel iso={isoDateInTimeZone(staleAnchorAsOf, timeZone)} format="short" />
+                  </>
+                ) : (
+                  "never synced"
+                )}{" "}
+                ·{" "}
+                {staleAnchors.length === 1
+                  ? `${staleAnchors[0]!.institutionName} not syncing`
+                  : `${staleAnchors.length} banks not syncing`}
+              </>
             ) : liveBalance != null ? (
               "live · linked accounts"
             ) : (
@@ -275,6 +304,45 @@ export default async function DashboardPage() {
         unattributedCents={pendingPosting.unattributedCents}
         today={today}
       />
+
+      {anchorProblems.length > 0 ? (
+        <AlertBar
+          tag="Bank sync"
+          variant={anchorProblems.some((h) => h.status === "failing") ? "red" : "amber"}
+        >
+          {anchorProblems.map((h, i) => (
+            <span key={h.itemId}>
+              {i > 0 ? " " : ""}
+              <strong
+                className={h.status === "failing" ? "text-[var(--red)]" : "text-[var(--amber)]"}
+              >
+                {h.institutionName}
+              </strong>{" "}
+              {h.status === "expiring" ? (
+                "connection expires soon. Then it will stop syncing."
+              ) : (
+                <>
+                  {h.lastSuccessAt != null ? (
+                    <>
+                      has not synced since{" "}
+                      <DateLabel iso={isoDateInTimeZone(h.lastSuccessAt, timeZone)} format="short" />.
+                    </>
+                  ) : (
+                    "has never synced."
+                  )}
+                  {h.status === "failing" ? <> {bankHealthReason(h)}</> : null}
+                </>
+              )}
+            </span>
+          ))}
+          {staleAnchors.length > 0
+            ? ` Your starting balance comes from ${staleAnchors.length === 1 ? "this bank" : "these banks"}, so the balance shown may be out of date.`
+            : null}{" "}
+          <Link href="/accounts" className="text-[var(--mint)] hover:underline">
+            Open Accounts →
+          </Link>
+        </AlertBar>
+      ) : null}
 
       {uncoveredCardDues.length > 0 ? (
         <AlertBar tag="Interest" variant={uncoveredDueUrgent ? "red" : "amber"}>
