@@ -37,6 +37,7 @@ import { DateLabel } from "@/components/date-label";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
 import {
   buildProjectionInsights,
+  isPaydayRow,
   type ProjectionInsights,
 } from "@/lib/projection-insights";
 import { buildLedgerSummary } from "@/lib/projection-ledger";
@@ -139,10 +140,6 @@ type PromoPaymentSummary = {
 
 type SoftPillTone = "neutral" | "income" | "danger" | "warning";
 
-function hasPaycheck(row: ProjectionRow): boolean {
-  return row.events.some((event) => event.kind === "paycheck");
-}
-
 function paycheckAmount(row: ProjectionRow): number {
   return row.events
     .filter((event) => event.kind === "paycheck")
@@ -169,7 +166,9 @@ function buildLedgerSections(rows: ProjectionRow[]): LedgerSection[] {
   };
 
   for (const row of rows) {
-    if (hasPaycheck(row)) {
+    // Only a payday opens a section. One-time income (a bonus) is income of
+    // the section it falls in, not a new "Paycheck cycle".
+    if (isPaydayRow(row)) {
       if (current.rows.length > 0) sections.push(current);
       current = {
         key: `paycheck-${row.date}`,
@@ -181,6 +180,8 @@ function buildLedgerSections(rows: ProjectionRow[]): LedgerSection[] {
         rows: [],
         isOpeningBalance: false,
       };
+    } else if (!current.isOpeningBalance) {
+      current.sourceAmountCents += paycheckAmount(row);
     }
 
     current.rows.push(row);
@@ -549,7 +550,7 @@ export function ProjectionClient({
                   <PaycheckSectionHeader section={section} index={sectionIndex} />
                 )}
                 {section.rows.map((r) => {
-                  const isPayday = hasPaycheck(r);
+                  const isPayday = isPaydayRow(r);
                   const isNegativeBalance = r.balanceCents < 0;
                   const rowClassBase = cn(
                     "transition-colors hover:bg-[var(--bg-2)]",

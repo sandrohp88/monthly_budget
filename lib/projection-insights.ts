@@ -119,6 +119,32 @@ function sumPaychecks(row: ProjectionRow): number {
     .reduce((total, event) => total + event.amountCents, 0);
 }
 
+/**
+ * A paycheck event that marks a PAYDAY. One-time income (a bonus or refund)
+ * is income, not a payday — the same rule `isScheduledPaycheck`
+ * (lib/paycheck-schedule.ts) applies to schedules. It still counts as income
+ * everywhere income is summed; it just never opens a pay period.
+ */
+export function isPaydayEvent(event: ProjectionEvent): boolean {
+  return event.kind === "paycheck" && !event.isOneTime;
+}
+
+/** A row with a scheduled paycheck on it, received (zero-cash marker) or not. */
+export function isPaydayRow(row: ProjectionRow): boolean {
+  return row.events.some(isPaydayEvent);
+}
+
+/** The dates of the rows that are paydays, in row order. */
+export function paydayDates(rows: readonly ProjectionRow[]): string[] {
+  return rows.filter(isPaydayRow).map((row) => row.date);
+}
+
+function sumPaydayPay(row: ProjectionRow): number {
+  return row.events
+    .filter(isPaydayEvent)
+    .reduce((total, event) => total + event.amountCents, 0);
+}
+
 function minimumBalance(rows: readonly ProjectionRow[]): number | null {
   if (rows.length === 0) return null;
   return rows.reduce((lowest, row) => Math.min(lowest, row.balanceCents), rows[0]!.balanceCents);
@@ -132,7 +158,9 @@ export function buildProjectionInsights(
   const cashFloorCents = opts.cashFloorCents ?? 0;
   const heavyDayLimit = opts.heavyDayLimit ?? 3;
   const futureRows = rows.filter((row) => row.date >= today);
-  const nextIncomeRow = futureRows.find((row) => row.date > today && sumPaychecks(row) > 0) ?? null;
+  // The window ends at the next PAYDAY. One-time income before it is ordinary
+  // income inside the window; on the payday itself it adds to nextIncomeCents.
+  const nextIncomeRow = futureRows.find((row) => row.date > today && sumPaydayPay(row) > 0) ?? null;
   const nextIncomeDate = nextIncomeRow?.date ?? null;
   const safeWindow = nextIncomeDate
     ? futureRows.filter((row) => row.date < nextIncomeDate)
@@ -225,7 +253,10 @@ function buildPaycheckCycles(rows: readonly ProjectionRow[]): PaycheckCycle[] {
 
   for (const row of rows) {
     const paycheckIncome = sumPaychecks(row);
-    if (paycheckIncome > 0 && cycleStart !== null) {
+    // Only a payday opens a cycle; one-time income is income of the cycle it
+    // falls in (or of no cycle, before the first payday).
+    const isPayday = sumPaydayPay(row) > 0;
+    if (isPayday && cycleStart !== null) {
       const endDate = cycleRows.length > 0 ? cycleRows[cycleRows.length - 1]!.date : cycleStart;
       cycles.push({
         startDate: cycleStart,
@@ -245,9 +276,11 @@ function buildPaycheckCycles(rows: readonly ProjectionRow[]): PaycheckCycle[] {
       cycleRows = [];
     }
 
-    if (paycheckIncome > 0) {
+    if (isPayday) {
       cycleStart = row.date;
       incomeCents = paycheckIncome;
+    } else if (cycleStart !== null) {
+      incomeCents += paycheckIncome;
     }
 
     if (cycleStart !== null) {

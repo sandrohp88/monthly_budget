@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildProjectionInsights, findUncoveredCardDues } from "./projection-insights";
-import type { ProjectionRow } from "./projection";
+import { buildProjectionInsights, findUncoveredCardDues, paydayDates } from "./projection-insights";
+import { computeProjection, type ProjectionRow } from "./projection";
 
 const row = (
   date: string,
@@ -253,6 +253,205 @@ describe("buildProjectionInsights", () => {
 
     // startBal = 10000 - 2000 + 0 = 8000, endBal = 8020, delta = 20, pct = 0.25%
     expect(stable.balanceTrajectory!.direction).toBe("stable");
+  });
+});
+
+describe("one-time income is income, not a payday", () => {
+  // Review 2026-11-10 DATE-2: a $40 refund the day before rent ended the
+  // spendable-buffer window and opened a pay cycle, so the buffer skipped rent.
+  const TODAY = "2026-11-10";
+  const rows = computeProjection({
+    startingBalanceCents: 1000_00,
+    startDate: TODAY,
+    endDate: "2026-12-10",
+    paychecks: [
+      { payDate: "2026-11-11", amountCents: 40_00, note: "One-time income", isOneTime: true },
+      { payDate: "2026-11-20", amountCents: 2000_00, note: null },
+      { payDate: "2026-12-04", amountCents: 2000_00, note: null },
+    ],
+    bills: [
+      { id: "rent", name: "Rent", amountCents: 900_00, intervalMonths: 1, anchorDate: "2026-11-12" },
+    ],
+    extras: [],
+  });
+
+  it("the spendable buffer runs to the next scheduled payday and counts the bonus inside it", () => {
+    const insights = buildProjectionInsights(rows, TODAY);
+    expect(insights.nextIncomeDate).toBe("2026-11-20");
+    expect(insights.nextIncomeCents).toBe(2000_00);
+    // Lowest balance before the payday: 1000 + 40 - 900.
+    expect(insights.safeToSpendCents).toBe(140_00);
+    expect(insights.safeToSpendThroughDate).toBe("2026-11-19");
+  });
+
+  it("pay cycles start only at scheduled paydays; the bonus before them is in no cycle", () => {
+    const insights = buildProjectionInsights(rows, TODAY);
+    expect(
+      insights.paycheckCycles.map((c) => [c.startDate, c.endDate, c.incomeCents, c.expenseCents]),
+    ).toEqual([
+      ["2026-11-20", "2026-12-03", 2000_00, 0],
+      ["2026-12-04", "2026-12-10", 2000_00, 0],
+    ]);
+  });
+
+  it("one-time income inside a cycle counts once as that cycle's income", () => {
+    const insights = buildProjectionInsights(
+      [
+        row("2026-11-20", 2000_00, 0, 2000_00, [
+          { kind: "paycheck", label: "Paycheck", amountCents: 2000_00 },
+        ]),
+        row("2026-11-25", 40_00, 0, 2040_00, [
+          { kind: "paycheck", label: "Bonus", amountCents: 40_00, isOneTime: true },
+        ]),
+        row("2026-11-28", 0, 900_00, 1140_00, [
+          { kind: "bill", label: "Rent", amountCents: 900_00 },
+        ]),
+        row("2026-12-04", 2000_00, 0, 3140_00, [
+          { kind: "paycheck", label: "Paycheck", amountCents: 2000_00 },
+        ]),
+      ],
+      "2026-11-20",
+    );
+    expect(insights.nextIncomeDate).toBe("2026-12-04");
+    expect(insights.safeToSpendCents).toBe(1140_00);
+    expect(
+      insights.paycheckCycles.map((c) => [
+        c.startDate,
+        c.endDate,
+        c.incomeCents,
+        c.expenseCents,
+        c.billCount,
+      ]),
+    ).toEqual([
+      ["2026-11-20", "2026-11-28", 2040_00, 900_00, 1],
+      ["2026-12-04", "2026-12-04", 2000_00, 0, 0],
+    ]);
+  });
+
+  it("only one-time income ahead: no payday, same as having no paycheck at all", () => {
+    const withBonus = buildProjectionInsights(
+      [
+        row("2026-11-10", 0, 0, 500_00),
+        row("2026-11-11", 40_00, 0, 540_00, [
+          { kind: "paycheck", label: "Bonus", amountCents: 40_00, isOneTime: true },
+        ]),
+        row("2026-11-12", 0, 300_00, 240_00, [
+          { kind: "bill", label: "Rent", amountCents: 300_00 },
+        ]),
+      ],
+      "2026-11-10",
+    );
+    expect(withBonus.nextIncomeDate).toBeNull();
+    expect(withBonus.nextIncomeCents).toBe(0);
+    // No payday: the window is every future row, as with no income at all.
+    expect(withBonus.safeToSpendCents).toBe(240_00);
+    expect(withBonus.safeToSpendThroughDate).toBe("2026-11-12");
+    expect(withBonus.paycheckCycles).toEqual([]);
+  });
+
+  it("one-time income on a scheduled payday: that date is the payday and income is the sum", () => {
+    const insights = buildProjectionInsights(
+      [
+        row("2026-11-10", 0, 0, 500_00),
+        row("2026-11-20", 2040_00, 0, 2540_00, [
+          { kind: "paycheck", label: "Paycheck", amountCents: 2000_00 },
+          { kind: "paycheck", label: "Bonus", amountCents: 40_00, isOneTime: true },
+        ]),
+        row("2026-11-22", 0, 100_00, 2440_00, [
+          { kind: "bill", label: "Phone", amountCents: 100_00 },
+        ]),
+      ],
+      "2026-11-10",
+    );
+    expect(insights.nextIncomeDate).toBe("2026-11-20");
+    expect(insights.nextIncomeCents).toBe(2040_00);
+    expect(insights.safeToSpendCents).toBe(500_00);
+    expect(insights.paycheckCycles.map((c) => [c.startDate, c.incomeCents])).toEqual([
+      ["2026-11-20", 2040_00],
+    ]);
+  });
+
+  it("received one-time income in the lookback does not change the next payday", () => {
+    const insights = buildProjectionInsights(
+      [
+        row("2026-11-05", 0, 0, 1000_00, [
+          {
+            kind: "paycheck",
+            label: "Refund",
+            amountCents: 0,
+            originalAmountCents: 25_00,
+            isPaid: true,
+            isOneTime: true,
+          },
+        ]),
+        row("2026-11-10", 0, 0, 1000_00),
+        row("2026-11-20", 2000_00, 0, 3000_00, [
+          { kind: "paycheck", label: "Paycheck", amountCents: 2000_00 },
+        ]),
+      ],
+      "2026-11-10",
+    );
+    expect(insights.nextIncomeDate).toBe("2026-11-20");
+    expect(insights.safeToSpendCents).toBe(1000_00);
+  });
+});
+
+describe("paydayDates", () => {
+  it("lists dates with a scheduled paycheck, received or not, and skips one-time income", () => {
+    expect(
+      paydayDates([
+        // Received one-time income in the lookback: a zero-cash paid marker.
+        row("2026-11-05", 0, 0, 1000_00, [
+          {
+            kind: "paycheck",
+            label: "Refund",
+            amountCents: 0,
+            originalAmountCents: 25_00,
+            isPaid: true,
+            isOneTime: true,
+          },
+        ]),
+        // A received scheduled paycheck still marks a payday.
+        row("2026-11-06", 0, 0, 1000_00, [
+          {
+            kind: "paycheck",
+            label: "Paycheck",
+            amountCents: 0,
+            originalAmountCents: 2000_00,
+            isPaid: true,
+          },
+        ]),
+        row("2026-11-11", 40_00, 0, 1040_00, [
+          { kind: "paycheck", label: "One-time income", amountCents: 40_00, isOneTime: true },
+        ]),
+        row("2026-11-12", 0, 900_00, 140_00, [
+          { kind: "bill", label: "Rent", amountCents: 900_00 },
+        ]),
+        row("2026-11-20", 2040_00, 0, 2180_00, [
+          { kind: "paycheck", label: "Paycheck", amountCents: 2000_00 },
+          { kind: "paycheck", label: "Bonus", amountCents: 40_00, isOneTime: true },
+        ]),
+        row("2026-12-04", 2000_00, 0, 4180_00, [
+          { kind: "paycheck", label: "Paycheck", amountCents: 2000_00 },
+        ]),
+      ]),
+    ).toEqual(["2026-11-06", "2026-11-20", "2026-12-04"]);
+  });
+
+  it("the concrete case: paydays are the two scheduled paychecks only", () => {
+    const rows = computeProjection({
+      startingBalanceCents: 1000_00,
+      startDate: "2026-11-10",
+      endDate: "2026-12-10",
+      paychecks: [
+        { payDate: "2026-11-11", amountCents: 40_00, isOneTime: true },
+        { payDate: "2026-11-20", amountCents: 2000_00 },
+        { payDate: "2026-12-04", amountCents: 2000_00 },
+      ],
+      bills: [],
+      extras: [],
+    });
+    expect(paydayDates(rows)).toEqual(["2026-11-20", "2026-12-04"]);
   });
 });
 
