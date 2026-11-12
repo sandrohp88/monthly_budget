@@ -82,6 +82,8 @@ export type ProjectionBundle = {
    * knows to reconcile.
    */
   promoDriftByCard: Record<string, number>;
+  /** Per-card promo cash still projected through `endDate` after paydowns/prepayment/skips (absent = none). */
+  promoCashByCard: Record<string, number>;
   /** Category names for variable bill charge groups, keyed by `cardId:dueDate`. */
   variableBillCategoriesByKey: Record<string, string[]>;
   /**
@@ -802,6 +804,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     currency: settings.currency,
     promoSummariesByCard,
     promoDriftByCard: cardPayments.promoDriftByCard,
+    promoCashByCard: cardPayments.promoCashByCard,
     variableBillCategoriesByKey: cardPayments.variableBillCategoriesByKey,
     billMatchesByDraftId,
     paidOccurrencesByBill: paidOccurrencesByBillOut,

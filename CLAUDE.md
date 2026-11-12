@@ -1376,7 +1376,10 @@ Unlike a slot override, a paydown is never a replacement: it always debits its
 own date as a planned payment, and `projectCardPayments` subtracts it from
 whatever the projection charges at the target date (statement, open-cycle
 estimate, promo chunk), consumed once per `(card, dueDate)` across generators
-so colliding sources never double-subtract. In linked mode a tracked unposted
+so colliding sources never double-subtract: each paydown is ONE budget, spent on
+the target's due marker first (statement up to what it owes, or the card's shared
+estimate balance), then that date's promo/variable cash, then later chunks dated
+on/after the paydown's own date (never earlier ones). In linked mode a tracked unposted
 paydown continues to reduce its target after its date passes; reconciled portions
 stop doing so. Untracked legacy plans and manual mode retain the today-or-later
 rule. See the posting-tracking section above. Partial amounts split the
