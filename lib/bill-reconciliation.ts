@@ -30,7 +30,9 @@
  *     genuine one-bill-posts-as-two-ACH-pulls case.
  *   - settle: an occurrence's assigned total must reach SETTLE_MIN_FRACTION of
  *     the planned amount. Over-payment settles too (plans are estimates); the
- *     paid marker shows the real posted total.
+ *     paid marker shows the real posted total. A heuristic (name/alias) match
+ *     may bring at most SETTLE_MAX_MULTIPLE of the planned amount, in phase 1
+ *     and as a phase-2 total; manual links are exempt.
  */
 
 import type { BillRow } from "./db/schema";
@@ -44,6 +46,16 @@ export const MATCH_WINDOW_DAYS = 20;
  * (e.g. a $300 high-water utility estimate vs ~$180 posted).
  */
 export const SETTLE_MIN_FRACTION = 0.35;
+/**
+ * A name/alias (heuristic) match may post at most this multiple of the planned
+ * amount: the same estimate tolerance as SETTLE_MIN_FRACTION, the other way
+ * (1 / 0.35 ≈ 2.86×). A debit far larger than the bill is almost certainly a
+ * different payment that shares the wording, e.g. a $903 Discover CARD
+ * payment against a $150 "Discover" loan bill (review 2026-11-10 PAY-2).
+ * Manual links skip it (the user named the bill); a transfer that really
+ * covers a bill plus something else is what a split is for.
+ */
+export const SETTLE_MAX_MULTIPLE = 1 / SETTLE_MIN_FRACTION;
 
 export type ReconcilableDraft = {
   id: string;
@@ -386,6 +398,8 @@ export function matchPaidBillOccurrences(
     billName: string;
     occurrenceDate: string;
     expectedCents: number;
+    /** Most a heuristic match may bring this occurrence (SETTLE_MAX_MULTIPLE). */
+    heuristicCapCents: number;
   };
   const occurrences: Occurrence[] = [];
   for (const bill of bills) {
@@ -401,6 +415,7 @@ export function matchPaidBillOccurrences(
         billName: bill.name,
         occurrenceDate: occ,
         expectedCents: expected,
+        heuristicCapCents: Math.round(expected * SETTLE_MAX_MULTIPLE),
       });
     }
   }
@@ -427,6 +442,7 @@ export function matchPaidBillOccurrences(
         if (draft.linkedBillId !== occ.billId) continue;
       } else if (
         draft.billMatchExcluded ||
+        draft.amountCents > occ.heuristicCapCents ||
         (!draftNamesBill(occ.billName, draft) && !draftMatchesAlias(aliases, draft))
       ) {
         continue;
@@ -475,6 +491,8 @@ export function matchPaidBillOccurrences(
   // Phase 2 — one bill can genuinely post as several partial pulls. Any draft
   // left over after phase 1 (more drafts than occurrences to absorb them) folds
   // into its nearest eligible occurrence, which may already hold a phase-1 draft.
+  // A heuristic fold must keep the occurrence's total within its cap; if it
+  // would not, the draft tries its next eligible occurrence or stays unmatched.
   const byDate = [...pairs].sort(
     (a, b) =>
       a.distanceDays - b.distanceDays ||
@@ -483,6 +501,10 @@ export function matchPaidBillOccurrences(
   );
   for (const p of byDate) {
     if (assignedDraftIds.has(p.draft.id)) continue;
+    if (!p.linked) {
+      const held = (draftsByOcc.get(p.occ.key) ?? []).reduce((s, d) => s + d.amountCents, 0);
+      if (held + p.draft.amountCents > p.occ.heuristicCapCents) continue;
+    }
     assignedDraftIds.add(p.draft.id);
     addToOcc(p.occ.key, p.draft);
   }
