@@ -11,7 +11,12 @@ import {
   createCreditCard,
   deactivatePlaidItem,
 } from "@/lib/repos";
-import { syncCreditCardLiabilitiesForItem, withUserSyncLock } from "@/lib/plaid-sync";
+import {
+  cachedBalancePair,
+  syncCreditCardLiabilitiesForItem,
+  toCents,
+  withUserSyncLock,
+} from "@/lib/plaid-sync";
 import { log } from "@/lib/log";
 
 export async function POST(req: Request) {
@@ -55,7 +60,6 @@ export async function POST(req: Request) {
     // Immediately fetch accounts so the user sees them right away.
     const accountsRes = await plaid.accountsGet({ access_token: accessToken });
     for (const acct of accountsRes.data.accounts) {
-      const balance = acct.balances.current ?? null;
       await upsertPlaidAccount({
         id: acct.account_id,
         itemId: item.id,
@@ -64,13 +68,12 @@ export async function POST(req: Request) {
         mask: acct.mask ?? null,
         type: acct.type,
         subtype: acct.subtype ?? null,
-        balanceCents: balance !== null ? Math.round(balance * 100) : null,
-        // Same payload as balanceCents — see the column doc in schema.ts.
-        availableBalanceCents:
-          acct.balances.available != null ? Math.round(acct.balances.available * 100) : null,
+        // Both halves from this one payload, and none when `current` is null
+        // (same rule as the sync's cached paths) — see the column doc in schema.ts.
+        ...cachedBalancePair(acct.balances),
         // Credit line, so a freshly linked card has utilization immediately
         // rather than waiting for the first sync.
-        limitCents: acct.balances.limit != null ? Math.round(acct.balances.limit * 100) : null,
+        limitCents: acct.balances.limit != null ? toCents(acct.balances.limit) : null,
         updatedAt: Date.now(),
       });
     }
