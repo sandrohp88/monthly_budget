@@ -77,6 +77,14 @@ export type ProjectCardPaymentsResult = {
   promoDriftByCard: Record<string, number>;
   /** Variable-bill category names keyed by `cardId:dueDate` (for the UI). */
   variableBillCategoriesByKey: Record<string, string[]>;
+  /**
+   * Per-card promo cash this projection still debits through `endDate`, after
+   * paydowns, plan prepayment and skips (cards with none are absent). Chunks run
+   * to the promo deadline, but computeProjection drops events after `endDate`,
+   * so the window bound keeps this equal to what the calendar shows. The card
+   * page's promo planner reads it so its text can never disagree with the calendar.
+   */
+  promoCashByCard: Record<string, number>;
 };
 
 const overrideKey = (cardId: string, dueDate: string) => `${cardId}:${dueDate}`;
@@ -379,136 +387,6 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     }
   }
 
-  // A paydown targeting a promo/variable cash date reduces that cash chunk. One
-  // targeting a statement/estimate marker date is display coverage only (the
-  // marker has no cash). Classify accordingly.
-  const cashChargeKeys = new Set<string>([
-    ...promoChunksByCardDate.keys(),
-    ...variableBillChargeGroups.keys(),
-  ]);
-  const promoPaydownRemainingByKey = new Map<string, number>();
-  const paydownEntriesByTarget = new Map<string, Array<{ date: string; amountCents: number }>>();
-  const prepayPoolByCard = new Map<string, number>();
-  // Directed slices of the pool: moved-payment cash aimed back at the chunk
-  // date it vacated. Applied before the soonest-first sweep.
-  const directedPrepayByCard = new Map<string, Array<{ targetDate: string; amount: number }>>();
-  const addPrepay = (cardId: string, amount: number, targetDate?: string) => {
-    if (amount <= 0) return;
-    prepayPoolByCard.set(cardId, (prepayPoolByCard.get(cardId) ?? 0) + amount);
-    if (targetDate) {
-      const list = directedPrepayByCard.get(cardId) ?? [];
-      list.push({ targetDate, amount });
-      directedPrepayByCard.set(cardId, list);
-    }
-  };
-  for (const p of paydowns) {
-    if ((p.date < today && !stillInFlight(p.cardId, p.date)) || p.amountCents <= 0) continue;
-    const key = overrideKey(p.cardId, p.targetDate);
-    // A paydown always counts as coverage toward a due marker on its target
-    // date (display only — the marker has no cash of its own). Entries keep
-    // their payment date so coverage can tell on-time cash from late cash.
-    const entries = paydownEntriesByTarget.get(key) ?? [];
-    entries.push({ date: p.date, amountCents: p.amountCents });
-    paydownEntriesByTarget.set(key, entries);
-    // If that date ALSO carries promo/variable cash, the paydown reduces it too
-    // so the same money isn't projected twice.
-    if (cashChargeKeys.has(key)) {
-      promoPaydownRemainingByKey.set(
-        key,
-        (promoPaydownRemainingByKey.get(key) ?? 0) + p.amountCents,
-      );
-    }
-  }
-  // Several generators can share one (card, date); consume from a shared pool so
-  // a paydown is subtracted from the date's combined total exactly once.
-  const consumeAtChunk = (cardId: string, dueDate: string, baseCents: number): number => {
-    if (baseCents <= 0) return 0;
-    const key = overrideKey(cardId, dueDate);
-    const remaining = promoPaydownRemainingByKey.get(key) ?? 0;
-    if (remaining <= 0) return 0;
-    const consumed = Math.min(baseCents, remaining);
-    promoPaydownRemainingByKey.set(key, remaining - consumed);
-    return consumed;
-  };
-
-  // An explicit $0 override on a chunk's date is a per-cycle SKIP: no cash
-  // leaves checking, but the event stays visible (zero-amount, `skipped`) so
-  // the calendar shows the skipped plan and the user can reset it. The balance
-  // stays owed — promo remaining only changes through reconciliation.
-  const promoExtras: OneTimeExpense[] = [];
-  for (const chunk of promoChunksByCardDate.values()) {
-    const key = overrideKey(chunk.cardId, chunk.dueDate);
-    // An override sitting on the chunk's date replaces its amount ("edit this
-    // promo payment") and is consumed here rather than becoming a separate cash
-    // payment that would double-count.
-    const override = overrideByKey.get(key);
-    if (override != null) claimedOverrideKeys.add(key);
-    const skipped = override === 0;
-    const baseCents = override ?? chunk.amountCents;
-    const consumed = consumeAtChunk(chunk.cardId, chunk.dueDate, baseCents);
-    const amountCents = baseCents - consumed;
-    if (amountCents <= 0 && !skipped) continue;
-    promoExtras.push({
-      date: chunk.dueDate,
-      description: skipped
-        ? `${chunk.cardName} promo (${chunk.descriptions.join(", ")}) — skipped`
-        : `${chunk.cardName} promo (${chunk.descriptions.join(", ")})`,
-      amountCents,
-      sourceId: chunk.cardId,
-      sourceType: "creditCardPayment",
-      originalAmountCents: chunk.amountCents,
-      paymentDueCents: skipped ? 0 : Math.max(0, chunk.amountCents - consumed),
-      paymentBalanceCents: chunk.balanceCents,
-      skipped: skipped || undefined,
-    });
-  }
-  const variableBillExtras: OneTimeExpense[] = [];
-  for (const group of variableBillChargeGroups.values()) {
-    const key = overrideKey(group.cardId, group.dueDate);
-    const override = overrideByKey.get(key);
-    if (override != null) claimedOverrideKeys.add(key);
-    const skipped = override === 0;
-    const baseCents = override ?? group.amountCents;
-    const consumed = consumeAtChunk(group.cardId, group.dueDate, baseCents);
-    const amountCents = baseCents - consumed;
-    if (amountCents <= 0 && !skipped) continue;
-    variableBillExtras.push({
-      date: group.dueDate,
-      description: skipped
-        ? `${group.cardName} variable spend (${group.names.join(", ")}) — skipped`
-        : `${group.cardName} variable spend (${group.names.join(", ")})`,
-      amountCents,
-      sourceId: group.cardId,
-      sourceType: "creditCardPayment",
-      originalAmountCents: group.amountCents,
-      paymentDueCents: amountCents,
-      paymentBalanceCents: displayBalanceForCard(group.cardId, group.amountCents),
-      skipped: skipped || undefined,
-    });
-  }
-
-  // Overrides not claimed by a promo/variable chunk are scheduled cash payments:
-  // they debit their own date and count as coverage toward the due markers they
-  // land on/before.
-  const scheduledPayments: ScheduledPayment[] = [];
-  for (const o of nonPaydownOverrides) {
-    if (claimedOverrideKeys.has(overrideKey(o.cardId, o.date))) continue;
-    scheduledPayments.push({
-      cardId: o.cardId,
-      date: o.date,
-      amountCents: o.amountCents,
-      targetDueDate: o.movedFrom ?? o.date,
-      relatedDate: o.movedFrom,
-    });
-  }
-  // A paydown planned larger than its target promo/variable chunk: the excess
-  // knocks down that card's other promo chunks, soonest first.
-  for (const [key, remaining] of promoPaydownRemainingByKey) {
-    if (remaining <= 0) continue;
-    const cardId = key.slice(0, key.lastIndexOf(":"));
-    addPrepay(cardId, remaining);
-  }
-
   // ── Due-date markers (zero cash) ──────────────────────────────────────────
   // One per cycle per active card, from today through the projection window:
   // recorded statement when known, open-cycle estimate for the current cycle,
@@ -646,6 +524,176 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     }
   }
 
+  // A paydown targeting a promo/variable cash date reduces that cash chunk. One
+  // targeting a statement/estimate marker date is display coverage only (the
+  // marker has no cash). Classify accordingly.
+  const cashChargeKeys = new Set<string>([
+    ...promoChunksByCardDate.keys(),
+    ...variableBillChargeGroups.keys(),
+  ]);
+  const paydownEntriesByTarget = new Map<string, Array<{ date: string; amountCents: number }>>();
+  const prepayPoolByCard = new Map<string, number>();
+  // Directed slices of the pool: moved-payment cash aimed back at the chunk
+  // date it vacated. Applied before the soonest-first sweep.
+  const directedPrepayByCard = new Map<string, Array<{ targetDate: string; amount: number }>>();
+  const addPrepay = (cardId: string, amount: number, targetDate?: string) => {
+    if (amount <= 0) return;
+    prepayPoolByCard.set(cardId, (prepayPoolByCard.get(cardId) ?? 0) + amount);
+    if (targetDate) {
+      const list = directedPrepayByCard.get(cardId) ?? [];
+      list.push({ targetDate, amount });
+      directedPrepayByCard.set(cardId, list);
+    }
+  };
+  // ONE budget per paydown, spent once across every generator at its target
+  // (§17a): the due marker first (a statement up to what it owes, or the
+  // card's shared estimate balance), then promo/variable cash on that date,
+  // then — only when the target carried cash — later chunks via the prepay
+  // sweep. Cover credited + cash removed never exceeds the paydown amount.
+  const markerByTargetKey = new Map<string, DueMarker>();
+  for (const m of markers) {
+    markerByTargetKey.set(overrideKey(m.cardId, m.dueDate), m);
+    // An overdue marker also answers to its original issuer due date(s).
+    for (const d of m.overdueDueDates ?? []) markerByTargetKey.set(overrideKey(m.cardId, d), m);
+  }
+  const statementOpenByMarker = new Map<DueMarker, number>();
+  const estimateOpenByCard = new Map<string, number>();
+  // Estimate cash actually credited by paydowns, by cash date (running balance).
+  const estimatePaydownCashByCard = new Map<string, Array<{ date: string; amt: number }>>();
+  const chunkBudgetsByKey = new Map<string, Array<{ date: string; remaining: number }>>();
+  const activePaydowns = paydowns
+    .filter((p) => (p.date >= today || stillInFlight(p.cardId, p.date)) && p.amountCents > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  for (const p of activePaydowns) {
+    const key = overrideKey(p.cardId, p.targetDate);
+    let budget = p.amountCents;
+    const marker = markerByTargetKey.get(key);
+    if (marker && !marker.estimated) {
+      // Entries keep their payment date so coverage can tell on-time cash from
+      // late cash (display only — the marker has no cash of its own).
+      const open = statementOpenByMarker.get(marker) ?? marker.owedCents;
+      const take = Math.min(budget, open);
+      statementOpenByMarker.set(marker, open - take);
+      budget -= take;
+      if (take > 0) {
+        const entries = paydownEntriesByTarget.get(key) ?? [];
+        entries.push({ date: p.date, amountCents: take });
+        paydownEntriesByTarget.set(key, entries);
+      }
+    } else if (marker?.estimated) {
+      const open = estimateOpenByCard.get(p.cardId) ?? marker.owedCents;
+      const take = Math.min(budget, open);
+      estimateOpenByCard.set(p.cardId, open - take);
+      budget -= take;
+      if (take > 0) {
+        const list = estimatePaydownCashByCard.get(p.cardId) ?? [];
+        list.push({ date: p.date, amt: take });
+        estimatePaydownCashByCard.set(p.cardId, list);
+      }
+    }
+    // If that date ALSO carries promo/variable cash, what is left reduces it.
+    if (cashChargeKeys.has(key)) {
+      const list = chunkBudgetsByKey.get(key) ?? [];
+      list.push({ date: p.date, remaining: budget });
+      chunkBudgetsByKey.set(key, list);
+    }
+  }
+  // Several generators can share one (card, date); consume from the same
+  // budgets so a paydown is subtracted from the date's combined total once.
+  const consumeAtChunk = (cardId: string, dueDate: string, baseCents: number): number => {
+    let consumed = 0;
+    for (const b of chunkBudgetsByKey.get(overrideKey(cardId, dueDate)) ?? []) {
+      const take = Math.min(baseCents - consumed, b.remaining);
+      if (take <= 0) continue;
+      b.remaining -= take;
+      consumed += take;
+    }
+    return consumed;
+  };
+
+  // An explicit $0 override on a chunk's date is a per-cycle SKIP: no cash
+  // leaves checking, but the event stays visible (zero-amount, `skipped`) so
+  // the calendar shows the skipped plan and the user can reset it. The balance
+  // stays owed — promo remaining only changes through reconciliation.
+  const promoExtras: OneTimeExpense[] = [];
+  for (const chunk of promoChunksByCardDate.values()) {
+    const key = overrideKey(chunk.cardId, chunk.dueDate);
+    // An override sitting on the chunk's date replaces its amount ("edit this
+    // promo payment") and is consumed here rather than becoming a separate cash
+    // payment that would double-count.
+    const override = overrideByKey.get(key);
+    if (override != null) claimedOverrideKeys.add(key);
+    const skipped = override === 0;
+    const baseCents = override ?? chunk.amountCents;
+    const consumed = consumeAtChunk(chunk.cardId, chunk.dueDate, baseCents);
+    const amountCents = baseCents - consumed;
+    if (amountCents <= 0 && !skipped) continue;
+    promoExtras.push({
+      date: chunk.dueDate,
+      description: skipped
+        ? `${chunk.cardName} promo (${chunk.descriptions.join(", ")}) — skipped`
+        : `${chunk.cardName} promo (${chunk.descriptions.join(", ")})`,
+      amountCents,
+      sourceId: chunk.cardId,
+      sourceType: "creditCardPayment",
+      originalAmountCents: chunk.amountCents,
+      paymentDueCents: skipped ? 0 : Math.max(0, chunk.amountCents - consumed),
+      paymentBalanceCents: chunk.balanceCents,
+      skipped: skipped || undefined,
+    });
+  }
+  const variableBillExtras: OneTimeExpense[] = [];
+  for (const group of variableBillChargeGroups.values()) {
+    const key = overrideKey(group.cardId, group.dueDate);
+    const override = overrideByKey.get(key);
+    if (override != null) claimedOverrideKeys.add(key);
+    const skipped = override === 0;
+    const baseCents = override ?? group.amountCents;
+    const consumed = consumeAtChunk(group.cardId, group.dueDate, baseCents);
+    const amountCents = baseCents - consumed;
+    if (amountCents <= 0 && !skipped) continue;
+    variableBillExtras.push({
+      date: group.dueDate,
+      description: skipped
+        ? `${group.cardName} variable spend (${group.names.join(", ")}) — skipped`
+        : `${group.cardName} variable spend (${group.names.join(", ")})`,
+      amountCents,
+      sourceId: group.cardId,
+      sourceType: "creditCardPayment",
+      originalAmountCents: group.amountCents,
+      paymentDueCents: amountCents,
+      paymentBalanceCents: displayBalanceForCard(group.cardId, group.amountCents),
+      skipped: skipped || undefined,
+    });
+  }
+
+  // Overrides not claimed by a promo/variable chunk are scheduled cash payments:
+  // they debit their own date and count as coverage toward the due markers they
+  // land on/before.
+  const scheduledPayments: ScheduledPayment[] = [];
+  for (const o of nonPaydownOverrides) {
+    if (claimedOverrideKeys.has(overrideKey(o.cardId, o.date))) continue;
+    scheduledPayments.push({
+      cardId: o.cardId,
+      date: o.date,
+      amountCents: o.amountCents,
+      targetDueDate: o.movedFrom ?? o.date,
+      relatedDate: o.movedFrom,
+    });
+  }
+  // A paydown planned larger than its target marker + promo/variable chunk: the
+  // excess knocks down that card's other chunks, soonest first — but only ones
+  // dated on/after the paydown itself (money can't prepay a chunk that is due
+  // before it leaves checking).
+  const paydownExcess: Array<{ cardId: string; fromDate: string; amount: number }> = [];
+  for (const [key, budgets] of chunkBudgetsByKey) {
+    const cardId = key.slice(0, key.lastIndexOf(":"));
+    for (const b of budgets) {
+      if (b.remaining > 0) paydownExcess.push({ cardId, fromDate: b.date, amount: b.remaining });
+    }
+  }
+  paydownExcess.sort((a, b) => a.fromDate.localeCompare(b.fromDate));
+
   // ── Coverage: which markers your scheduled payments cover ─────────────────
   // Two kinds of obligation behave differently:
   //   • A recorded statement is a distinct per-cycle bill — a payment covers
@@ -775,16 +823,8 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       const estBalance = estimateMarkers[0]!.owedCents;
       const estCash: Array<{ date: string; amt: number }> = [];
       for (const p of pool) if (p.remaining > 0) estCash.push({ date: p.date, amt: p.remaining });
-      const estDues = estimatedDuesByCard.get(cardId);
-      for (const pd of paydowns) {
-        if (
-          pd.cardId !== cardId ||
-          pd.amountCents <= 0 ||
-          (pd.date < today && !stillInFlight(pd.cardId, pd.date))
-        )
-          continue;
-        if (estDues?.has(pd.targetDate)) estCash.push({ date: pd.date, amt: pd.amountCents });
-      }
+      // Only the share of each paydown budget the estimate actually consumed.
+      estCash.push(...(estimatePaydownCashByCard.get(cardId) ?? []));
       for (const em of estimateMarkers) {
         let cumulative = 0;
         for (const c of estCash) if (c.date <= em.dueDate) cumulative += c.amt;
@@ -803,21 +843,28 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     for (const p of pool) addPrepay(cardId, p.remaining, p.directTarget);
   }
 
-  // Apply the prepayment pool (paydown excess + scheduled surplus) to each
-  // card's promo/variable chunks: moved-payment cash cancels the chunk it
-  // vacated first, then whatever remains sweeps soonest-first. Fully-covered
-  // chunks drop out.
-  if (prepayPoolByCard.size > 0) {
+  // Apply the prepayment pool (scheduled surplus) and the paydown excess to
+  // each card's promo/variable chunks: moved-payment cash cancels the chunk it
+  // vacated first, then paydown excess sweeps soonest-first from its own date,
+  // then whatever pool remains sweeps soonest-first. Fully-covered chunks drop out.
+  if (prepayPoolByCard.size > 0 || paydownExcess.length > 0) {
+    const excessCards = new Set(paydownExcess.map((x) => x.cardId));
     const creditable = [...promoExtras, ...variableBillExtras]
-      .filter((e) => e.sourceId != null && prepayPoolByCard.has(e.sourceId))
+      .filter(
+        (e) =>
+          e.sourceId != null && (prepayPoolByCard.has(e.sourceId) || excessCards.has(e.sourceId)),
+      )
       .sort((a, b) =>
         a.sourceId === b.sourceId
           ? a.date.localeCompare(b.date)
           : a.sourceId!.localeCompare(b.sourceId!),
       );
-    const applyCredit = (e: OneTimeExpense, cents: number) => {
+    const reduceChunk = (e: OneTimeExpense, cents: number) => {
       e.amountCents -= cents;
       e.paymentDueCents = Math.max(0, (e.paymentDueCents ?? 0) - cents);
+    };
+    const applyCredit = (e: OneTimeExpense, cents: number) => {
+      reduceChunk(e, cents);
       prepayPoolByCard.set(e.sourceId!, (prepayPoolByCard.get(e.sourceId!) ?? 0) - cents);
     };
     for (const [cardId, targets] of directedPrepayByCard) {
@@ -831,6 +878,16 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
         applyCredit(target, Math.min(pool, t.amount, target.amountCents));
       }
     }
+    for (const x of paydownExcess) {
+      let left = x.amount;
+      for (const e of creditable) {
+        if (left <= 0) break;
+        if (e.sourceId !== x.cardId || e.date < x.fromDate || e.amountCents <= 0) continue;
+        const take = Math.min(left, e.amountCents);
+        reduceChunk(e, take);
+        left -= take;
+      }
+    }
     for (const e of creditable) {
       const pool = prepayPoolByCard.get(e.sourceId!) ?? 0;
       if (pool <= 0 || e.amountCents <= 0) continue;
@@ -840,6 +897,11 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   // Skipped chunks carry no cash but must stay visible (resettable).
   const promoCashExtras = promoExtras.filter((e) => e.amountCents > 0 || e.skipped);
   const variableCashExtras = variableBillExtras.filter((e) => e.amountCents > 0 || e.skipped);
+  const promoCashByCard: Record<string, number> = {};
+  for (const e of promoCashExtras) {
+    if (e.sourceId == null || e.amountCents <= 0 || e.date > endDate) continue;
+    promoCashByCard[e.sourceId] = (promoCashByCard[e.sourceId] ?? 0) + e.amountCents;
+  }
 
   const markerExtras: OneTimeExpense[] = markers.map((m) => {
     const cover = Math.min(coverByMarker.get(m) ?? 0, m.owedCents);
@@ -931,6 +993,7 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     extras: [...markerExtras, ...cashExtras],
     promoDriftByCard,
     variableBillCategoriesByKey,
+    promoCashByCard,
   };
 }
 

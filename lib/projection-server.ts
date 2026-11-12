@@ -82,6 +82,8 @@ export type ProjectionBundle = {
    * knows to reconcile.
    */
   promoDriftByCard: Record<string, number>;
+  /** Per-card promo cash still projected through `endDate` after paydowns/prepayment/skips (absent = none). */
+  promoCashByCard: Record<string, number>;
   /** Category names for variable bill charge groups, keyed by `cardId:dueDate`. */
   variableBillCategoriesByKey: Record<string, string[]>;
   /**
@@ -669,6 +671,9 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
           // The note is the event label; a one-time income whose description
           // was cleared must not read as "Paycheck".
           note: p.isOneTime && !p.note?.trim() ? "One-time income" : p.note,
+          // Income, not a payday: payday consumers (insights, calendar, ledger)
+          // skip it, exactly like isScheduledPaycheck does for schedules.
+          isOneTime: p.isOneTime,
           settledBeforeDate: settleBefore,
           settled: depositPosted,
           // Render the received occurrence as a paid marker (zero cash) instead
@@ -799,6 +804,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     currency: settings.currency,
     promoSummariesByCard,
     promoDriftByCard: cardPayments.promoDriftByCard,
+    promoCashByCard: cardPayments.promoCashByCard,
     variableBillCategoriesByKey: cardPayments.variableBillCategoriesByKey,
     billMatchesByDraftId,
     paidOccurrencesByBill: paidOccurrencesByBillOut,

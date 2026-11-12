@@ -368,7 +368,7 @@ weird gets emitted before merging.
 - `0039_transactions_refresh` — `plaid_items.transactions_refreshed_at`: same throttle contract for `/transactions/refresh`. Separate column because the two calls sit at different points in the sync and have different Plaid limits. See §17 "The ledger must be as fresh as the balance".
 - `0040_track_planned_payment_posting` — `credit_card_payment_overrides.track_posting` (see §17 posting-aware reservations).
 - `0041_user_session_version` — `users.session_version`: revocable sessions. The JWT carries the version it was issued at; `lib/session-user.ts` rejects mismatches, deleted users and stale roles.
-- `0042_one_time_income` — `paychecks.is_one_time`: one-time income (bonuses) lives on `paychecks` so it projects and deposit-reconciles like a paycheck, but `isScheduledPaycheck` (lib/paycheck-schedule.ts) keeps it out of every schedule read/write — otherwise a schedule edit moves a bonus onto a payday and restates its amount. Set at creation only. Backup v13.
+- `0042_one_time_income` — `paychecks.is_one_time`: one-time income (bonuses) lives on `paychecks` so it projects and deposit-reconciles like a paycheck, but `isScheduledPaycheck` (lib/paycheck-schedule.ts) keeps it out of every schedule read/write — otherwise a schedule edit moves a bonus onto a payday and restates its amount. Set at creation only. Backup v13. The projection carries it as `isOneTime` on the `kind: "paycheck"` event (cash unchanged); anything that derives a PAYDAY / pay cycle from events (insights, calendar PAYCHECK view, ledger sections) must use `isPaydayEvent`/`isPaydayRow`/`paydayDates` (lib/projection-insights.ts), never `kind === "paycheck"` alone.
 - `0043_shared_deposit_income` — drops `paychecks_settled_by_draft_unique_idx` (from 0029). One posted deposit may settle a scheduled paycheck and one-time income together; each row stores its own share. No row rewrite. Shares are capped in `settlePaycheckSharesWithDraft`.
 - `0044_live_balance_at` — `plaid_accounts.live_balance_at`: epoch ms of the SUCCESSFUL live pull that wrote the stored `balance_cents`/`available_balance_cents` pair, null when the pair is cached. Per-account success stamp (unlike 0038's per-item attempt stamp). While `live_balance_at >= plaid_items.balance_refreshed_at` (the latest attempt wrote the pair), cached payloads keep the pair. Not in the backup. See §17 "Cached vs live balances".
 
@@ -919,7 +919,15 @@ stamp-on-failure backoff as the balance pull.
   whichever direction you left stale.
 - ❌ Don't assume the refresh is synchronous enough to guarantee data. If the
   extraction outruns the call, Plaid fires `SYNC_UPDATES_AVAILABLE` and the
-  webhook drives another sync — the design tolerates both.
+  webhook drives another sync — the design tolerates both. That webhook often
+  lands while the same sync is still on its balance/liabilities calls, after
+  its cursor read, so `handlePlaidWebhook` must never drop it: a webhook for an
+  item whose sync is in flight marks the item dirty (`action: "queued"`), and
+  exactly one follow-up sync runs when the current one ends, even if it failed
+  (any number of webhooks → one follow-up; a webhook during the follow-up →
+  one more). The flag is in memory: a restart loses a pending follow-up. The
+  follow-up's `/transactions/refresh` is throttled (correct — the data is
+  already extracted); it still reads the cursor and applies the new rows.
 - Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
 
 ### Credit card linkage (Plaid → `credit_cards`)
@@ -1384,7 +1392,10 @@ Unlike a slot override, a paydown is never a replacement: it always debits its
 own date as a planned payment, and `projectCardPayments` subtracts it from
 whatever the projection charges at the target date (statement, open-cycle
 estimate, promo chunk), consumed once per `(card, dueDate)` across generators
-so colliding sources never double-subtract. In linked mode a tracked unposted
+so colliding sources never double-subtract: each paydown is ONE budget, spent on
+the target's due marker first (statement up to what it owes, or the card's shared
+estimate balance), then that date's promo/variable cash, then later chunks dated
+on/after the paydown's own date (never earlier ones). In linked mode a tracked unposted
 paydown continues to reduce its target after its date passes; reconciled portions
 stop doing so. Untracked legacy plans and manual mode retain the today-or-later
 rule. See the posting-tracking section above. Partial amounts split the

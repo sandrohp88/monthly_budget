@@ -43,6 +43,12 @@ export type Paycheck = {
    * still in the future gets re-added here as phantom future income.
    */
   settled?: boolean;
+  /**
+   * One-time income (a bonus or refund, `paychecks.is_one_time`). It projects
+   * and settles exactly like a paycheck, but it is income, not a payday: the
+   * flag rides on the event so payday consumers can skip it.
+   */
+  isOneTime?: boolean;
 };
 
 export type Bill = {
@@ -163,6 +169,8 @@ export type ProjectionEvent = {
   kind: ProjectionEventKind;
   label: string;
   amountCents: number;
+  /** On a paycheck event: one-time income — income, but not a payday. */
+  isOneTime?: boolean;
   sourceId?: string;
   sourceType?: ProjectionEventSourceType;
   originalAmountCents?: number;
@@ -383,6 +391,7 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
     // posting early/late: an early deposit is in the live balance while payDate
     // is still ahead, so keying on payDate alone would double-count it.
     const isSettled = p.settled || (p.settledBeforeDate != null && p.payDate < p.settledBeforeDate);
+    const oneTime = p.isOneTime ? { isOneTime: true } : {};
     if (isSettled) {
       if (!p.showSettledBeforeDate) continue;
       addEvent(p.payDate, {
@@ -391,10 +400,11 @@ export function computeProjection(input: ProjectionInput): ProjectionRow[] {
         amountCents: 0,
         originalAmountCents: p.amountCents,
         isPaid: true,
+        ...oneTime,
       });
       continue;
     }
-    addEvent(p.payDate, { kind: "paycheck", label, amountCents: p.amountCents });
+    addEvent(p.payDate, { kind: "paycheck", label, amountCents: p.amountCents, ...oneTime });
   }
 
   for (const e of input.extras) {

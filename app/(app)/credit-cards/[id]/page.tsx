@@ -16,6 +16,7 @@ import {
 import { estimateCurrentCycle } from "@/lib/credit-cards";
 import { paydownTargetDate } from "@/lib/card-payments";
 import { DEFAULT_TIMEZONE, todayIso } from "@/lib/dates";
+import { buildProjection } from "@/lib/projection-server";
 import { projectVariableBillCardCharges } from "@/lib/variable-bills";
 import { CardDetailClient } from "./card-detail-client";
 
@@ -43,6 +44,7 @@ export default async function CreditCardDetailPage({
     items,
     paymentOverrides,
     settings,
+    projection,
   ] = await Promise.all([
     listStatements(card.id),
     listPromosForCard(userId, card.id, true),
@@ -54,6 +56,8 @@ export default async function CreditCardDetailPage({
     listPlaidItems(userId),
     listCreditCardPaymentOverridesForUser(userId),
     getSettings(userId),
+    // Cached per request (the app layout builds it too).
+    buildProjection(userId),
   ]);
 
   const paymentsByPromoId: Record<
@@ -72,9 +76,9 @@ export default async function CreditCardDetailPage({
   const today = todayIso(timezone);
 
   // Calendar-scheduled paydowns (`pays-down:`) on this card that still lie
-  // ahead. Once applied to the card they credit the promo balance (see
-  // lib/card-payments.ts), so the promo planner surfaces them to explain why a
-  // promo schedule can be fully or partly covered before it reaches the calendar.
+  // ahead. The promo planner lists them next to the promo cash the projection
+  // still debits after them (`promoCashByCard` from lib/card-payments.ts —
+  // never recomputed here, so the text can't disagree with the calendar).
   const scheduledCardPayments = paymentOverrides
     .filter(
       (o) => o.cardId === card.id && o.dueDate >= today && paydownTargetDate(o.notes) != null,
@@ -125,6 +129,7 @@ export default async function CreditCardDetailPage({
       linkedBillCount={linkedBills.length + linkedExtras.length + linkedVariableBills.length}
       paymentsByPromoId={paymentsByPromoId}
       scheduledCardPayments={scheduledCardPayments}
+      promoCashProjectedCents={projection ? (projection.promoCashByCard[card.id] ?? 0) : null}
       mask={account?.mask ?? null}
       institution={institution}
       accountBalanceCents={account?.balanceCents ?? null}

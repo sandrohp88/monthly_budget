@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createHash,
   generateKeyPairSync,
@@ -144,6 +144,9 @@ function deferred(): Deferred {
   return { promise, reject };
 }
 
+/** Let fire-and-forget sync continuations (and any follow-up) run. */
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
 const ITEM = {
   id: "local-item-1",
   userId: "user-1",
@@ -242,7 +245,7 @@ describe("handlePlaidWebhook", () => {
     expect(outcome).toEqual({ action: "sync-started", itemId: "local-item-1" });
   });
 
-  it("coalesces a second webhook while a sync for the same item is in flight", async () => {
+  it("queues a webhook that arrives mid-sync, and a failing sync still runs the follow-up", async () => {
     const gate = deferred();
     const sync = vi.fn().mockImplementation(() => gate.promise);
     const deps = makeDeps({ sync });
@@ -255,14 +258,235 @@ describe("handlePlaidWebhook", () => {
     const first = await handlePlaidWebhook(payload, deps);
     const second = await handlePlaidWebhook(payload, deps);
     expect(first).toEqual({ action: "sync-started", itemId: "local-item-1" });
-    expect(second).toEqual({ action: "coalesced", itemId: "local-item-1" });
+    expect(second).toEqual({ action: "queued", itemId: "local-item-1" });
     expect(sync).toHaveBeenCalledTimes(1);
 
-    // Release the gate (as a failure — also proves errors clear the lock).
+    // Release the gate as a failure. The queued follow-up must still run (it
+    // fails too — same gate), and both failures must clear the item's state.
     gate.reject(new Error("done"));
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(2);
     const third = await handlePlaidWebhook(payload, deps);
     expect(third).toEqual({ action: "sync-started", itemId: "local-item-1" });
+    expect(sync).toHaveBeenCalledTimes(3);
+  });
+});
+
+// Audit 2026-11-10 PLAID-4. Plaid fires SYNC_UPDATES_AVAILABLE when the
+// extraction our own /transactions/refresh asked for completes — often while
+// that same sync is still on its balance and liabilities calls, after it has
+// already read the cursor. Dropping that webhook left posted rows unread
+// while the live balance had already lost the money.
+describe("handlePlaidWebhook: webhooks during an in-flight sync", () => {
+  type Gate = { resolve: () => void; reject: (e: Error) => void };
+  const SYNC_RESULT = {
+    added: 0,
+    modified: 0,
+    removed: 0,
+    cardsUpdated: 0,
+    statementsCreated: 0,
+    statementsReconciled: 0,
+    paychecksReconciled: 0,
+  };
+
+  // Every gate any test opened, so a failing test cannot leave an item "in
+  // flight" in the module's state and break the tests after it.
+  let unreleased: Gate[] = [];
+
+  /** A sync mock whose every call stays in flight until its gate is released. */
+  function gatedSync() {
+    const gates: Gate[] = [];
+    const calls: string[] = [];
+    const sync = vi.fn((_userId: string, itemId?: string) => {
+      calls.push(itemId ?? "");
+      return new Promise((resolve, reject) => {
+        const gate = { resolve: () => resolve(SYNC_RESULT), reject };
+        gates.push(gate);
+        unreleased.push(gate);
+      });
+    });
+    return { sync: sync as unknown as WebhookDeps["sync"] & typeof sync, gates, calls };
+  }
+
+  const hook = (itemId = "plaid-item-1") => ({
+    webhook_type: "TRANSACTIONS",
+    webhook_code: "SYNC_UPDATES_AVAILABLE",
+    item_id: itemId,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    for (let round = 0; round < 10 && unreleased.length > 0; round++) {
+      const open = unreleased;
+      unreleased = [];
+      for (const gate of open) gate.resolve();
+      await flush();
+    }
+  });
+
+  it("one webhook mid-sync runs exactly one follow-up, after the first sync ends", async () => {
+    const { sync, gates } = gatedSync();
+    const deps = makeDeps({ sync });
+
+    expect(await handlePlaidWebhook(hook(), deps)).toEqual({
+      action: "sync-started",
+      itemId: "local-item-1",
+    });
+    expect(await handlePlaidWebhook(hook(), deps)).toEqual({
+      action: "queued",
+      itemId: "local-item-1",
+    });
+    await flush();
+    // Never two syncs for one item at once.
+    expect(sync).toHaveBeenCalledTimes(1);
+
+    gates[0]!.resolve();
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(2);
+    expect(sync).toHaveBeenLastCalledWith("user-1", "local-item-1");
+
+    gates[1]!.resolve();
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(2);
+  });
+
+  it("any number of webhooks during one sync still produce one follow-up", async () => {
+    const { sync, gates } = gatedSync();
+    const deps = makeDeps({ sync });
+
+    await handlePlaidWebhook(hook(), deps);
+    for (let i = 0; i < 3; i++) {
+      expect((await handlePlaidWebhook(hook(), deps)).action).toBe("queued");
+    }
+    gates[0]!.resolve();
+    await flush();
+    gates[1]!.resolve();
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(2);
+  });
+
+  it("a webhook during the follow-up produces one more sync", async () => {
+    const { sync, gates } = gatedSync();
+    const deps = makeDeps({ sync });
+
+    await handlePlaidWebhook(hook(), deps);
+    await handlePlaidWebhook(hook(), deps);
+    gates[0]!.resolve();
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(2);
+
+    expect((await handlePlaidWebhook(hook(), deps)).action).toBe("queued");
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(2);
+    gates[1]!.resolve();
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(3);
+    gates[2]!.resolve();
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(3);
+
+    // Everything drained: the next webhook starts a fresh sync.
+    expect((await handlePlaidWebhook(hook(), deps)).action).toBe("sync-started");
+    expect(sync).toHaveBeenCalledTimes(4);
+    gates[3]!.resolve();
+    await flush();
+  });
+
+  it("a rejected in-flight sync still runs the follow-up, then the item is idle again", async () => {
+    const { sync, gates } = gatedSync();
+    const deps = makeDeps({ sync });
+
+    await handlePlaidWebhook(hook(), deps);
+    await handlePlaidWebhook(hook(), deps);
+    gates[0]!.reject(new Error("ITEM_LOGIN_REQUIRED"));
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(2);
+
+    gates[1]!.resolve();
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(2);
+    expect((await handlePlaidWebhook(hook(), deps)).action).toBe("sync-started");
+    expect(sync).toHaveBeenCalledTimes(3);
+    gates[2]!.resolve();
+    await flush();
+  });
+
+  it("webhooks for two different items neither block nor dirty each other", async () => {
+    const { sync, gates, calls } = gatedSync();
+    const ITEM_B = { ...ITEM, id: "local-item-2", plaidItemId: "plaid-item-2" };
+    const getItem = vi.fn(async (plaidItemId: string) =>
+      plaidItemId === "plaid-item-2" ? ITEM_B : ITEM,
+    );
+    const deps = makeDeps({ sync, getItem: getItem as unknown as WebhookDeps["getItem"] });
+
+    expect(await handlePlaidWebhook(hook("plaid-item-1"), deps)).toEqual({
+      action: "sync-started",
+      itemId: "local-item-1",
+    });
+    expect(await handlePlaidWebhook(hook("plaid-item-2"), deps)).toEqual({
+      action: "sync-started",
+      itemId: "local-item-2",
+    });
+    expect(calls).toEqual(["local-item-1", "local-item-2"]);
+
+    // Ending both runs must not trigger a follow-up for either.
+    gates[0]!.resolve();
+    gates[1]!.resolve();
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(2);
+
+    // A webhook mid-sync for item 2 queues only item 2.
+    await handlePlaidWebhook(hook("plaid-item-1"), deps);
+    await handlePlaidWebhook(hook("plaid-item-2"), deps);
+    expect((await handlePlaidWebhook(hook("plaid-item-2"), deps)).action).toBe("queued");
+    gates[2]!.resolve(); // item 1 ends: no follow-up for it
+    await flush();
+    expect(calls).toEqual(["local-item-1", "local-item-2", "local-item-1", "local-item-2"]);
+    gates[3]!.resolve(); // item 2 ends: its follow-up runs
+    await flush();
+    expect(calls).toEqual([
+      "local-item-1",
+      "local-item-2",
+      "local-item-1",
+      "local-item-2",
+      "local-item-2",
+    ]);
+    gates[4]!.resolve();
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(5);
+  });
+
+  it("runs no follow-up when no webhook arrived mid-sync", async () => {
+    const { sync, gates } = gatedSync();
+    const deps = makeDeps({ sync });
+
+    await handlePlaidWebhook(hook(), deps);
+    gates[0]!.resolve();
+    await flush();
+    await flush();
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect((await handlePlaidWebhook(hook(), deps)).action).toBe("sync-started");
+    expect(sync).toHaveBeenCalledTimes(2);
+    gates[1]!.resolve();
+    await flush();
+  });
+
+  it("a sync that throws synchronously does not leave the item stuck in flight", async () => {
+    const sync = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("boom");
+      })
+      .mockResolvedValue(SYNC_RESULT);
+    const deps = makeDeps({ sync });
+
+    expect((await handlePlaidWebhook(hook(), deps)).action).toBe("sync-started");
+    await flush();
+    expect((await handlePlaidWebhook(hook(), deps)).action).toBe("sync-started");
+    await flush();
     expect(sync).toHaveBeenCalledTimes(2);
   });
 });
@@ -318,4 +542,5 @@ describe("webhook key hygiene", () => {
     expect(await getPlaidWebhookKey(kid, { fetchKey })).toEqual(jwk);
     expect(fetchKey).toHaveBeenCalledTimes(1);
   });
+
 });
