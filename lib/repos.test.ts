@@ -69,6 +69,8 @@ import {
   upsertCreditCardStatementByDate,
   listStatements,
   updateStatement,
+  createStatement,
+  settleStatementWithDraft,
   getPromo,
   // push subscriptions
   upsertPushSubscription,
@@ -1360,6 +1362,274 @@ describe("repos / statement paid transitions", () => {
     });
     await deletePushSubscriptionById(sub.id);
     expect(await listPushSubscriptions(userId)).toHaveLength(0);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// settleStatementWithDraft: a posted card payment goes to the statement of the
+// cycle it pays (PAY-3). One card, two cycles with the same $15.99 balance.
+// ────────────────────────────────────────────────────────────────────────────
+describe("repos / settleStatementWithDraft picks the payment's own cycle", () => {
+  async function seedTwoCycles(opts: { octPaid: boolean; novBalanceCents?: number }) {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Netflix Card",
+      statementDay: 28,
+      dueDay: 25,
+      autoPay: false,
+      isActive: true,
+    });
+    const oct = await createStatement(card.id, {
+      statementDate: "2026-09-28",
+      dueDate: "2026-10-25",
+      statementBalanceCents: 15_99,
+      paidAmountCents: opts.octPaid ? 15_99 : null,
+      paidDate: opts.octPaid ? "2026-10-20" : null,
+      notes: null,
+    });
+    const nov = await createStatement(card.id, {
+      statementDate: "2026-10-28",
+      dueDate: "2026-11-25",
+      statementBalanceCents: opts.novBalanceCents ?? 15_99,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    const read = async () => {
+      const stmts = await listStatements(card.id);
+      return {
+        oct: stmts.find((s) => s.id === oct.id)!,
+        nov: stmts.find((s) => s.id === nov.id)!,
+      };
+    };
+    return { user, card, read };
+  }
+
+  it("the November payment settles November, not the October statement paid by hand", async () => {
+    const { user, card, read } = await seedTwoCycles({ octPaid: true });
+    const settled = await settleStatementWithDraft(user.id, {
+      draftId: "nov-payment",
+      cardId: card.id,
+      paymentCents: 15_99,
+      date: "2026-11-20",
+    });
+    const { oct, nov } = await read();
+    expect(settled?.dueDate).toBe("2026-11-25");
+    expect(nov.paidAmountCents).toBe(15_99);
+    expect(nov.paidDate).toBe("2026-11-20");
+    expect(nov.settledByDraftId).toBe("nov-payment");
+    expect(oct.paidAmountCents).toBe(15_99);
+    expect(oct.paidDate).toBe("2026-10-20");
+    expect(oct.settledByDraftId).toBeNull();
+  });
+
+  it("a payment before the October due date is October's: stamped there, November stays open", async () => {
+    const { user, card, read } = await seedTwoCycles({ octPaid: true });
+    const settled = await settleStatementWithDraft(user.id, {
+      draftId: "oct-payment",
+      cardId: card.id,
+      paymentCents: 15_99,
+      date: "2026-10-21",
+    });
+    const { oct, nov } = await read();
+    expect(settled).toBeNull();
+    expect(oct.settledByDraftId).toBe("oct-payment");
+    expect(oct.paidAmountCents).toBe(15_99);
+    expect(oct.paidDate).toBe("2026-10-20");
+    expect(nov.paidAmountCents).toBeNull();
+    expect(nov.settledByDraftId).toBeNull();
+  });
+
+  it("a late payment after the October due date but before November is issued is still October's", async () => {
+    // November's balance did not exist yet on 10-27, so this payment cannot
+    // be paying it.
+    const { user, card, read } = await seedTwoCycles({ octPaid: true });
+    const settled = await settleStatementWithDraft(user.id, {
+      draftId: "late-oct-payment",
+      cardId: card.id,
+      paymentCents: 15_99,
+      date: "2026-10-27",
+    });
+    const { oct, nov } = await read();
+    expect(settled).toBeNull();
+    expect(oct.settledByDraftId).toBe("late-oct-payment");
+    expect(nov.paidAmountCents).toBeNull();
+    expect(nov.settledByDraftId).toBeNull();
+  });
+
+  it("a payment on November's statement date still belongs to October (it posts in the closing cycle)", async () => {
+    const { user, card, read } = await seedTwoCycles({ octPaid: true });
+    await settleStatementWithDraft(user.id, {
+      draftId: "closing-day-payment",
+      cardId: card.id,
+      paymentCents: 15_99,
+      date: "2026-10-28",
+    });
+    const { oct, nov } = await read();
+    expect(oct.settledByDraftId).toBe("closing-day-payment");
+    expect(nov.paidAmountCents).toBeNull();
+  });
+
+  it("with two unpaid statements, a payment equal only to the older one settles the older one", async () => {
+    const { user, card, read } = await seedTwoCycles({ octPaid: false, novBalanceCents: 42_00 });
+    const settled = await settleStatementWithDraft(user.id, {
+      draftId: "oct-late",
+      cardId: card.id,
+      paymentCents: 15_99,
+      date: "2026-11-02",
+    });
+    const { oct, nov } = await read();
+    expect(settled?.dueDate).toBe("2026-10-25");
+    expect(oct.paidAmountCents).toBe(15_99);
+    expect(oct.settledByDraftId).toBe("oct-late");
+    expect(nov.paidAmountCents).toBeNull();
+    expect(nov.settledByDraftId).toBeNull();
+  });
+
+  it("with two unpaid same-balance statements, a payment before November is issued settles October", async () => {
+    const { user, card, read } = await seedTwoCycles({ octPaid: false });
+    const settled = await settleStatementWithDraft(user.id, {
+      draftId: "oct-late",
+      cardId: card.id,
+      paymentCents: 15_99,
+      date: "2026-10-26",
+    });
+    const { oct, nov } = await read();
+    expect(settled?.dueDate).toBe("2026-10-25");
+    expect(oct.settledByDraftId).toBe("oct-late");
+    expect(nov.paidAmountCents).toBeNull();
+    expect(nov.settledByDraftId).toBeNull();
+  });
+
+  it("a payment that matches only a statement paid by hand is still consumed there (consume-once)", async () => {
+    // November's balance differs, so no open statement matches $15.99: the
+    // payment the user recorded by hand must be stamped, not left free to
+    // settle something later.
+    const { user, card, read } = await seedTwoCycles({ octPaid: true, novBalanceCents: 42_00 });
+    const settled = await settleStatementWithDraft(user.id, {
+      draftId: "oct-payment",
+      cardId: card.id,
+      paymentCents: 15_99,
+      date: "2026-11-01",
+    });
+    const { oct, nov } = await read();
+    expect(settled).toBeNull();
+    expect(oct.settledByDraftId).toBe("oct-payment");
+    expect(oct.paidAmountCents).toBe(15_99);
+    expect(nov.paidAmountCents).toBeNull();
+    expect(nov.settledByDraftId).toBeNull();
+  });
+
+  it("a second settle of the same draft is a no-op", async () => {
+    const { user, card, read } = await seedTwoCycles({ octPaid: true });
+    const input = { draftId: "nov-payment", cardId: card.id, paymentCents: 15_99, date: "2026-11-20" };
+    expect(await settleStatementWithDraft(user.id, input)).not.toBeNull();
+    const before = await read();
+    expect(await settleStatementWithDraft(user.id, input)).toBeNull();
+    const after = await read();
+    expect(after).toEqual(before);
+    expect(after.nov.settledByDraftId).toBe("nov-payment");
+    expect(after.oct.settledByDraftId).toBeNull();
+  });
+
+  it("a prepayment dated before November's statement date that matches only November settles November (fallback)", async () => {
+    // October's balance differs, so November is the only candidate and it was
+    // issued AFTER the payment: the fallback takes the oldest such candidate.
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Prepay Card",
+      statementDay: 28,
+      dueDay: 25,
+      autoPay: false,
+      isActive: true,
+    });
+    const oct = await createStatement(card.id, {
+      statementDate: "2026-09-28",
+      dueDate: "2026-10-25",
+      statementBalanceCents: 42_00,
+      paidAmountCents: 42_00,
+      paidDate: "2026-10-20",
+      notes: null,
+    });
+    const nov = await createStatement(card.id, {
+      statementDate: "2026-10-28",
+      dueDate: "2026-11-25",
+      statementBalanceCents: 15_99,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    const settled = await settleStatementWithDraft(user.id, {
+      draftId: "prepay",
+      cardId: card.id,
+      paymentCents: 15_99,
+      date: "2026-10-26",
+    });
+    const stmts = await listStatements(card.id);
+    expect(settled?.id).toBe(nov.id);
+    expect(stmts.find((s) => s.id === nov.id)?.settledByDraftId).toBe("prepay");
+    expect(stmts.find((s) => s.id === nov.id)?.paidAmountCents).toBe(15_99);
+    expect(stmts.find((s) => s.id === oct.id)?.settledByDraftId).toBeNull();
+  });
+
+  it("only the payment's own card is a candidate, even with identical statements on another card", async () => {
+    const user = await makeUser();
+    const mk = (name: string) =>
+      createCreditCard(user.id, { name, statementDay: 28, dueDay: 25, autoPay: false, isActive: true });
+    const cardA = await mk("Card A");
+    const cardB = await mk("Card B");
+    // Card B's statement is a hand-paid one with the same amount and dates:
+    // a cross-card leak would stamp it instead of settling Card A.
+    const stmtA = await createStatement(cardA.id, {
+      statementDate: "2026-10-28",
+      dueDate: "2026-11-25",
+      statementBalanceCents: 15_99,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    const stmtB = await createStatement(cardB.id, {
+      statementDate: "2026-10-28",
+      dueDate: "2026-11-25",
+      statementBalanceCents: 15_99,
+      paidAmountCents: 15_99,
+      paidDate: "2026-11-18",
+      notes: null,
+    });
+    const settled = await settleStatementWithDraft(user.id, {
+      draftId: "pay-a",
+      cardId: cardA.id,
+      paymentCents: 15_99,
+      date: "2026-11-20",
+    });
+    expect(settled?.id).toBe(stmtA.id);
+    expect((await listStatements(cardB.id))[0]).toEqual(stmtB);
+
+    // The same draft can never be spent again, not even on the other card.
+    expect(
+      await settleStatementWithDraft(user.id, {
+        draftId: "pay-a",
+        cardId: cardB.id,
+        paymentCents: 15_99,
+        date: "2026-11-20",
+      }),
+    ).toBeNull();
+    expect((await listStatements(cardB.id))[0]).toEqual(stmtB);
+  });
+
+  it("a true partial payment is left unmatched", async () => {
+    const { user, card, read } = await seedTwoCycles({ octPaid: true });
+    const settled = await settleStatementWithDraft(user.id, {
+      draftId: "partial",
+      cardId: card.id,
+      paymentCents: 10_00,
+      date: "2026-11-20",
+    });
+    const { oct, nov } = await read();
+    expect(settled).toBeNull();
+    expect(nov.paidAmountCents).toBeNull();
+    expect(nov.settledByDraftId).toBeNull();
+    expect(oct.settledByDraftId).toBeNull();
   });
 });
 

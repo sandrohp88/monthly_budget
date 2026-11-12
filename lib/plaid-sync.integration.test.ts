@@ -1149,6 +1149,125 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
       (await listStatements(card.id)).find((s) => s.id === statementOpen.id)!.paidAmountCents,
     ).toBeNull();
   });
+
+  it("KNOWN LIMITATION (PLAID-6): a re-keyed payment of a draft-settled statement lands on the hand-paid older cycle", async () => {
+    // Documents CURRENT behavior, not the desired one; tied to defect B
+    // (review finding PLAID-6). Plaid re-keys the payment that step 3 used to
+    // settle the current statement: the same sync adds it under a new id and
+    // removes the old id. The added loop runs first, while the current
+    // statement is still stamped by the old id, so the new id is consumed
+    // against the hand-paid older cycle; then the removal re-opens the
+    // current statement. The PR that fixes PLAID-6 should flip this test.
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_chase",
+      institutionName: "Chase",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_rekey",
+      itemId: item.id,
+      userId: user.id,
+      name: "Sapphire",
+      mask: "1111",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 300_00,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Sapphire",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: true,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_rekey");
+    const today = todayIso(DEFAULT_TIMEZONE);
+    const statementHandPaid = await createStatement(card.id, {
+      statementDate: addDaysIso(today, -40),
+      dueDate: addDaysIso(today, -14),
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: 300_00,
+      paidDate: addDaysIso(today, -15),
+      notes: null,
+    });
+    const statementCurrent = await createStatement(card.id, {
+      statementDate: addDaysIso(today, -10),
+      dueDate: addDaysIso(today, 16),
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    const payment = (transactionId: string) => ({
+      transaction_id: transactionId,
+      account_id: "acct_rekey",
+      pending: false,
+      date: addDaysIso(today, -1),
+      name: "Autopay Payment Thank You",
+      original_description: "AUTOPAY PAYMENT",
+      amount: 300.0,
+      personal_finance_category: {
+        primary: "LOAN_PAYMENTS",
+        detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+      },
+      merchant_name: null,
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+    const read = async () => {
+      const stmts = await listStatements(card.id);
+      return {
+        handPaid: stmts.find((s) => s.id === statementHandPaid.id)!,
+        current: stmts.find((s) => s.id === statementCurrent.id)!,
+      };
+    };
+
+    __plaidMock.transactionsSync.mockResolvedValueOnce({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [payment("pay_old")],
+        modified: [],
+        removed: [],
+      },
+    });
+    expect((await syncPlaidTransactions(user.id, item.id)).statementsReconciled).toBe(1);
+    const afterFirst = await read();
+    expect(afterFirst.current.paidAmountCents).toBe(300_00);
+    expect(afterFirst.current.settledByDraftId).toBe("pay_old");
+    expect(afterFirst.handPaid.settledByDraftId).toBeNull();
+
+    __plaidMock.transactionsSync.mockResolvedValueOnce({
+      data: {
+        next_cursor: "c2",
+        has_more: false,
+        accounts: [],
+        added: [payment("pay_new")],
+        modified: [],
+        removed: [{ transaction_id: "pay_old" }],
+      },
+    });
+    await syncPlaidTransactions(user.id, item.id);
+    const afterRekey = await read();
+    // Current (limited) behavior: the current statement is open again and the
+    // re-keyed payment is consumed on the older, hand-paid cycle.
+    expect(afterRekey.current.paidAmountCents).toBeNull();
+    expect(afterRekey.current.paidDate).toBeNull();
+    expect(afterRekey.current.settledByDraftId).toBeNull();
+    expect(afterRekey.handPaid.settledByDraftId).toBe("pay_new");
+    expect(afterRekey.handPaid.paidAmountCents).toBe(300_00);
+    expect(afterRekey.handPaid.paidDate).toBe(addDaysIso(today, -15));
+  });
 });
 
 async function makeUser() {
