@@ -681,7 +681,11 @@ These bit us before. Don't repeat:
     visually separate from recorded statements for that reason. The run rate starts at the
     cycle that already CLOSED (before today) with no statement recorded inside it, while its due
     date is today or later; a recorded statement for that cycle replaces it, and a passed due
-    with no statement gets no invented overdue. (A /credit-cards forecast tab
+    with no statement gets no invented overdue; on its due date it merges into an overdue
+    marker riding on today. On a MANUAL card only, payments dated after that close and before
+    today still cover that one marker while the card's `updated_at` (as a calendar day in the
+    user's timezone, passed in as `cardEditedOnByCard`) is earlier than the payment date: the
+    manual balance does not move when the user pays. (A /credit-cards forecast tab
     built on this shipped 2026-07-24 and was removed the same day as redundant with SPENDING —
     see `card-forecast.ts` in git history if that shape is ever wanted again.)
 27. **`kind = 'card_payment'` is NOT enough to keep payments out of card spend.** Rows synced

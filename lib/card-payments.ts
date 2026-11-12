@@ -66,6 +66,14 @@ export type ProjectCardPaymentsInput = {
   /** Linked mode: remaining cash after posted checking payments. Past plans
    * stay effective while they are still reserved, including promo prepayment. */
   remainingPlannedCentsByKey?: ReadonlyMap<string, number>;
+  /**
+   * ISO date (user's timezone) of each card's last edit (`credit_cards.updated_at`,
+   * converted by the caller; editing the balance bumps it). A manual card's
+   * balance does not move when the user pays, so a past payment still covers
+   * the closed-cycle estimate while the card was not edited on/after its date.
+   * Missing → no past payment counts (fails toward showing the due).
+   */
+  cardEditedOnByCard?: ReadonlyMap<string, string>;
 };
 
 export type ProjectCardPaymentsResult = {
@@ -478,6 +486,9 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   }
 
   // 2 + 3. Open-cycle estimate (this cycle) and carried-forward future cycles.
+  // Manual (not Plaid-linked) cards' closed-cycle estimate markers, for the
+  // past-payment cover rule in the coverage step.
+  const closedCycleEstimateByCard = new Map<string, { marker: DueMarker; statementDate: string }>();
   for (const card of activeCards) {
     const liveBalance = card.plaidAccountId
       ? balanceByPlaidAccount.get(card.plaidAccountId)
@@ -532,14 +543,31 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
           s.cardId === card.id && s.statementDate > closedCycleStart && s.statementDate <= today,
       );
     if (closedDueDate >= today && closedDueDate <= endDate && !closedCycleRecorded) {
-      pushMarker({
-        cardId: card.id,
-        cardName: card.name,
-        dueDate: closedDueDate,
-        owedCents: recurringEstimate,
-        balanceCents: Math.max(liveBalance ?? 0, recurringEstimate),
-        estimated: true,
-      });
+      // The due date can be today while an OVERDUE marker already rides on
+      // today. Merge into it like the overdue + due-today statement merge
+      // above (owed adds, it stays flagged overdue; an estimate adds no
+      // minimum) instead of losing the estimate to the per-key dedupe.
+      const existing = markers.find((m) => m.cardId === card.id && m.dueDate === closedDueDate);
+      if (existing) {
+        existing.owedCents += recurringEstimate;
+        existing.balanceCents = Math.max(
+          existing.balanceCents,
+          displayBalanceForCard(card.id, existing.owedCents),
+        );
+      } else {
+        const marker: DueMarker = {
+          cardId: card.id,
+          cardName: card.name,
+          dueDate: closedDueDate,
+          owedCents: recurringEstimate,
+          balanceCents: Math.max(liveBalance ?? 0, recurringEstimate),
+          estimated: true,
+        };
+        pushMarker(marker);
+        if (!card.plaidAccountId) {
+          closedCycleEstimateByCard.set(card.id, { marker, statementDate: closedStatementDate });
+        }
+      }
     }
 
     // Walk the card's statement cycles from the next close through endDate.
@@ -881,6 +909,30 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   for (const [cardId, pool] of paymentsByCard) {
     if (markersByCard.has(cardId)) continue;
     for (const p of pool) addPrepay(cardId, p.remaining, p.directTarget);
+  }
+
+  // 3. A MANUAL card's balance does not move when the user pays, so a payment
+  // already made toward the closed cycle (dated after its close, before today)
+  // still covers that cycle's estimate — while the card has not been edited
+  // on/after the payment date (an edit means the balance may already show it).
+  // Display cover only, on that one marker, capped at what it owes. A plan
+  // still in flight already covers through the rules above with its unposted
+  // remainder, so only its posted part counts here.
+  for (const [cardId, closed] of closedCycleEstimateByCard) {
+    const editedOn = input.cardEditedOnByCard?.get(cardId);
+    if (editedOn == null) continue;
+    let past = 0;
+    for (const o of input.cardPaymentOverrides) {
+      if (o.cardId !== cardId || o.amountCents <= 0 || isMovedToVacate(o.notes)) continue;
+      if (o.dueDate <= closed.statementDate || o.dueDate >= today || editedOn >= o.dueDate) {
+        continue;
+      }
+      const unposted = input.remainingPlannedCentsByKey?.get(overrideKey(cardId, o.dueDate)) ?? 0;
+      past += Math.max(0, o.amountCents - Math.max(0, unposted));
+    }
+    if (past <= 0) continue;
+    const m = closed.marker;
+    coverByMarker.set(m, Math.min(m.owedCents, (coverByMarker.get(m) ?? 0) + past));
   }
 
   // Apply the prepayment pool (scheduled surplus) and the paydown excess to
