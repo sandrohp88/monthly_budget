@@ -678,7 +678,10 @@ These bit us before. Don't repeat:
     repeats the same carried-forward `recurringEstimate` on every future cycle of a card, so
     summing estimates across months reads as "what cards cost per month if spending continues" —
     never as a growing balance. Any rollup over card events must keep `estimated` markers
-    visually separate from recorded statements for that reason. (A /credit-cards forecast tab
+    visually separate from recorded statements for that reason. The run rate starts at the
+    cycle that already CLOSED (before today) with no statement recorded inside it, while its due
+    date is today or later; a recorded statement for that cycle replaces it, and a passed due
+    with no statement gets no invented overdue. (A /credit-cards forecast tab
     built on this shipped 2026-07-24 and was removed the same day as redundant with SPENDING —
     see `card-forecast.ts` in git history if that shape is ever wanted again.)
 27. **`kind = 'card_payment'` is NOT enough to keep payments out of card spend.** Rows synced

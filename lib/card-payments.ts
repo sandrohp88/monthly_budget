@@ -36,6 +36,7 @@ import {
   dueDateFromStatement,
   interestSavingCashDueCents,
   nextStatementDateOnOrAfter,
+  previousStatementDateOnOrBefore,
   projectPromoScheduleWithBalances,
 } from "./credit-cards";
 import { addDaysIso } from "./dates";
@@ -389,8 +390,9 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
 
   // ── Due-date markers (zero cash) ──────────────────────────────────────────
   // One per cycle per active card, from today through the projection window:
-  // recorded statement when known, open-cycle estimate for the current cycle,
-  // carried-forward estimate for future cycles. Never debits checking.
+  // recorded statement when known, an estimate for a closed cycle not yet
+  // recorded, open-cycle estimate for the current cycle, carried-forward
+  // estimate for future cycles. Never debits checking.
   const promoDriftByCard: Record<string, number> = {};
   const markers: DueMarker[] = [];
   const markerKeys = new Set<string>();
@@ -501,6 +503,44 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       recurringEstimate = Math.max(0, liveBalance - unpaid - promoRemaining);
     }
     if (recurringEstimate <= 0) continue;
+
+    // 2a. The cycle that already CLOSED (strictly before today; a close dated
+    // today is still the open cycle, as nextStatementDateOnOrAfter says) but
+    // has no recorded statement yet: a manual card before the user enters it,
+    // a Plaid card before the next liabilities sync. Its issuer due date comes
+    // first, so without this marker the balance read as due one cycle late and
+    // the 14-day interest alert missed the real due date. The live balance is
+    // the best estimate of that statement (same estimate rules as below). A
+    // due date that already passed gets nothing: with no statement there is no
+    // evidence of an overdue debt beyond the balance the next cycles already
+    // estimate. A recorded statement dated anywhere inside that cycle (Plaid's
+    // issue date can drift from the configured day) is authoritative for it.
+    const closedStatementDate = previousStatementDateOnOrBefore(addDaysIso(today, -1), card);
+    const closedCycleStart = previousStatementDateOnOrBefore(
+      addDaysIso(closedStatementDate, -1),
+      card,
+    );
+    const closedDueDate = dueDateFromStatement(
+      closedStatementDate,
+      card.dueDay,
+      card.gracePeriodDays,
+    );
+    const closedCycleRecorded =
+      recordedDueDatesByCard.get(card.id)?.has(closedDueDate) === true ||
+      statements.some(
+        (s) =>
+          s.cardId === card.id && s.statementDate > closedCycleStart && s.statementDate <= today,
+      );
+    if (closedDueDate >= today && closedDueDate <= endDate && !closedCycleRecorded) {
+      pushMarker({
+        cardId: card.id,
+        cardName: card.name,
+        dueDate: closedDueDate,
+        owedCents: recurringEstimate,
+        balanceCents: Math.max(liveBalance ?? 0, recurringEstimate),
+        estimated: true,
+      });
+    }
 
     // Walk the card's statement cycles from the next close through endDate.
     let statementDate = nextStatementDateOnOrAfter(today, card);

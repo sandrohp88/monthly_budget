@@ -5,6 +5,9 @@ import {
   projectCardPayments,
   type StatementWithCardName,
 } from "./card-payments";
+import { computeProjection } from "./projection";
+import { findUncoveredCardDues } from "./projection-insights";
+import { interestDigest } from "./push-payload";
 import type {
   CreditCardPaymentOverrideRow,
   CreditCardPromoPaymentRow,
@@ -1323,5 +1326,291 @@ describe("projectCardPayments — negative statement balance", () => {
     expect(june).toMatchObject({ estimated: true, paymentDueCents: 300_00 });
     expect(markersOf(r).every((e) => (e.paymentDueCents ?? 0) >= 0)).toBe(true);
     expect(cashTotal(r)).toBe(0);
+  });
+});
+
+// PROJ-4: a statement cycle that already CLOSED but has no recorded statement
+// row (a manual card before the user enters it, a Plaid card before the next
+// liabilities sync) still owes on its issuer due date. The estimate used to
+// start at the NEXT close, so the balance read as due one cycle late and the
+// 14-day interest alert missed the real due date.
+describe("projectCardPayments — closed cycle with no recorded statement", () => {
+  const estDates = (r: Result) =>
+    markersOf(r)
+      .filter((e) => e.estimated)
+      .map((e) => e.date);
+
+  it("marks the closed cycle's due date with an estimate (today 2026-05-20, closed 05-15)", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-20",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+    });
+    const june = markersOf(r).filter((e) => e.date === "2026-06-10");
+    expect(june).toHaveLength(1);
+    expect(june[0]).toMatchObject({
+      amountCents: 0,
+      estimated: true,
+      paymentDueCents: 300_00,
+      paymentBalanceCents: 300_00,
+      scheduledCoverCents: 0,
+      description: "Card (est.)",
+    });
+    // The next cycle keeps the carried-forward RUN RATE (§14 gotcha 26): the
+    // same estimate, not a second $300 of debt and not $0.
+    const july = markersOf(r).filter((e) => e.date === "2026-07-10");
+    expect(july).toHaveLength(1);
+    expect(july[0]).toMatchObject({ estimated: true, paymentDueCents: 300_00 });
+    expect(estDates(r)).toEqual(["2026-06-10", "2026-07-10"]);
+    expect(cashTotal(r)).toBe(0);
+  });
+
+  it("the interest alert sees it inside 14 days, and its digest is stable day to day", () => {
+    const duesOn = (today: string) => {
+      const r = projectCardPayments({
+        ...EMPTY,
+        today,
+        activeCards: [card({ currentBalanceCents: 300_00 })],
+      });
+      const rows = computeProjection({
+        startingBalanceCents: 1000_00,
+        startDate: today,
+        endDate: "2026-08-01",
+        paychecks: [],
+        bills: [],
+        extras: r.extras,
+      });
+      return findUncoveredCardDues(rows, { today, horizonDays: 14 });
+    };
+    const dues = duesOn("2026-05-28");
+    expect(dues).toHaveLength(1);
+    expect(dues[0]).toMatchObject({
+      dueDate: "2026-06-10",
+      owedCents: 300_00,
+      shortfallCents: 300_00,
+      estimated: true,
+    });
+    // The marker sits on the fixed issuer due date, so the push digest does
+    // not churn while the state is unchanged.
+    expect(interestDigest(duesOn("2026-05-29"))).toBe(interestDigest(dues));
+  });
+
+  it("on the statement day itself the cycle is still open (both helpers agree)", () => {
+    // nextStatementDateOnOrAfter(05-15) = 05-15: the close dated today is the
+    // open cycle. The closed one is 04-15, whose due (05-10) already passed.
+    const onClose = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-15",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+    });
+    expect(estDates(onClose)).toEqual(["2026-06-10", "2026-07-10"]);
+    // One day later the 05-15 cycle is closed: same due date, still one marker.
+    const dayAfter = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-16",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+    });
+    expect(estDates(dayAfter)).toEqual(["2026-06-10", "2026-07-10"]);
+  });
+
+  it("before the close, the previous cycle's due date gets the estimate too", () => {
+    // today 05-04: the 04-15 cycle closed with no statement; it is due 05-10.
+    const r = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-04",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+    });
+    expect(estDates(r)).toEqual(["2026-05-10", "2026-06-10", "2026-07-10"]);
+  });
+
+  it("on the due date the marker sits on today; once it passed, no overdue is invented", () => {
+    const onDue = projectCardPayments({
+      ...EMPTY,
+      today: "2026-06-10",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+    });
+    expect(estDates(onDue)).toEqual(["2026-06-10", "2026-07-10"]);
+    const after = projectCardPayments({
+      ...EMPTY,
+      today: "2026-06-11",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+    });
+    // No statement = no evidence of an overdue debt: nothing on today, nothing
+    // overdue; the balance stays estimated on the next cycle.
+    expect(markersOf(after).some((e) => e.overdueSinceDate != null)).toBe(false);
+    expect(estDates(after)).toEqual(["2026-07-10"]);
+  });
+
+  it("interval_days cycles: the closed interval's due date is marked", () => {
+    // Closes every 28 days from 04-01: 04-29 (closed), 05-27 (open).
+    // 04-29 + 14 = 05-13 → due 05-20; 05-27 + 14 = 06-10 → due 06-20.
+    const r = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-10",
+      activeCards: [
+        card({
+          currentBalanceCents: 300_00,
+          statementCycleMode: "interval_days",
+          statementCycleAnchorDate: "2026-04-01",
+          statementCycleIntervalDays: 28,
+          dueDay: 20,
+        }),
+      ],
+    });
+    expect(estDates(r)).toEqual(["2026-05-20", "2026-06-20", "2026-07-20"]);
+  });
+
+  it("a December close is due in January (due day earlier in the month than the close)", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      today: "2026-12-20",
+      endDate: "2027-02-28",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+    });
+    expect(estDates(r)).toEqual(["2027-01-10", "2027-02-10"]);
+  });
+
+  it("uses the grace period, not the next due day after today", () => {
+    // Close on the 5th, due day 20, 21-day grace: the 05-05 close is due 06-20
+    // (05-26 is past 05-20), not 05-20.
+    const r = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-10",
+      activeCards: [
+        card({ currentBalanceCents: 300_00, statementDay: 5, dueDay: 20, gracePeriodDays: 21 }),
+      ],
+    });
+    expect(estDates(r)).toEqual(["2026-06-20", "2026-07-20"]);
+  });
+
+  it("a zero or credit balance gets no estimate", () => {
+    for (const balance of [0, -25_00]) {
+      const r = projectCardPayments({
+        ...EMPTY,
+        today: "2026-05-20",
+        activeCards: [card({ currentBalanceCents: balance })],
+      });
+      expect(markersOf(r)).toEqual([]);
+    }
+  });
+
+  it("a recorded statement for that close is authoritative — no duplicate estimate", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-20",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+      statements: [stmt({ statementBalanceCents: 200_00 })],
+    });
+    const june = markersOf(r).filter((e) => e.date === "2026-06-10");
+    expect(june).toHaveLength(1);
+    expect(june[0]).toMatchObject({ estimated: false, paymentDueCents: 200_00 });
+    expect(estDates(r)).toEqual(["2026-07-10"]);
+    expect(markersOf(r).find((e) => e.date === "2026-07-10")?.paymentDueCents).toBe(100_00);
+  });
+
+  it("a Plaid statement arriving later replaces the estimate, even with drifted dates", () => {
+    const input = {
+      ...EMPTY,
+      today: "2026-05-20",
+      activeCards: [card({ plaidAccountId: "acct1" })],
+      plaidAccounts: [{ id: "acct1", balanceCents: 300_00 }],
+    };
+    const before = projectCardPayments(input);
+    expect(markersOf(before).find((e) => e.date === "2026-06-10")).toMatchObject({
+      estimated: true,
+      paymentDueCents: 300_00,
+    });
+    // The issuer's statement lands a day off the configured cycle (05-14, due
+    // 06-09). It is the same closed cycle: it takes over, no estimate is left.
+    const after = projectCardPayments({
+      ...input,
+      statements: [
+        stmt({ statementDate: "2026-05-14", dueDate: "2026-06-09", statementBalanceCents: 280_00 }),
+      ],
+    });
+    expect(markersOf(after).map((e) => [e.date, e.estimated, e.paymentDueCents])).toEqual([
+      ["2026-06-09", false, 280_00],
+      ["2026-07-10", true, 20_00],
+    ]);
+  });
+
+  it("an unpaid statement from an EARLIER cycle is not counted twice", () => {
+    // 04-15 statement ($100, due 05-10) is overdue; live balance $300. The
+    // closed 05-15 cycle estimates only the rest ($200).
+    const r = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-20",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+      statements: [
+        stmt({ statementDate: "2026-04-15", dueDate: "2026-05-10", statementBalanceCents: 100_00 }),
+      ],
+    });
+    expect(markersOf(r).map((e) => [e.date, e.estimated, e.paymentDueCents])).toEqual([
+      ["2026-05-20", false, 100_00],
+      ["2026-06-10", true, 200_00],
+      ["2026-07-10", true, 200_00],
+    ]);
+  });
+
+  it("an overdue marker on today keeps its slot when the closed cycle is due today", () => {
+    const r = projectCardPayments({
+      ...EMPTY,
+      today: "2026-06-10",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+      statements: [
+        stmt({ statementDate: "2026-04-15", dueDate: "2026-05-10", statementBalanceCents: 100_00 }),
+      ],
+    });
+    const today = markersOf(r).filter((e) => e.date === "2026-06-10");
+    expect(today).toHaveLength(1);
+    expect(today[0]).toMatchObject({
+      estimated: false,
+      paymentDueCents: 100_00,
+      overdueSinceDate: "2026-05-10",
+    });
+  });
+
+  it("follows the promo guard and the headroom cap", () => {
+    const withPromo = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-20",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+      promos: [promo({ remainingAmountCents: 100_00, monthlyPaymentCents: 50_00 })],
+    });
+    expect(markersOf(withPromo).find((e) => e.date === "2026-06-10")).toMatchObject({
+      estimated: true,
+      paymentDueCents: 200_00,
+    });
+    // Promo larger than the balance: the estimate nets to 0 → no marker at all.
+    const drifted = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-20",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+      promos: [promo({ remainingAmountCents: 500_00 })],
+    });
+    expect(drifted.promoDriftByCard["c1"]).toBe(200_00);
+    expect(markersOf(drifted)).toEqual([]);
+  });
+
+  it("a paydown aimed at the closed cycle's due date is spent once (conservation)", () => {
+    // Estimate $200 on 06-10 (300 − 100 promo) + promo cash $50 on 06-10 and
+    // 07-10. A $220 paydown on 05-25: 200 covers the marker, 20 trims the
+    // 06-10 chunk. Cover + cash relief never exceeds the paydown.
+    const r = projectCardPayments({
+      ...EMPTY,
+      today: "2026-05-20",
+      activeCards: [card({ currentBalanceCents: 300_00 })],
+      promos: [promo({ remainingAmountCents: 100_00, monthlyPaymentCents: 50_00 })],
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-25", amountCents: 220_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    const june = markersOf(r).find((e) => e.date === "2026-06-10");
+    expect(june).toMatchObject({ estimated: true, paymentDueCents: 200_00, scheduledCoverCents: 200_00 });
+    expect(cashOf(r).find((e) => e.date === "2026-06-10")?.amountCents).toBe(30_00);
+    expect(cashOf(r).find((e) => e.date === "2026-07-10")?.amountCents).toBe(50_00);
+    const promoRelief = 100_00 - (r.promoCashByCard["c1"] ?? 0);
+    expect((june?.scheduledCoverCents ?? 0) + promoRelief).toBeLessThanOrEqual(220_00);
+    expect(cashTotal(r)).toBe(220_00 + 30_00 + 50_00);
   });
 });
