@@ -664,6 +664,17 @@ export const plaidAccounts = sqliteTable(
      * fiction, and that fiction would hold real cash out of the projection.
      */
     availableBalanceCents: integer("available_balance_cents"),
+    /**
+     * When the stored `balanceCents`/`availableBalanceCents` pair was written
+     * by a SUCCESSFUL live `/accounts/balance/get` (migration 0044), epoch ms.
+     * Null when the pair came from a cached payload. Unlike
+     * `plaidItems.balanceRefreshedAt` (a per-item ATTEMPT stamp), this is a
+     * per-account success stamp. While it is `>=` the item's
+     * `balanceRefreshedAt` (the latest attempt wrote this pair), a cached
+     * payload may not overwrite the pair. See `refreshLiveBalancesForItem`
+     * and CLAUDE.md §17.
+     */
+    liveBalanceAt: integer("live_balance_at"),
     /** Credit line as reported by Plaid (`balances.limit`). Null for most
      *  depository accounts and for issuers that don't expose it. Seeds
      *  `credit_cards.credit_limit_cents` on link/sync while that is still null. */
