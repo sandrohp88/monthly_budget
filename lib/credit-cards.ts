@@ -75,7 +75,8 @@ function intervalStatementCycle(
 /**
  * Next statement close on/after `fromIso`.
  * Calendar-day cards use the persisted statement day. Interval cards walk from
- * an anchor statement date by `statementCycleIntervalDays` calendar days.
+ * an anchor statement date by `statementCycleIntervalDays` calendar days, in
+ * both directions (the anchor may lie in the future).
  */
 export function nextStatementDateOnOrAfter(
   fromIso: string,
@@ -87,7 +88,12 @@ export function nextStatementDateOnOrAfter(
   }
 
   const { anchor, interval } = cycle;
-  if (anchor >= fromIso) return anchor;
+  if (anchor > fromIso) {
+    // The grid extends backwards from the anchor too: take the earliest grid
+    // date that is still on/after `fromIso`.
+    const cyclesBack = Math.floor(daysBetween(fromIso, anchor) / interval);
+    return addDaysIso(anchor, -cyclesBack * interval);
+  }
 
   const elapsed = daysBetween(anchor, fromIso);
   const cycles = Math.ceil(elapsed / interval);

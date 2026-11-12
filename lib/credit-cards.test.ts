@@ -26,6 +26,7 @@ import {
   summarizeStatementBalances,
   totalDue,
 } from "./credit-cards";
+import { addDaysIso } from "./dates";
 import type {
   BillRow,
   CreditCardPromoRow,
@@ -435,6 +436,79 @@ describe("currentCycleWindow", () => {
       start: "2025-02-16",
       end: "2025-03-18",
     });
+  });
+});
+
+describe("interval statement cycle with an anchor in the future", () => {
+  const cardOf = (anchor: string, interval: number) =>
+    ({
+      statementDay: 15,
+      statementCycleMode: "interval_days",
+      statementCycleAnchorDate: anchor,
+      statementCycleIntervalDays: interval,
+    }) as const;
+
+  it("walks back from an anchor several intervals ahead (concrete case)", () => {
+    const card = cardOf("2027-01-28", 28);
+    expect(nextStatementDateOnOrAfter("2026-11-10", card)).toBe("2026-12-03");
+    expect(previousStatementDateOnOrBefore("2026-11-10", card)).toBe("2026-11-05");
+    const win = currentCycleWindow(card, "2026-11-10");
+    expect(win).toEqual({ start: "2026-11-06", end: "2026-12-03" });
+    expect(win.start <= "2026-11-10" && "2026-11-10" <= win.end).toBe(true);
+  });
+
+  it("returns the anchor when it is exactly the from date", () => {
+    expect(nextStatementDateOnOrAfter("2026-11-10", cardOf("2026-11-10", 28))).toBe("2026-11-10");
+  });
+
+  it("keeps a first-statement anchor within one interval ahead unchanged", () => {
+    const from = "2026-11-10";
+    expect(nextStatementDateOnOrAfter(from, cardOf("2026-11-11", 28))).toBe("2026-11-11");
+    expect(nextStatementDateOnOrAfter(from, cardOf("2026-12-07", 28))).toBe("2026-12-07");
+    // Exactly one interval ahead: the from date itself is on the grid.
+    expect(nextStatementDateOnOrAfter(from, cardOf("2026-12-08", 28))).toBe("2026-11-10");
+    // One interval + 1 day ahead: the earlier grid date is now on/after today.
+    expect(nextStatementDateOnOrAfter(from, cardOf("2026-12-09", 28))).toBe("2026-11-11");
+    // Ten intervals ahead (on the grid) and ten intervals + 1 day.
+    expect(nextStatementDateOnOrAfter(from, cardOf("2027-08-18", 28))).toBe("2026-11-11");
+    expect(nextStatementDateOnOrAfter(from, cardOf("2027-08-17", 28))).toBe("2026-11-10");
+  });
+
+  it("keeps anchors in the past unchanged", () => {
+    const card = cardOf("2026-01-01", 28);
+    expect(nextStatementDateOnOrAfter("2026-11-10", card)).toBe("2026-12-03");
+    expect(previousStatementDateOnOrBefore("2026-11-10", card)).toBe("2026-11-05");
+    expect(nextStatementDateOnOrAfter("2026-01-01", card)).toBe("2026-01-01");
+  });
+
+  it("handles year boundaries and leap day", () => {
+    expect(nextStatementDateOnOrAfter("2026-12-20", cardOf("2027-03-01", 30))).toBe("2026-12-31");
+    expect(nextStatementDateOnOrAfter("2028-02-02", cardOf("2028-03-28", 28))).toBe("2028-02-29");
+    expect(nextStatementDateOnOrAfter("2028-02-29", cardOf("2028-02-29", 31))).toBe("2028-02-29");
+    expect(nextStatementDateOnOrAfter("2028-02-28", cardOf("2028-04-01", 31))).toBe("2028-03-01");
+  });
+
+  it("stays consistent on the grid for 400 consecutive dates", () => {
+    for (const interval of [26, 28, 30, 31, 35]) {
+      for (const anchor of ["2027-01-28", "2026-11-10", "2026-03-05"]) {
+        const card = cardOf(anchor, interval);
+        let prevNext: string | null = null;
+        for (let i = 0; i < 400; i++) {
+          const d = addDaysIso("2026-11-10", i);
+          const next = nextStatementDateOnOrAfter(d, card);
+          const prev = previousStatementDateOnOrBefore(d, card);
+          expect(prev <= d && d <= next).toBe(true);
+          expect(daysBetween(anchor, next) % interval === 0).toBe(true);
+          expect(daysBetween(anchor, prev) % interval === 0).toBe(true);
+          if (next === d) expect(prev).toBe(d);
+          else expect(daysBetween(prev, next)).toBe(interval);
+          if (prevNext !== null && next !== prevNext) {
+            expect(daysBetween(prevNext, next)).toBe(interval);
+          }
+          prevNext = next;
+        }
+      }
+    }
   });
 });
 
