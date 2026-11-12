@@ -368,8 +368,9 @@ weird gets emitted before merging.
 - `0039_transactions_refresh` — `plaid_items.transactions_refreshed_at`: same throttle contract for `/transactions/refresh`. Separate column because the two calls sit at different points in the sync and have different Plaid limits. See §17 "The ledger must be as fresh as the balance".
 - `0040_track_planned_payment_posting` — `credit_card_payment_overrides.track_posting` (see §17 posting-aware reservations).
 - `0041_user_session_version` — `users.session_version`: revocable sessions. The JWT carries the version it was issued at; `lib/session-user.ts` rejects mismatches, deleted users and stale roles.
-- `0042_one_time_income` — `paychecks.is_one_time`: one-time income (bonuses) lives on `paychecks` so it projects and deposit-reconciles like a paycheck, but `isScheduledPaycheck` (lib/paycheck-schedule.ts) keeps it out of every schedule read/write — otherwise a schedule edit moves a bonus onto a payday and restates its amount. Set at creation only. Backup v13.
+- `0042_one_time_income` — `paychecks.is_one_time`: one-time income (bonuses) lives on `paychecks` so it projects and deposit-reconciles like a paycheck, but `isScheduledPaycheck` (lib/paycheck-schedule.ts) keeps it out of every schedule read/write — otherwise a schedule edit moves a bonus onto a payday and restates its amount. Set at creation only. Backup v13. The projection carries it as `isOneTime` on the `kind: "paycheck"` event (cash unchanged); anything that derives a PAYDAY / pay cycle from events (insights, calendar PAYCHECK view, ledger sections) must use `isPaydayEvent`/`isPaydayRow`/`paydayDates` (lib/projection-insights.ts), never `kind === "paycheck"` alone.
 - `0043_shared_deposit_income` — drops `paychecks_settled_by_draft_unique_idx` (from 0029). One posted deposit may settle a scheduled paycheck and one-time income together; each row stores its own share. No row rewrite. Shares are capped in `settlePaycheckSharesWithDraft`.
+- `0044_live_balance_at` — `plaid_accounts.live_balance_at`: epoch ms of the SUCCESSFUL live pull that wrote the stored `balance_cents`/`available_balance_cents` pair, null when the pair is cached. Per-account success stamp (unlike 0038's per-item attempt stamp). While `live_balance_at >= plaid_items.balance_refreshed_at` (the latest attempt wrote the pair), cached payloads keep the pair. Not in the backup. See §17 "Cached vs live balances".
 
 ---
 
@@ -851,6 +852,25 @@ because the endpoint is **billed per call** (~$0.05–$0.15) and capped at
   turn a bounded cost into an unbounded one.
 - ❌ Don't run it BEFORE `refreshAccountsFromPlaid`. That writes the cached
   balance and would clobber the live one you just paid for.
+- Cached writes still run on EVERY sync, and inside the 5-minute throttle the
+  live pull writes nothing. So a live pair outranks a cached payload ONLY while
+  the item's latest live ATTEMPT is the one that wrote it:
+  `plaid_accounts.live_balance_at >= plaid_items.balance_refreshed_at`
+  (migration 0044; the caller passes the attempt stamp as
+  `upsertPlaidAccount(…, { cachedSinceLiveAttemptAt })`). `>=` because a
+  success writes the pair and the attempt stamp with the same `now`. The pair
+  is kept or replaced as one; name, type and `limit_cents` still update. Only
+  current anchors (depository + `useAsStartingBalance`) get the guard
+  (`cachedWriteGuard`): an unflagged account gets no new attempts, so a guard
+  would freeze its balance.
+- ❌ Don't let a FAILED live attempt keep an older live pair. The webhook sync
+  that delivers a new debit to the ledger can carry a fresher cached balance;
+  keeping the old live one counts that debit twice in the user's favour. After
+  a failed attempt `refreshLiveBalancesForItem` re-applies THIS sync's
+  `/accounts/get` pair (no second call) to every anchor it did not write, and
+  clears the stamp. Not a time window: a window cannot know the ledger moved.
+- A cached payload with `current = null` writes no balance pair at all (same
+  as the live path, and the exchange route uses the same `cachedBalancePair`).
 - ❌ Don't treat `balances.last_updated_datetime` as a freshness signal — Plaid
   returns it **only for Capital One** (`ins_128026`). It was null for Alliant,
   which is why the staleness was undetectable from the payload.

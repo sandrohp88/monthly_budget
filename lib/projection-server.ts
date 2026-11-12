@@ -688,6 +688,9 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
           // The note is the event label; a one-time income whose description
           // was cleared must not read as "Paycheck".
           note: p.isOneTime && !p.note?.trim() ? "One-time income" : p.note,
+          // Income, not a payday: payday consumers (insights, calendar, ledger)
+          // skip it, exactly like isScheduledPaycheck does for schedules.
+          isOneTime: p.isOneTime,
           settledBeforeDate: settleBefore,
           settled: depositPosted,
           // Render the received occurrence as a paid marker (zero cash) instead

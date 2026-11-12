@@ -39,6 +39,7 @@ import { showsPostedBalance } from "@/lib/soft-balance";
 import { BillForm, type BillFormValues } from "../bills/bill-form";
 import { cardPaymentLateWarning, cardPaymentMoveError } from "@/lib/card-payments";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
+import { paydayDates } from "@/lib/projection-insights";
 import type { CardPaymentOp } from "@/lib/validation";
 
 const MONTH_NAMES = [
@@ -943,10 +944,8 @@ export function CalendarClient({
   // Each payday opens a cycle that runs until the day before the next payday
   // (the last one runs to the end of the projection window). This is the lens
   // that answers "what bills and card payments come out of THIS paycheck?".
-  const paydays = React.useMemo(
-    () => rows.filter((r) => r.events.some((e) => e.kind === "paycheck")).map((r) => r.date),
-    [rows],
-  );
+  // One-time income is not a payday (see paydayDates).
+  const paydays = React.useMemo(() => paydayDates(rows), [rows]);
   const cycles = React.useMemo<PaycheckCycle[]>(
     () =>
       paydays.map((start, i) => {

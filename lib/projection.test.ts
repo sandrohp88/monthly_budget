@@ -455,6 +455,59 @@ describe("projection engine", () => {
     expect(day.balanceCents).toBe(300_00);
   });
 
+  it("one-time income keeps its isOneTime flag on the event; kind and cash are unchanged", () => {
+    // A bonus is income, not a payday: the flag lets payday consumers skip it
+    // while it still projects exactly like a paycheck.
+    const rows = computeProjection({
+      ...baseInput(),
+      startDate: "2026-11-10",
+      endDate: "2026-11-21",
+      startingBalanceCents: 1000_00,
+      paychecks: [
+        { payDate: "2026-11-11", amountCents: 40_00, note: "One-time income", isOneTime: true },
+        { payDate: "2026-11-20", amountCents: 2000_00 },
+      ],
+    });
+    const bonusDay = rows.find((r) => r.date === "2026-11-11")!;
+    expect(bonusDay.events).toEqual([
+      { kind: "paycheck", label: "One-time income", amountCents: 40_00, isOneTime: true },
+    ]);
+    expect(bonusDay.incomeCents).toBe(40_00);
+    expect(bonusDay.balanceCents).toBe(1040_00);
+    const payday = rows.find((r) => r.date === "2026-11-20")!;
+    expect(payday.events).toEqual([{ kind: "paycheck", label: "Paycheck", amountCents: 2000_00 }]);
+    expect(payday.balanceCents).toBe(3040_00);
+
+    // A settled one-time income (paid marker) carries the flag too, zero cash.
+    const lookback = computeProjection({
+      ...baseInput(),
+      startDate: "2026-11-01",
+      endDate: "2026-11-10",
+      startingBalanceCents: 1000_00,
+      paychecks: [
+        {
+          payDate: "2026-11-05",
+          amountCents: 25_00,
+          note: "Refund",
+          isOneTime: true,
+          settledBeforeDate: "2026-11-10",
+          showSettledBeforeDate: true,
+        },
+      ],
+    });
+    expect(lookback.find((r) => r.date === "2026-11-05")!.events).toEqual([
+      {
+        kind: "paycheck",
+        label: "Refund",
+        amountCents: 0,
+        originalAmountCents: 25_00,
+        isPaid: true,
+        isOneTime: true,
+      },
+    ]);
+    expect(lookback[lookback.length - 1]!.balanceCents).toBe(1000_00);
+  });
+
   it("uses a bill payment override for one generated occurrence only", () => {
     const rows = computeProjection({
       ...baseInput(),
