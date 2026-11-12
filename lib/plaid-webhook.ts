@@ -192,11 +192,50 @@ const SYNC_TRIGGER_CODES = new Set([
 
 /**
  * One sync per item at a time. Plaid can burst several webhooks for the same
- * item; the cursor-based sync is idempotent but running it concurrently
- * against the same cursor does redundant work, so extra triggers coalesce
- * into the in-flight run.
+ * item; running syncs concurrently against the same cursor does redundant
+ * work, so a trigger that arrives while a sync is in flight only marks the
+ * item dirty, and exactly ONE follow-up sync runs after the current one ends.
+ *
+ * The follow-up is not optional: a sync reads the cursor right after its own
+ * /transactions/refresh and then spends seconds on balance and liabilities
+ * calls. SYNC_UPDATES_AVAILABLE for that extraction often lands in that gap;
+ * dropping it left posted rows unread until some later trigger while the
+ * live balance had already lost the money (audit 2026-11-10 PLAID-4, §17
+ * "The ledger must be as fresh as the balance").
+ *
+ * In memory only: a process restart forgets both sets, and with them a
+ * pending follow-up. Real serialization of the work is withUserSyncLock in
+ * plaid-sync.ts; this only decides whether another run is needed.
  */
 const syncInFlight = new Set<string>();
+const syncDirty = new Set<string>();
+
+/**
+ * Run syncs for one item until no webhook arrived during the last one. The
+ * caller has already added the item to `syncInFlight`. Never rejects; a
+ * failed sync still runs a queued follow-up and always clears both flags.
+ */
+async function runItemSyncs(
+  item: { id: string; userId: string },
+  deps: WebhookDeps,
+): Promise<void> {
+  try {
+    do {
+      syncDirty.delete(item.id);
+      try {
+        const r = await deps.sync(item.userId, item.id);
+        log.info(
+          `plaid-webhook: synced item ${item.id}: +${r.added} ~${r.modified} -${r.removed}`,
+        );
+      } catch (err) {
+        log.error(`plaid-webhook: sync failed for item ${item.id}: ${(err as Error).message}`);
+      }
+    } while (syncDirty.has(item.id));
+  } finally {
+    syncInFlight.delete(item.id);
+    syncDirty.delete(item.id);
+  }
+}
 
 export type WebhookDeps = {
   getItem: typeof getPlaidItemByPlaidItemId;
@@ -252,7 +291,7 @@ async function resolveItem(plaidItemId: string, deps: WebhookDeps) {
 
 export type WebhookOutcome =
   | { action: "sync-started"; itemId: string }
-  | { action: "coalesced"; itemId: string }
+  | { action: "queued"; itemId: string }
   | { action: "ignored"; reason: string };
 
 /**
@@ -284,20 +323,12 @@ export async function handlePlaidWebhook(
   }
 
   if (syncInFlight.has(item.id)) {
-    return { action: "coalesced", itemId: item.id };
+    // Not awaited: the follow-up runs after the in-flight sync, never here.
+    syncDirty.add(item.id);
+    return { action: "queued", itemId: item.id };
   }
   syncInFlight.add(item.id);
-  void deps
-    .sync(item.userId, item.id)
-    .then((r) =>
-      log.info(
-        `plaid-webhook: synced item ${item.id}: +${r.added} ~${r.modified} -${r.removed}`,
-      ),
-    )
-    .catch((err) =>
-      log.error(`plaid-webhook: sync failed for item ${item.id}: ${(err as Error).message}`),
-    )
-    .finally(() => syncInFlight.delete(item.id));
+  void runItemSyncs(item, deps);
 
   return { action: "sync-started", itemId: item.id };
 }
