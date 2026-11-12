@@ -804,21 +804,31 @@ All encrypt/decrypt happens through `lib/plaid-crypto.ts`.
 - Account balances are refreshed on every sync from the same response — but that response carries Plaid's **cached** balance. See "Cached vs live balances" below.
 - Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
 
-### Client cache invalidation after manual sync
-Both manual sync entry points (`/accounts` and `/transactions`) must call
-`router.refresh()` after updating their own local rows. A Plaid sync also
-changes server-rendered balances, projections, statements, reconciliation,
-calendar events, and reports. Refreshing only the current component leaves
-Next's client route cache holding pre-sync payloads for pages the user already
-visited or prefetched, which makes those pages look stale until a browser
-reload. In Next 15, `router.refresh()` clears that whole route cache while
-preserving client and browser state. A plain `fetch` to an API route does
-not. Paycheck creates, deletes, and schedule saves on `/paychecks` must
-refresh too: the row is archived immediately, but Back restores the
-dashboard/calendar/ledger entry that was cached before the delete, so the
-projection keeps expecting that occurrence. Migration 0029 does not recreate
-it — `settlePaycheckWithDraft` refuses an inactive row, and the matcher only
-sees active unreconciled paychecks.
+### Client cache invalidation after mutations
+Rule: every client mutation that changes server-rendered data calls the
+refresh returned by `useRefreshAfterMutation()` (`lib/refresh-after-mutation.ts`)
+on success, after its own local state update and toast. A plain `fetch` to an
+API route does not invalidate Next's client route cache: Back restores page
+payloads cached before the write (the dashboard keeps the old starting balance,
+or still treats an un-matched bill as paid), and the shared `(app)` layout —
+the sidebar net position and 30-day delta from `buildProjection` — is not
+re-rendered on client navigation, so it stays stale on every page until a
+reload. In Next 15, `router.refresh()` clears that whole route cache and
+re-renders server components while preserving client and browser state, so
+local lists, open dialogs and focus survive. The helper coalesces bursts (the
+paycheck inline editors save per keystroke): one refresh at once, then at most
+one trailing refresh per 500 ms. Do not swap it for full reloads. Plaid syncs
+(`/accounts`, `/transactions`) and paycheck creates/deletes/schedule saves
+already call `router.refresh()` directly; that also satisfies the rule.
+`lib/refresh-after-mutation.contract.test.ts` fails for any file under
+`app/(app)/**` or `components/**` with a mutating `fetch` (POST/PUT/PATCH/DELETE)
+that neither calls the helper, `router.refresh()` nor `window.location.reload()`;
+a file that only mutates through a caller's callback, or changes nothing
+server-rendered (push subscriptions), goes on its allowlist with a reason.
+Note for paychecks: migration 0029 does not recreate a deleted occurrence —
+`settlePaycheckWithDraft` refuses an inactive row, and the matcher only sees
+active unreconciled paychecks — so a stale cached projection there is wrong
+until refreshed.
 
 ### Cached vs live balances (read before touching balance code)
 `/transactions/sync`'s `data.accounts` and `/accounts/get` both return the

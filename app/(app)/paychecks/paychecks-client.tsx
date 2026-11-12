@@ -34,6 +34,7 @@ import {
 import { todayIso } from "@/lib/dates";
 import { describeCadence, summarizeSequences } from "@/lib/paycheck-schedule";
 import { ScheduleDialog, type ScheduleSeed } from "./schedule-dialog";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 import type { PaycheckRow } from "@/lib/db/schema";
 
 /**
@@ -56,6 +57,7 @@ export function PaychecksClient({
   defaultMonths: number;
 }) {
   const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [items, setItems] = React.useState<PaycheckRow[]>(initialPaychecks);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [oneTimeOpen, setOneTimeOpen] = React.useState(false);
@@ -117,6 +119,9 @@ export function PaychecksClient({
         }),
       });
       if (!res.ok) throw new Error("update failed");
+      // Amount, date and received drive the projection (dashboard, calendar,
+      // sidebar). Inline edits save per keystroke; the helper coalesces.
+      refreshAfterMutation();
     } catch (e) {
       setItems(prev);
       toast.error((e as Error).message);

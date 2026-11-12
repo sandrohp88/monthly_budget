@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHead } from "@/components/ui/page-head";
@@ -56,6 +57,8 @@ export function ExtrasClient({
   creditCards: CreditCardRow[];
   timezone: string;
 }) {
+  // One-time expenses are projection inputs (dashboard, calendar, sidebar).
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [items, setItems] = React.useState<OneTimeExpenseRow[]>(initialExtras);
   const [categoriesState, setCategoriesState] = React.useState<string[]>(() => [...categories]);
   const [filter, setFilter] = React.useState<FilterKey>("90");
@@ -117,6 +120,7 @@ export function ExtrasClient({
       const res = await fetch(`/api/extras/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("delete failed");
       toast.success("Expense removed");
+      refreshAfterMutation();
     } catch (err) {
       setItems(prev);
       toast.error((err as Error).message);
@@ -266,6 +270,7 @@ export function ExtrasClient({
             onCreated={(e) => {
               setItems((prev) => [...prev, e].sort((a, b) => a.date.localeCompare(b.date)));
               setCreateOpen(false);
+              refreshAfterMutation();
             }}
           />
         </DialogContent>

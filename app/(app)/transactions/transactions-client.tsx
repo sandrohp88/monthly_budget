@@ -40,6 +40,7 @@ import { cn } from "@/lib/cn";
 import { isSpecialFinancingCandidate } from "@/lib/plaid-promo-parser";
 import { looksLikeReversal } from "@/lib/plaid-transaction-kind";
 import type { DraftWithAccount } from "@/app/api/plaid/drafts/route";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 type FilterKey = "all" | "debits" | "credits" | "bills" | "card_payments" | "promos";
 
@@ -99,6 +100,10 @@ export function TransactionsClient({
   incomes?: SplitIncomeOption[];
 }) {
   const router = useRouter();
+  // Linking, un-matching, editing or deleting a transaction settles or
+  // un-settles bills, statements and paychecks: projection inputs on the
+  // dashboard, calendar and sidebar, and billMatches on this page.
+  const refreshAfterMutation = useRefreshAfterMutation();
   const invalidSplits = React.useMemo(() => new Set(invalidSplitIds), [invalidSplitIds]);
   const orphanedSplits = React.useMemo(() => new Set(orphanedSplitIds), [orphanedSplitIds]);
   const [transactions, setTransactions] = React.useState(initialTransactions);
@@ -141,6 +146,7 @@ export function TransactionsClient({
       if (!res.ok || !json.draft) throw new Error(json.error ?? "Confirm failed");
       setTransactions((rows) => rows.map((r) => (r.id === txn.id ? json.draft! : r)));
       toast.success(`Linked to ${match.billName}`);
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     }
@@ -159,6 +165,7 @@ export function TransactionsClient({
       setTransactions((rows) => rows.map((r) => (r.id === txn.id ? json.draft! : r)));
       setRejectedMatchIds((ids) => new Set([...ids, txn.id]));
       toast.success("Match removed — this transaction won't auto-match bills");
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     }
@@ -202,6 +209,7 @@ export function TransactionsClient({
       const res = await fetch(`/api/plaid/drafts/${txn.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Delete failed");
       toast.success("Transaction deleted");
+      refreshAfterMutation();
     } catch (err) {
       setTransactions(previous);
       toast.error((err as Error).message);
@@ -475,6 +483,7 @@ export function TransactionsClient({
           onSaved={(updated) => {
             setTransactions((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
             setEditing(null);
+            refreshAfterMutation();
           }}
         />
       ) : null}
@@ -486,6 +495,7 @@ export function TransactionsClient({
           onSaved={(updated) => {
             setTransactions((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
             setPromoTxn(null);
+            refreshAfterMutation();
           }}
         />
       ) : null}

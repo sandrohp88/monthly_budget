@@ -25,6 +25,7 @@ import { PushNotificationsCard } from "@/components/push-notifications-card";
 import type { CategoryRow, SettingsRow, UserSafe } from "@/lib/db/schema";
 import type { ImportPreview } from "@/lib/repos";
 import { signOutAndClearCaches } from "@/lib/client-signout";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 interface CurrentUser {
   id: string;
@@ -53,6 +54,7 @@ export function SettingsClient({
   initialCategories,
   timeZones,
 }: Props) {
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [startingBalanceCents, setStartingBalance] = React.useState(initial.startingBalanceCents);
   const [startingBalanceAsOf, setStartingBalanceAsOf] = React.useState(initial.startingBalanceAsOf);
   // Kept and re-saved as-is: the paychecks page owns the cadence now, but these
@@ -92,6 +94,8 @@ export function SettingsClient({
     setCategories((prev) => prev.filter((c) => c.id !== categoryDeleteTarget.id));
     toast.success(`Category "${categoryDeleteTarget.name}" removed`);
     setCategoryDeleteTarget(null);
+    // Bills, one-time and transaction forms, and reports render the category list.
+    refreshAfterMutation();
   };
 
   const save = async (e: React.FormEvent) => {
@@ -115,6 +119,10 @@ export function SettingsClient({
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "save failed");
       toast.success("Settings saved");
+      // Starting balance, as-of date, months, timezone and currency feed every
+      // projection, including the sidebar in the shared layout and the
+      // dashboard payload that Back would otherwise restore.
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -496,6 +504,8 @@ export function SettingsClient({
           onSaved={async () => {
             setUserDialog(null);
             await refreshUsers();
+            // Editing yourself changes the name and role in the sidebar.
+            if (editTarget.id === currentUser.id) refreshAfterMutation();
           }}
         />
       ) : null}
@@ -551,6 +561,7 @@ function Kv({ k, v }: { k: string; v: React.ReactNode }) {
 }
 
 function AccountCard({ currentUser }: { currentUser: CurrentUser }) {
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [displayName, setDisplayName] = React.useState(currentUser.name);
   const [savingName, setSavingName] = React.useState(false);
   const [currentPassword, setCurrentPassword] = React.useState("");
@@ -570,6 +581,7 @@ function AccountCard({ currentUser }: { currentUser: CurrentUser }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "save failed");
       toast.success("Name updated");
+      refreshAfterMutation(); // the sidebar user card shows the name
     } catch (e) {
       toast.error((e as Error).message);
     } finally {

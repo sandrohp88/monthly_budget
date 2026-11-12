@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Calculator, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHead } from "@/components/ui/page-head";
@@ -117,6 +118,9 @@ export function BillsClient({
   lastPaidByBill?: Record<string, LastPaid>;
   timezone: string;
 }) {
+  // Every bill write changes the projection: the dashboard, calendar and the
+  // sidebar in the shared layout are server renders the router caches.
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [bills, setBills] = React.useState<BillRow[]>(initialBills);
   const [variableBills, setVariableBills] = React.useState<VariableBill[]>(initialVariableBills);
   const [overrides, setOverrides] = React.useState<OverrideItem[]>(initialOverrides);
@@ -197,6 +201,7 @@ export function BillsClient({
       setBills((prev) => [...prev, json.bill as BillRow]);
       setCreateOpen(false);
       toast.success("Bill added");
+      refreshAfterMutation();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -217,6 +222,7 @@ export function BillsClient({
       setVariableBills((prev) => [...prev, json.variableBill as VariableBill]);
       setCreateVariableOpen(false);
       toast.success("Variable bill added");
+      refreshAfterMutation();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -238,6 +244,7 @@ export function BillsClient({
       setBills((prev) => prev.map((b) => (b.id === editing.id ? (json.bill as BillRow) : b)));
       setEditing(null);
       toast.success("Bill updated");
+      refreshAfterMutation();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -261,6 +268,7 @@ export function BillsClient({
       );
       setEditingVariable(null);
       toast.success("Variable bill updated");
+      refreshAfterMutation();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -276,6 +284,7 @@ export function BillsClient({
       const res = await fetch(`/api/bills/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("archive failed");
       toast.success("Bill archived");
+      refreshAfterMutation();
     } catch (e) {
       setBills(prev);
       toast.error((e as Error).message);
@@ -290,6 +299,7 @@ export function BillsClient({
       const res = await fetch(`/api/variable-bills/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("archive failed");
       toast.success("Variable bill archived");
+      refreshAfterMutation();
     } catch (e) {
       setVariableBills(prev);
       toast.error((e as Error).message);
@@ -696,6 +706,7 @@ function OverrideSection({
   timezone: string;
   onOverridesChange: (updated: OverrideItem[]) => void;
 }) {
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [addOpen, setAddOpen] = React.useState(false);
   const [newDate, setNewDate] = React.useState(todayIso(timezone));
   const [newAmount, setNewAmount] = React.useState(0);
@@ -726,6 +737,7 @@ function OverrideSection({
       setNewAmount(0);
       setNewNotes("");
       toast.success("Override saved");
+      refreshAfterMutation();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -742,6 +754,7 @@ function OverrideSection({
       if (!res.ok) throw new Error("delete failed");
       onOverridesChange(overrides.filter((o) => o.dueDate !== dueDate));
       toast.success("Override removed");
+      refreshAfterMutation();
     } catch (e) {
       toast.error((e as Error).message);
     }
