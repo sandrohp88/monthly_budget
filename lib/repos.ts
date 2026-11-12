@@ -1776,6 +1776,12 @@ function isUniqueViolation(e: unknown): boolean {
  *    (Promo balances are never mutated here — issuer reconciliation is the
  *    only trustworthy source, §17a.)
  *
+ * Steps 2 and 3 are one choice, not a sequence: of all statements matching
+ * as (2) or (3), a hand-paid row recording this same payment (amount + paid
+ * date within a week) wins; otherwise the payment goes to the newest one
+ * issued before the payment date, so a hand-paid older cycle never takes the
+ * current cycle's payment.
+ *
  * Returns the newly-settled statement, or null when nothing was settled
  * (consumed, accounted, or no match).
  */
@@ -1829,21 +1835,80 @@ export async function settleStatementWithDraft(
     amountMatches(statementCashDueCents(s)) ||
     amountMatches(interestSavingCashDueCents(s, activePromos));
 
-  // Step 2 — already-accounted heuristic (statements are newest-first, so the
-  // most recent plausible cycle wins).
-  const accounted = stmts.find(
-    (s) =>
-      s.paidAmountCents != null &&
-      s.settledByDraftId == null &&
-      withinWindow(s) &&
-      (amountMatches(s.paidAmountCents) || matchesDue(s)),
-  );
+  // Steps 2 and 3 compete: every statement this payment could be — an
+  // already-accounted paid one or a matching open one — is a candidate, and
+  // the payment goes to the cycle it pays: the newest candidate issued BEFORE
+  // the payment date (a statement can't be paid before its balance exists; a
+  // payment posting on a closing date belongs to the closing cycle). Only when
+  // every candidate was issued on/after the payment does the oldest (nearest)
+  // win — statement dates on manual cards are often estimates, and a payment
+  // that exactly matches the next balance is better consumed there than left
+  // free with that statement shown overdue.
+  // Example: Oct (issued 09-28, due 10-25) and Nov (issued 10-28, due 11-25)
+  // both $15.99. A payment on 11-20 pays Nov; one on 10-27 — after Oct's due
+  // date, but before Nov existed — still pays Oct, never Nov ("nearest due
+  // date on or after the payment" would wrongly mark Nov paid there).
+  // Checking "accounted" first over the whole ±window let a manually paid
+  // older cycle swallow the current cycle's payment (PAY-3). Card scope: only
+  // `input.cardId`'s statements are candidates.
+  const isAccounted = (s: CreditCardStatementRow) =>
+    s.paidAmountCents != null &&
+    s.settledByDraftId == null &&
+    withinWindow(s) &&
+    (amountMatches(s.paidAmountCents) || matchesDue(s));
+  const isOpenMatch = (s: CreditCardStatementRow) =>
+    s.paidAmountCents == null &&
+    statementCashDueCents(s) > 0 &&
+    withinWindow(s) &&
+    matchesDue(s);
+  const candidates = stmts.filter((s) => isAccounted(s) || isOpenMatch(s)); // newest-first
+
+  // Before the cycle rule: a hand-paid row whose OWN recorded payment (amount
+  // within tolerance AND paidDate within SAME_PAYMENT_MAX_DAYS of this
+  // payment) matches is evidence about the SAME payment, so it wins. The
+  // cycle rule is only an inference from statement dates, which on manual
+  // cards are estimates: Oct hand-paid $15.99 on 10-30, Nov entered as issued
+  // 10-28 (really 11-03) — the 10-30 payment is Oct's, not Nov's. The bound:
+  // bank posting lag is 0-3 business days, a weekend adds 2 and a bank
+  // holiday 1, so 7 days covers it while staying far below one cycle (a
+  // payment exactly one cycle after the recorded one, 31 days, never
+  // qualifies). Nearest paidDate wins; a NULL paidDate cannot use this path.
+  const SAME_PAYMENT_MAX_DAYS = 7;
+  const paidDaysAway = (s: CreditCardStatementRow) =>
+    Math.abs(new Date(s.paidDate!).getTime() - targetTime) / (1000 * 60 * 60 * 24);
+  const samePayment = candidates
+    .filter(
+      (s) =>
+        isAccounted(s) &&
+        s.paidDate != null &&
+        amountMatches(s.paidAmountCents!) &&
+        paidDaysAway(s) <= SAME_PAYMENT_MAX_DAYS,
+    )
+    .sort((a, b) => paidDaysAway(a) - paidDaysAway(b))[0];
+
+  const chosen =
+    samePayment ??
+    candidates.find((s) => s.statementDate < input.date) ??
+    candidates[candidates.length - 1];
+  if (!chosen) return null;
+
+  // Step 2 — already accounted: stamp for provenance, settle nothing new.
+  // Only stamp a row that is still unstamped: a pass that raced us with a
+  // different draft may have stamped it since `stmts` was read, and
+  // overwriting that stamp would free the other draft. Either way nothing
+  // was newly settled, so the result is null.
+  const accounted = isAccounted(chosen) ? chosen : undefined;
   if (accounted) {
     try {
       await db
         .update(creditCardStatements)
         .set({ settledByDraftId: input.draftId })
-        .where(eq(creditCardStatements.id, accounted.id))
+        .where(
+          and(
+            eq(creditCardStatements.id, accounted.id),
+            isNull(creditCardStatements.settledByDraftId),
+          ),
+        )
         .run();
     } catch (e) {
       if (!isUniqueViolation(e)) throw e;
@@ -1852,12 +1917,7 @@ export async function settleStatementWithDraft(
   }
 
   // Step 3 — settle an open statement by its cash due (full balance or ISB).
-  const match = stmts.find((s) => {
-    if (s.paidAmountCents != null) return false;
-    if (statementCashDueCents(s) <= 0) return false;
-    return withinWindow(s) && matchesDue(s);
-  });
-  if (!match) return null;
+  const match = chosen;
 
   // Settle only if the statement is still open: a pass that raced us may
   // have paid it (or consumed this draft) since `stmts` was read.
