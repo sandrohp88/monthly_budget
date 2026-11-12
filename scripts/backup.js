@@ -6,33 +6,28 @@
 import path from "node:path";
 import fs from "node:fs";
 import Database from "better-sqlite3";
+import { backupFileName, selectNightlyToPrune } from "./backup-lib.mjs";
 
 const src = process.env.SRC ?? path.resolve(process.cwd(), "data/budget.db");
 const destDir = process.env.DEST_DIR ?? path.resolve(process.cwd(), "backups");
 const keep = Number(process.env.KEEP ?? 14);
 
-if (!fs.existsSync(src)) {
-  console.warn(`[backup] source not found: ${src}`);
-  process.exit(0);
+if (!fs.existsSync(src) || fs.statSync(src).size === 0) {
+  console.error(`[backup] source database missing or empty: ${src}`);
+  process.exit(1);
 }
 
 fs.mkdirSync(destDir, { recursive: true });
 
-const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15);
-const out = path.join(destDir, `budget-${stamp}.db`);
+const out = path.join(destDir, backupFileName());
 
 const db = new Database(src, { readonly: true });
 await db.backup(out);
 db.close();
 console.warn(`[backup] wrote ${out}`);
 
-const files = fs
-  .readdirSync(destDir)
-  .filter((f) => f.startsWith("budget-") && f.endsWith(".db"))
-  .map((f) => ({ f, t: fs.statSync(path.join(destDir, f)).mtimeMs }))
-  .sort((a, b) => b.t - a.t);
-
-for (const { f } of files.slice(keep)) {
+// Nightly files only; ad-hoc backups (adhoc/, predeploy) are never touched.
+for (const f of selectNightlyToPrune(fs.readdirSync(destDir), keep)) {
   fs.unlinkSync(path.join(destDir, f));
   console.warn(`[backup] pruned ${f}`);
 }
