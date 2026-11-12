@@ -35,6 +35,7 @@ import {
   updatePlaidAccount,
   upsertPlaidDraft,
   replaceDraftAllocations,
+  setPlaidDraftBillLink,
   deleteCreditCardPaymentOverride,
   findInvalidSplitDraftIds,
 } from "./repos";
@@ -907,6 +908,112 @@ describe("buildProjection linked starting balance", () => {
     expect(projection?.startDate).toBe("2026-05-04");
     expect(projection?.startingBalanceCents).toBe(500_00);
     expect(projection?.rows[0]?.date).toBe("2026-05-04");
+  });
+
+  // Review 2026-11-10 PAY-2: a "Discover" loan bill took the Discover card
+  // payment by name. The card plan stayed held ($903 understated) and the
+  // real $150 loan payment left the projection ($150 overstated).
+  async function discoverFixture(opts: { cardPlan: boolean; debitCents?: number }) {
+    const user = await makeUser();
+    // $1,000 before; the $903 card payment posted yesterday -> live $97.
+    await seedLinkedStartingBalance(user.id, 97_00);
+    let cardId: string | null = null;
+    if (opts.cardPlan) {
+      const card = await createCreditCard(user.id, {
+        name: "Discover it",
+        statementDay: 15,
+        dueDay: 10,
+        currentBalanceCents: 903_00,
+        autoPay: false,
+        isActive: true,
+      });
+      cardId = card.id;
+      await upsertCreditCardPaymentOverride(user.id, card.id, {
+        dueDate: "2026-05-02",
+        amountCents: 903_00,
+        notes: null,
+      });
+    }
+    const bill = await createBill(user.id, {
+      name: "Discover",
+      category: "Debt",
+      amountCents: 150_00,
+      intervalMonths: 1,
+      anchorDate: "2026-05-10",
+      autoPay: true,
+      paidViaCardId: null,
+      notes: null,
+      isActive: true,
+    });
+    await upsertPlaidDraft({
+      id: "cardpay",
+      userId: user.id,
+      accountId: "checking",
+      date: "2026-05-03",
+      description: "DISCOVER E-PAYMENT 4474",
+      originalDescription: null,
+      amountCents: opts.debitCents ?? 903_00,
+      plaidCategory: null,
+      merchantName: null,
+      pending: false,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+    const loanEvent = (p: Awaited<ReturnType<typeof buildProjection>>) =>
+      p?.rows.find((r) => r.date === "2026-05-10")?.events.find((e) => e.label === "Discover");
+    return { user, bill, cardId, loanEvent };
+  }
+
+  it("a card-plan debit settles the plan, not a cash bill that shares the issuer's name", async () => {
+    const { user, loanEvent } = await discoverFixture({ cardPlan: true });
+    const p = await buildProjection(user.id);
+    expect(p?.pendingPosting.totalHeldCents).toBe(0);
+    expect(p?.pendingPosting.cardPayments).toEqual([]);
+    expect(p?.billMatchesByDraftId.cardpay).toBeUndefined();
+    expect(loanEvent(p)).toMatchObject({ amountCents: 150_00 });
+    expect(loanEvent(p)?.isPaid).toBeFalsy();
+    expect(p?.rows[0]?.balanceCents).toBe(97_00);
+  });
+
+  it("without a card plan, a debit six times the bill does not mark it paid", async () => {
+    const { user, loanEvent } = await discoverFixture({ cardPlan: false });
+    const p = await buildProjection(user.id);
+    const may10 = p?.rows.find((r) => r.date === "2026-05-10");
+    expect(may10?.expenseCents).toBe(150_00);
+    expect(loanEvent(p)?.isPaid).toBeFalsy();
+    expect(p?.billMatchesByDraftId.cardpay).toBeUndefined();
+  });
+
+  it("without a card plan, a debit near the bill amount still settles the bill", async () => {
+    const { user, bill, loanEvent } = await discoverFixture({ cardPlan: false, debitCents: 150_00 });
+    const p = await buildProjection(user.id);
+    expect(loanEvent(p)).toMatchObject({ amountCents: 0, isPaid: true, originalAmountCents: 150_00 });
+    expect(p?.billMatchesByDraftId.cardpay).toMatchObject({ billId: bill.id, occurrenceDate: "2026-05-10" });
+  });
+
+  it("a manual link of the debit to the bill still beats the card plan", async () => {
+    const { user, bill, loanEvent } = await discoverFixture({ cardPlan: true });
+    await setPlaidDraftBillLink(user.id, "cardpay", bill.id);
+    const p = await buildProjection(user.id);
+    expect(loanEvent(p)).toMatchObject({ amountCents: 0, isPaid: true, originalAmountCents: 903_00 });
+    expect(p?.billMatchesByDraftId.cardpay).toMatchObject({ billId: bill.id });
+    // The user said the money paid the loan, so the card plan is still waiting.
+    expect(p?.pendingPosting.totalHeldCents).toBe(903_00);
+  });
+
+  it("a split of the debit beats the card-plan heuristic for both of its targets", async () => {
+    const { user, bill, cardId, loanEvent } = await discoverFixture({ cardPlan: true });
+    await replaceDraftAllocations(user.id, "cardpay", [
+      { targetKind: "bill", targetId: bill.id, targetDate: "2026-05-10", amountCents: 150_00 },
+      { targetKind: "card_payment", targetId: cardId!, targetDate: "2026-05-02", amountCents: 753_00 },
+    ]);
+    const p = await buildProjection(user.id);
+    expect(loanEvent(p)).toMatchObject({ amountCents: 0, isPaid: true, originalAmountCents: 150_00 });
+    // Only the split's $753 reached the plan; the heuristic must not settle
+    // the rest from the same debit.
+    expect(p?.pendingPosting.totalHeldCents).toBe(150_00);
   });
 });
 

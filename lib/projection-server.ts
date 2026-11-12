@@ -33,6 +33,7 @@ import {
 import { projectCardPayments } from "./card-payments";
 import {
   cardPaymentKey,
+  matchPlannedCardPayments,
   reconcilePlannedCardPayments,
   type PlannedCardPayment,
 } from "./card-payment-reconciliation";
@@ -381,11 +382,24 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     );
     for (const p of allocated.extras) paidExtraById.set(p.extraId, p);
 
+    // A debit that settles a tracked card plan on its own evidence (amount,
+    // date window, card/issuer payment wording or a receipt, unique) goes to
+    // the card, not to a cash bill the name heuristic would pair it with: a
+    // "Discover" loan bill took the Discover card payment, leaving the plan
+    // held and dropping the real loan payment (review 2026-11-10 PAY-2).
+    // Manual links and splits stay on top: the card matcher already skips
+    // drafts that carry either.
+    const cardClaimedDraftIds = matchPlannedCardPayments(
+      plannedCardPayments,
+      recentDrafts,
+      new Set(),
+      cardReceipts,
+    ).claimedDraftIds;
     const matches = [
       ...allocated.bills,
       ...matchPaidBillOccurrences(reconcilableBills, recentDrafts, {
         aliasesByBill,
-        excludeDraftIds: allocated.allocatedDraftIds,
+        excludeDraftIds: new Set([...allocated.allocatedDraftIds, ...cardClaimedDraftIds]),
         excludeOccurrenceKeys: allocated.allocatedOccurrenceKeys,
       }),
     ].sort(
@@ -413,6 +427,11 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
         };
       }
     }
+    // Final card pass, minus the drafts bills took. It still settles every
+    // plan the claim pass above settled (those drafts never reach a bill, and
+    // removing other candidates cannot break a unique pair), and a bill's own
+    // debit can still resolve a plan that was ambiguous only because of it.
+    // No draft is credited to both a bill and a card plan.
     postedCardCents = reconcilePlannedCardPayments(
       plannedCardPayments,
       recentDrafts,

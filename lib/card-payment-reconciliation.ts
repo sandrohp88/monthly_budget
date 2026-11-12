@@ -65,7 +65,23 @@ export function reconcilePlannedCardPayments(
   excludedDraftIds: ReadonlySet<string> = new Set(),
   cardReceipts: readonly CardPaymentReceipt[] = [],
 ): Map<string, number> {
+  return matchPlannedCardPayments(plans, drafts, excludedDraftIds, cardReceipts).posted;
+}
+
+/**
+ * reconcilePlannedCardPayments plus the ids of the drafts its automatic pass
+ * settled a plan with. Bill reconciliation skips those drafts: a debit that
+ * proves a tracked card plan on its own evidence must not also (or instead)
+ * settle a cash bill found only by name (review 2026-11-10 PAY-2).
+ */
+export function matchPlannedCardPayments(
+  plans: readonly PlannedCardPayment[],
+  drafts: readonly ReconcilableDraft[],
+  excludedDraftIds: ReadonlySet<string> = new Set(),
+  cardReceipts: readonly CardPaymentReceipt[] = [],
+): { posted: Map<string, number>; claimedDraftIds: Set<string> } {
   const posted = new Map<string, number>();
+  const claimedDraftIds = new Set<string>();
   const planKeys = new Set(plans.map((p) => cardPaymentKey(p.cardId, p.date)));
   const planCents = new Map(plans.map((p) => [cardPaymentKey(p.cardId, p.date), p.amountCents] as const));
   const explicitlyAssigned = new Set<string>();
@@ -126,6 +142,7 @@ export function reconcilePlannedCardPayments(
       if (candidates.filter((p) => p.key === pair.key).length !== 1) continue;
       if (candidates.filter((p) => p.draftId === pair.draftId).length !== 1) continue;
       posted.set(pair.key, pair.cents);
+      claimedDraftIds.add(pair.draftId);
     }
   };
   const exactPairs = pairs.filter((p) => p.exact);
@@ -133,5 +150,5 @@ export function reconcilePlannedCardPayments(
   const decidedKeys = new Set(exactPairs.map((p) => p.key));
   const decidedDrafts = new Set(exactPairs.map((p) => p.draftId));
   settleUnique(pairs.filter((p) => !p.exact && !decidedKeys.has(p.key) && !decidedDrafts.has(p.draftId)));
-  return posted;
+  return { posted, claimedDraftIds };
 }
