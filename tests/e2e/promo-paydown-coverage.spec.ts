@@ -51,8 +51,12 @@ test("promo planner surfaces scheduled calendar paydowns that cover the balance"
 
   await page.goto(`/credit-cards/${card.id}`);
 
-  // The promo planner explains the promo balance is already covered.
+  // The promo planner explains the promo balance is already covered — read
+  // from the projection's own promo cash ($0 estimate here, so the $250 goes
+  // to the promo chunks), never recomputed by the page.
   await expect(page.getByText(/scheduled on calendar/i)).toBeVisible();
   await expect(page.getByText(/\$250\.00/).first()).toBeVisible();
-  await expect(page.getByText(/covers this card.s full promo balance/i)).toBeVisible();
+  await expect(
+    page.getByText(/the projection shows no promo cash left for this card/i),
+  ).toBeVisible();
 });
