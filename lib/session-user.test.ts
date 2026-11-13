@@ -26,6 +26,11 @@ beforeEach(() => {
     .insert(users)
     .values({ id: "u", email: "a@example.com", passwordHash: "x", displayName: "A", role: "admin" })
     .run();
+  // A second admin: the last admin can be neither deleted nor demoted (AUTH-6).
+  getDb()
+    .insert(users)
+    .values({ id: "u2", email: "b@example.com", passwordHash: "x", displayName: "B", role: "admin" })
+    .run();
 });
 afterEach(() => {
   __resetDbCacheForTests();
