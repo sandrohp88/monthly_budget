@@ -526,7 +526,7 @@ export default async function DashboardPage() {
           <CardTitle className="text-[14px]">Monthly summary</CardTitle>
           <div className="text-2xs text-[var(--text-2)]">{projectionMonths} months</div>
         </CardHeader>
-        <Table stackOnMobile>
+        <Table className="summary-table">
           <TableHeader>
             <TableRow>
               <TableHead>Month</TableHead>

@@ -203,7 +203,7 @@ export function CardDetailClient({
       </Link>
 
       {/* ── hero: the card + identity + balance + actions ─────────────────── */}
-      <div className="flex flex-col gap-6 md:flex-row md:items-start md:gap-9">
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-9">
         <div className="w-full max-w-[340px] shrink-0">
           <CreditCardVisual
             name={card.name}

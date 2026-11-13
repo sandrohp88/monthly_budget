@@ -90,7 +90,7 @@ export function InlineBalanceEditor({
         title="Edit balance"
         className={cn(
           "group/balance inline-flex cursor-pointer items-center gap-1 rounded-sm tabular",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--mint-dim)]",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]",
           textClassName,
         )}
       >
@@ -132,7 +132,7 @@ export function InlineBalanceEditor({
         className={cn(
           "h-7 w-24 rounded-md border border-[var(--mint-dim)] bg-[var(--bg-1)] px-2",
           "text-right text-[13px] font-semibold tabular text-[var(--text-0)]",
-          "focus:outline-none focus:ring-2 focus:ring-[var(--mint-dim)]",
+          "focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)]",
           inputClassName,
         )}
       />

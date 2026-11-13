@@ -309,7 +309,7 @@ export function SettingsClient({
                     required
                     value={timezone}
                     onChange={(e) => setTimezone(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-[var(--border-raw)] bg-[var(--bg-1)] px-3 py-2 text-[13px] text-[var(--text-0)] hover:border-[var(--border-2)] focus:outline-none focus:border-[var(--mint-dim)] focus:shadow-[0_0_0_3px_var(--mint-glow)]"
+                    className="flex h-10 w-full rounded-md border border-[var(--control-border)] bg-[var(--bg-1)] px-3 py-2 text-[13px] text-[var(--text-0)] hover:border-[var(--text-2)] focus:outline-none focus:border-[var(--focus-ring)] focus:shadow-[0_0_0_1px_var(--focus-ring),0_0_0_4px_var(--mint-glow)]"
                   >
                     {timeZones.map((tz) => (
                       <option key={tz} value={tz}>

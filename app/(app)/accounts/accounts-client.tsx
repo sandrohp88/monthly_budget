@@ -221,7 +221,7 @@ export function AccountsClient({
         title="Accounts"
         subtitle="Link bank accounts and credit cards via Plaid to automate transaction import"
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               id="sync-all-button"
               variant="outline"

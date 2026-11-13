@@ -245,6 +245,9 @@ are semantically accurate.
 - **Body prose stays sentence-case Rajdhani.** Headings (`<h1>`–`<h3>`) auto-render in Orbitron uppercase via base CSS.
 - **Numbers use `.tabular`** — auto-applies JetBrains Mono + tabular-nums.
 - **State telegraphs in color, not just copy** — variant badges/borders carry the meaning.
+- **Focus and control edges are tokens** — `--focus-ring` (keyboard focus, >=3:1 on every surface) and `--control-border` (input/select/switch edge, >=3:1) are derived per theme in `app/globals.css`. Use them; `--mint-dim` and `--border-raw` fail those floors. A global `:focus-visible` outline covers anything without its own ring.
+- **Never dim text with `opacity`** — it drops contrast under 4.5:1. Past calendar days use `.calendar-past` (recessed surface + desaturation).
+- **Phone tables** — `stackOnMobile` for record lists; `className="summary-table"` for short numeric summaries (one two-line row per record). `TileGrid` goes two-up on phones.
 - Pages animate in with `fade-in` class on the root.
 
 ### Themes

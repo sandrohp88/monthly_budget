@@ -10,6 +10,7 @@ import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHead } from "@/components/ui/page-head";
 import { Tile, TileGrid } from "@/components/ui/tile";
+import { StatusPill } from "@/components/ui/status-pill";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { CreditCardVisual } from "@/components/credit-card-visual";
@@ -192,30 +193,20 @@ function WalletCardEntry({ data, today }: { data: WalletCard; today: string }) {
   return (
     <Link
       href={`/credit-cards/${card.id}`}
-      className="group block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--mint-dim)]"
+      className="group block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
     >
       <CreditCardVisual
         name={card.name}
         institution={institution}
         mask={mask}
         className="shadow-[var(--shadow-sm)] transition-all duration-200 group-hover:-translate-y-1 group-hover:shadow-[var(--shadow-md)]"
-      >
-        {status ? (
-          <span
-            className={cn(
-              "absolute right-2.5 top-2.5 rounded-full px-2 py-0.5 text-2xs font-bold tracking-wide text-white shadow-sm",
-              // Fixed colours: the badge sits on card art, not a theme surface. Both
-              // keep white text >=4.5:1 (was 3.35:1 on the amber; review R10).
-              status === "overdue" ? "bg-[#b3321f]" : "bg-[#8f5300]",
-            )}
-          >
-            {status === "overdue" ? "Overdue" : `Due in ${daysLeft}D`}
-          </span>
-        ) : null}
-      </CreditCardVisual>
+      />
       <div className="mt-2.5 flex items-start justify-between gap-2 px-0.5">
         <div className="min-w-0">
-          <div className="truncate text-[12px] font-semibold leading-snug text-[var(--text-0)] sm:text-[13px]">
+          <div
+            className="line-clamp-2 text-[12px] font-semibold leading-snug text-[var(--text-0)] sm:text-[13px]"
+            title={name}
+          >
             {name}
           </div>
           <div className="mt-0.5 text-[11px] text-[var(--text-3)] tabular sm:text-[12px]">
@@ -232,7 +223,18 @@ function WalletCardEntry({ data, today }: { data: WalletCard; today: string }) {
               <span className="font-medium text-[var(--text-3)]">—</span>
             )}
           </div>
-          <div className="text-2xs leading-tight text-[var(--text-3)] sm:text-[11px]">balance</div>
+          {/* Due status sits in the caption, on a theme surface, instead of
+              on the card art where it covered the card's own name. */}
+          {status ? (
+            <StatusPill
+              variant={status === "overdue" ? "danger" : "amber"}
+              className="mt-0.5"
+            >
+              {status === "overdue" ? "Overdue" : `Due in ${daysLeft}D`}
+            </StatusPill>
+          ) : (
+            <div className="text-2xs leading-tight text-[var(--text-3)] sm:text-[11px]">balance</div>
+          )}
         </div>
       </div>
     </Link>

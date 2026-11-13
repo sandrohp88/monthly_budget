@@ -34,7 +34,7 @@ export default async function LedgerPage({
           <div
             role="heading"
             aria-level={1}
-            className="text-[34px] leading-none font-semibold tracking-normal text-[var(--text-0)]"
+            className="text-[28px] font-extrabold leading-[1.15] tracking-[-0.01em] text-[var(--text-0)] md:text-[36px]"
           >
             Ledger
           </div>
