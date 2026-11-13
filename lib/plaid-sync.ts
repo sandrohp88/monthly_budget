@@ -1117,7 +1117,7 @@ export async function refreshAccountsFromPlaid(
     const res = await plaid.accountsGet({ access_token: accessToken });
     for (const acct of res.data.accounts) {
       // Only accounts we already track — linking new ones stays an explicit
-      // user action on /accounts (see "Why we DON'T auto-create a card").
+      // user action (see CLAUDE.md "When a card is auto-created").
       if (!knownIds.has(acct.account_id)) continue;
       const limitCents = acct.balances.limit != null ? toCents(acct.balances.limit) : null;
       await upsertPlaidAccount(
