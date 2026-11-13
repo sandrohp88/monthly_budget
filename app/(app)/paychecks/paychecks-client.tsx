@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { CalendarClock, Gift, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -34,6 +33,7 @@ import {
 import { todayIso } from "@/lib/dates";
 import { describeCadence, summarizeSequences } from "@/lib/paycheck-schedule";
 import { ScheduleDialog, type ScheduleSeed } from "./schedule-dialog";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 import type { PaycheckRow } from "@/lib/db/schema";
 
 /**
@@ -55,7 +55,7 @@ export function PaychecksClient({
   timezone: string;
   defaultMonths: number;
 }) {
-  const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [items, setItems] = React.useState<PaycheckRow[]>(initialPaychecks);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [oneTimeOpen, setOneTimeOpen] = React.useState(false);
@@ -117,6 +117,9 @@ export function PaychecksClient({
         }),
       });
       if (!res.ok) throw new Error("update failed");
+      // Amount, date and received drive the projection (dashboard, calendar,
+      // sidebar). Inline edits save per keystroke; the helper coalesces.
+      refreshAfterMutation();
     } catch (e) {
       setItems(prev);
       toast.error((e as Error).message);
@@ -135,7 +138,7 @@ export function PaychecksClient({
       // including the history entry for the page the user just left. fetch()
       // does not invalidate that cache, so Back (and the sidebar) keep
       // expecting the occurrence until a full reload.
-      router.refresh();
+      refreshAfterMutation();
     } catch (e) {
       setItems(prev);
       toast.error((e as Error).message);
@@ -185,7 +188,7 @@ export function PaychecksClient({
       setItems(json.paychecks as PaycheckRow[]);
       const n = json.removed as number;
       toast.success(`${n} paycheck${n === 1 ? "" : "s"} removed`);
-      router.refresh();
+      refreshAfterMutation();
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -568,7 +571,7 @@ export function PaychecksClient({
             onCreated={(p) => {
               setItems((prev) => [...prev, p].sort((a, b) => a.payDate.localeCompare(b.payDate)));
               setCreateOpen(false);
-              router.refresh();
+              refreshAfterMutation();
             }}
           />
         </DialogContent>
@@ -586,7 +589,7 @@ export function PaychecksClient({
             onCreated={(p) => {
               setItems((prev) => [...prev, p].sort((a, b) => a.payDate.localeCompare(b.payDate)));
               setOneTimeOpen(false);
-              router.refresh();
+              refreshAfterMutation();
             }}
           />
         </DialogContent>
@@ -599,7 +602,7 @@ export function PaychecksClient({
         defaultMonths={defaultMonths}
         onApplied={(rows) => {
           setItems(rows);
-          router.refresh();
+          refreshAfterMutation();
         }}
       />
     </div>

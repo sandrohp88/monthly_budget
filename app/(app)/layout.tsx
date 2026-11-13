@@ -5,6 +5,7 @@ import { getSettings, userExists } from "@/lib/repos";
 import { log } from "@/lib/log";
 import { AppShell, type SidebarSummary } from "@/components/app-shell";
 import { buildProjection } from "@/lib/projection-server";
+import { RefreshOnNavigation } from "@/lib/refresh-after-mutation";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       role={role.toUpperCase()}
       sidebarSummary={sidebarSummary}
     >
+      {/* Re-arms a refresh after navigations that follow a mutation (a pending
+          refresh is discarded by a navigation). CLAUDE.md §17. */}
+      <RefreshOnNavigation />
       {children}
     </AppShell>
   );

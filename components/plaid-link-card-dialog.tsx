@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { PlaidAccountRow, CreditCardRow } from "@/lib/db/schema";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 interface PlaidLinkCardDialogProps {
   /** The Plaid account being linked. */
@@ -38,6 +39,7 @@ export function PlaidLinkCardDialog({
   onClose,
   onLinked,
 }: PlaidLinkCardDialogProps) {
+  const refreshAfterMutation = useRefreshAfterMutation();
   const unlinkedCards = cards.filter((c) => c.plaidAccountId == null);
 
   // Default to "existing" if any unlinked manual cards exist; otherwise "new".
@@ -75,6 +77,8 @@ export function PlaidLinkCardDialog({
           : `Linked to "${json.card?.name ?? "card"}"`,
       );
       onLinked();
+      // The card now takes its balance, statements and cycle from Plaid.
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {

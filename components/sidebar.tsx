@@ -154,6 +154,7 @@ export function Sidebar({
           <div className="mt-1 flex items-center justify-between text-[11px]">
             <span className="text-[var(--text-3)]">30D</span>
             <span
+              data-testid="sidebar-delta-30d"
               className={cn(
                 "tabular",
                 summary.deltaCents > 0
