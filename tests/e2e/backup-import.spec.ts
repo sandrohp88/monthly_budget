@@ -1,5 +1,21 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { ensureAuth } from "./auth";
+
+type BackupFile = { name: string; mimeType: string; buffer: Buffer };
+
+// The file input is hidden; a user reaches it only through the "Import JSON"
+// button, which works only after hydration. setInputFiles bypasses that
+// button. On a slow runner it can fire `change` before React has attached the
+// handler. That event is lost and the preview never opens (reproduced with
+// 10x CPU throttling). So select again until the preview dialog shows.
+// Choosing a file only previews (it writes nothing), so a repeat is safe.
+async function selectBackup(page: Page, picker: Locator, file: BackupFile) {
+  const heading = page.getByRole("dialog").getByRole("heading", { name: /replace your data/i });
+  await expect(async () => {
+    await picker.setInputFiles(file);
+    await expect(heading).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
+}
 
 // Review 2026-09-21 R02: choosing a file must never replace data on its own.
 test("backup import: rejects non-backups, previews, and only replaces on confirm", async ({
@@ -37,7 +53,7 @@ test("backup import: rejects non-backups, previews, and only replaces on confirm
   const picker = page.locator("input[type='file'][accept='application/json']");
 
   // Preview, then cancel: the new bill must survive.
-  await picker.setInputFiles(file);
+  await selectBackup(page, picker, file);
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: /replace your data/i })).toBeVisible();
   const billsRow = dialog.getByRole("row", { name: /^bills\b/i });
@@ -49,7 +65,7 @@ test("backup import: rejects non-backups, previews, and only replaces on confirm
 
   // Confirm: data is restored to the exported state.
   await page.goto("/settings");
-  await picker.setInputFiles(file);
+  await selectBackup(page, picker, file);
   await dialog.getByRole("button", { name: /replace my data/i }).click();
   await page.waitForLoadState("load");
   await page.goto("/bills");
