@@ -29,6 +29,7 @@ import {
   createPlaidItem,
   createPromo,
   createStatement,
+  createVariableBill,
   updateSettings,
   upsertBillPaymentState,
   upsertCreditCardPaymentOverride,
@@ -948,6 +949,171 @@ describe("buildProjection linked starting balance", () => {
       originalAmountCents: 187_00, // the planned amount, for display
     });
     expect(may2?.expenseCents).toBe(0);
+  });
+
+  // Review PROJ-6: the lookback pivot (tomorrow) also reached engine-projected
+  // card cash, so turning lookback on marked TODAY's promo chunk / variable
+  // spend as paid and released cash nothing had paid. Lookback is a display
+  // setting: the same data and the same live balance must give the same today.
+  // Each test builds once without lookback (schema default 1970-01-01, clamped
+  // to today), then rolls startingBalanceAsOf back and builds again.
+  async function todayInBothModes(userId: string) {
+    const plain = (await buildProjection(userId))?.rows.find((r) => r.date === "2026-05-04");
+    await updateSettings(userId, { startingBalanceAsOf: "2026-05-01" });
+    const lookback = await buildProjection(userId);
+    expect(lookback?.startDate).toBe("2026-05-01");
+    return { plain, lookback, look: lookback?.rows.find((r) => r.date === "2026-05-04") };
+  }
+
+  async function promoCardDueOn(userId: string, dueDay: number) {
+    const card = await createCreditCard(userId, {
+      name: "PayPal",
+      statementDay: 15,
+      dueDay,
+      currentBalanceCents: 500_00,
+      autoPay: false,
+      isActive: true,
+    });
+    await createPromo(userId, card.id, {
+      description: "promo",
+      originalAmountCents: 500_00,
+      remainingAmountCents: 500_00,
+      startDate: "2026-04-01",
+      endDate: "2026-12-31",
+      monthlyPaymentCents: 100_00,
+      notes: null,
+      isActive: true,
+    });
+    return card;
+  }
+
+  it("a promo chunk due TODAY stays owed with lookback on, exactly as without it", async () => {
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 1000_00);
+    await promoCardDueOn(user.id, 4); // chunk falls due on mocked today
+    const { plain, look } = await todayInBothModes(user.id);
+    for (const [mode, row] of [["no lookback", plain], ["lookback", look]] as const) {
+      const chunk = row?.events.find((e) => e.label.includes("promo"));
+      expect(chunk, mode).toMatchObject({ amountCents: 100_00 });
+      expect(chunk?.isPaid, mode).toBeFalsy();
+      expect(row?.balanceCents, mode).toBe(900_00);
+    }
+  });
+
+  it("a variable-spend card charge due TODAY stays owed with lookback on, exactly as without it", async () => {
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 1000_00);
+    const card = await createCreditCard(user.id, {
+      name: "Visa",
+      statementDay: 4,
+      dueDay: 4,
+      gracePeriodDays: 0, // today's charge closes and falls due today
+      autoPay: false,
+      isActive: true,
+    });
+    await createVariableBill(user.id, {
+      name: "Groceries",
+      category: "Groceries",
+      amountCents: 80_00,
+      intervalMonths: 1,
+      anchorDate: "2026-05-04",
+      notes: null,
+      isActive: true,
+      cardIds: [card.id],
+    });
+    const { plain, look } = await todayInBothModes(user.id);
+    for (const [mode, row] of [["no lookback", plain], ["lookback", look]] as const) {
+      const charge = row?.events.find((e) => e.label.includes("variable spend"));
+      expect(charge, mode).toMatchObject({ amountCents: 80_00 });
+      expect(charge?.isPaid, mode).toBeFalsy();
+      expect(row?.balanceCents, mode).toBe(920_00);
+    }
+  });
+
+  it("a promo due date YESTERDAY carries no chunk in either mode and moves no cash", async () => {
+    // The promo generator starts at today, so a passed due date has no chunk
+    // to settle: neither mode invents one, and the next cycle is owed in both.
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 1000_00);
+    await promoCardDueOn(user.id, 3);
+    const plainProjection = await buildProjection(user.id);
+    const { plain, lookback, look } = await todayInBothModes(user.id);
+    const may3 = lookback?.rows.find((r) => r.date === "2026-05-03");
+    expect(may3?.events.some((e) => e.label.includes("promo"))).toBe(false);
+    expect(may3?.balanceCents).toBe(1000_00);
+    expect(plain?.balanceCents).toBe(1000_00);
+    expect(look?.balanceCents).toBe(1000_00);
+    for (const p of [plainProjection, lookback]) {
+      const jun3 = p?.rows.find((r) => r.date === "2026-06-03");
+      expect(jun3?.events.find((e) => e.label.includes("promo"))).toMatchObject({
+        amountCents: 100_00,
+      });
+      expect(jun3?.balanceCents).toBe(900_00);
+    }
+  });
+
+  it("a user-scheduled card payment dated TODAY debits today in both modes", async () => {
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 1000_00);
+    const card = await createCreditCard(user.id, {
+      name: "Costco",
+      statementDay: 13,
+      dueDay: 9,
+      currentBalanceCents: 211_38,
+      autoPay: false,
+      isActive: true,
+    });
+    await upsertCreditCardPaymentOverride(user.id, card.id, {
+      dueDate: "2026-05-04",
+      amountCents: 212_00,
+      notes: null,
+    });
+    const { plain, look } = await todayInBothModes(user.id);
+    for (const [mode, row] of [["no lookback", plain], ["lookback", look]] as const) {
+      const planned = row?.events.find((e) => e.label === "Costco planned payment");
+      expect(planned, mode).toMatchObject({ amountCents: 212_00 });
+      expect(planned?.isPaid, mode).toBeFalsy();
+      expect(row?.balanceCents, mode).toBe(788_00);
+    }
+  });
+
+  it("today's promo chunk settles in both modes only on posted checking evidence", async () => {
+    // The evidence path for a chunk is a tracked plan on its date that a
+    // posted checking debit reconciles. The debit posted today, so the live
+    // balance already shows it ($1,000 -> $900); the chunk must not debit
+    // again. In lookback the same debit also rides today as a reconstructed
+    // draft, which the inflated start balance cancels.
+    const user = await makeUser();
+    await seedLinkedStartingBalance(user.id, 900_00);
+    const card = await promoCardDueOn(user.id, 4);
+    await upsertCreditCardPaymentOverride(user.id, card.id, {
+      dueDate: "2026-05-04",
+      amountCents: 100_00,
+      notes: null,
+    });
+    await upsertPlaidDraft({
+      id: "paypal-payment",
+      userId: user.id,
+      accountId: "checking",
+      date: "2026-05-04",
+      description: "PayPal Payment",
+      originalDescription: null,
+      amountCents: 100_00,
+      plaidCategory: null,
+      merchantName: null,
+      pending: false,
+      status: "approved",
+      kind: "expense",
+      linkedExpenseId: null,
+      linkedPromoId: null,
+    });
+    const { plain, look } = await todayInBothModes(user.id);
+    expect(plain?.events.find((e) => e.sourceType === "creditCardPayment" && !e.dueMarker))
+      .toMatchObject({ amountCents: 0, isPaid: true, originalAmountCents: 100_00 });
+    expect(plain?.balanceCents).toBe(900_00);
+    expect(look?.events.find((e) => e.sourceType === "creditCardPayment" && !e.dueMarker))
+      .toMatchObject({ amountCents: 0, isPaid: true, originalAmountCents: 100_00 });
+    expect(look?.balanceCents).toBe(900_00);
   });
 
   it("clamps lookback when startingBalanceAsOf is older than the cap (default 1970-01-01)", async () => {

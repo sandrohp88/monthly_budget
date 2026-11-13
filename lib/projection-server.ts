@@ -647,7 +647,9 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   //     posted through today, including today's drafts; today's scheduled
   //     events (which would otherwise double-count with drafts) become paid
   //     markers, and the projection's first "live" cash-impact row is
-  //     tomorrow.
+  //     tomorrow. Paychecks and bills only: card cash and one-time expenses
+  //     pivot at today (decorateScheduledExtra), and an unconfirmed bill
+  //     due today is held by evidence before this pivot is consulted.
   //   - Linked, no lookback: today. There are no past rows to render anyway.
   const settleBefore = lookback ? addDaysIso(today, 1) : linked ? today : startDate;
 
@@ -658,12 +660,16 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
   // they never move the balance, and turning a past-dated one into a "paid"
   // marker would wrongly imply the statement was settled.
   //
-  // USER-SCHEDULED cash (calendar planned payments / paydowns, one-time
-  // expenses) pivots at `today`, not the lookback pivot: the live balance
-  // reflects a plan only once the payment actually posts, so a plan dated
-  // TODAY must stay a live, movable, cash-debiting event — not a phantom
-  // "settled" marker. Card plans additionally bypass this date pivot through
-  // awaitingPost/isPaid above: only posted checking evidence releases them.
+  // All of this cash pivots at `today`, not the lookback pivot: the live
+  // balance reflects it only once a payment actually posts, so an item dated
+  // TODAY must stay live cash exactly as it is without lookback. That holds
+  // for USER-SCHEDULED cash (calendar planned payments / paydowns, one-time
+  // expenses: a phantom "settled" plan also could not be moved) and for
+  // ENGINE-PROJECTED cash (promo chunks, variable spend): settling today's
+  // chunk at tomorrow's pivot released cash nothing had paid, so a display
+  // setting changed today's balance (review PROJ-6). Payment evidence never
+  // comes from this date pivot: a tracked plan on the chunk's date that a
+  // posted checking debit reconciles arrives here already isPaid (above).
   // One-time expenses retain their existing date-based behavior.
   const decorateScheduledExtra = <T extends OneTimeExpense>(e: T): T =>
     // Skipped rows are exempt like due markers: no cash ever left checking, so
@@ -672,7 +678,7 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     lookback && !e.dueMarker && !e.skipped && !e.awaitingPost && !e.isPaid
       ? {
           ...e,
-          settledBeforeDate: e.userScheduled ? today : settleBefore,
+          settledBeforeDate: today,
           showSettledBeforeDate: true,
         }
       : e;
