@@ -11,9 +11,10 @@ out="${DEST_DIR}/budget-${stamp}.db"
 
 mkdir -p "${DEST_DIR}"
 
-if [ ! -f "${SRC}" ]; then
-  echo "[backup] source not found: ${SRC}" >&2
-  exit 0
+# A missing or empty source means a broken mount: fail, never report a quiet success.
+if [ ! -s "${SRC}" ]; then
+  echo "[backup] ERROR: source database missing or empty: ${SRC}" >&2
+  exit 1
 fi
 
 sqlite3 "${SRC}" "VACUUM INTO '${out}';"
