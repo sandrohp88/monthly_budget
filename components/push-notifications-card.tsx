@@ -6,6 +6,7 @@ import { BellRing, BellOff, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { deletePushSubscriptionOnServer } from "@/lib/client-push";
 
 /** applicationServerKey wants raw bytes; VAPID keys travel base64url. */
 function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
@@ -102,11 +103,7 @@ export function PushNotificationsCard() {
     try {
       const endpoint = subscription.endpoint;
       await subscription.unsubscribe();
-      await fetch("/api/push", {
-        method: "DELETE",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ endpoint }),
-      });
+      await deletePushSubscriptionOnServer(endpoint);
       setSubscription(null);
       await refreshServer();
       toast.success("Push notifications disabled on this device");
