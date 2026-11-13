@@ -38,4 +38,19 @@ test("card payment batch: moves atomically, rejects collisions and rolls back", 
   ])).status()).toBe(409);
 
   expect((await batch([{ op: "delete", cardId: "no-such-card", dueDate: "2027-01-15" }])).status()).toBe(404);
+
+  // The single-row PUT keeps its response shape for an unlinked plan (new row,
+  // then overwrite) and answers 404 for a card that is not the user's.
+  const put = (cardId: string, data: unknown) =>
+    page.request.put(`/api/credit-cards/${cardId}/payment-overrides`, { data });
+  const created = await put(card.id, { dueDate: "2027-02-10", amountCents: 4200 });
+  expect(created.status()).toBe(200);
+  expect(((await created.json()) as { override: { dueDate: string; amountCents: number } }).override).toMatchObject({
+    dueDate: "2027-02-10",
+    amountCents: 4200,
+  });
+  const edited = await put(card.id, { dueDate: "2027-02-10", amountCents: 0 });
+  expect(edited.status()).toBe(200);
+  expect(((await edited.json()) as { override: { amountCents: number } }).override.amountCents).toBe(0);
+  expect((await put("no-such-card", { dueDate: "2027-02-10", amountCents: 1 })).status()).toBe(404);
 });
