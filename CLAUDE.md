@@ -687,7 +687,16 @@ These bit us before. Don't repeat:
     repeats the same carried-forward `recurringEstimate` on every future cycle of a card, so
     summing estimates across months reads as "what cards cost per month if spending continues" —
     never as a growing balance. Any rollup over card events must keep `estimated` markers
-    visually separate from recorded statements for that reason. (A /credit-cards forecast tab
+    visually separate from recorded statements for that reason. The run rate starts at the
+    cycle that already CLOSED (before today) with no statement recorded inside it, while its due
+    date is today or later; a recorded statement for that cycle replaces it, and a passed due
+    with no statement gets no invented overdue; on its due date it merges into an overdue
+    marker riding on today. On a MANUAL card only, payments dated after that close and before
+    today still cover that one marker while the card's `updated_at` (as a calendar day in the
+    user's timezone, passed in as `cardEditedOnByCard`) is earlier than the payment date: the
+    manual balance does not move when the user pays. It adds ONLY money no other rule already
+    credits (plain rows are never date-filtered and already sit in the cover pool) and skips
+    rows on possible promo/variable chunk dates. (A /credit-cards forecast tab
     built on this shipped 2026-07-24 and was removed the same day as redundant with SPENDING —
     see `card-forecast.ts` in git history if that shape is ever wanted again.)
 27. **`kind = 'card_payment'` is NOT enough to keep payments out of card spend.** Rows synced
