@@ -10,7 +10,7 @@ import {
   listUsers,
 } from "@/lib/repos";
 import { jsonError } from "@/lib/api";
-import { revokeUserPlaidItems } from "@/lib/plaid-revoke";
+import { revokePlaidItems } from "@/lib/plaid-revoke";
 import argon2 from "argon2";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -83,23 +83,23 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     const target = await getUserById(id);
     if (!target) return jsonError("not found", 404);
 
-    // Refuse before touching Plaid when this is the last admin; deleteUser
-    // re-checks atomically inside its transaction.
+    // Fast 400 only; deleteUser re-checks atomically inside its transaction.
     if (target.role === "admin") {
       const others = (await listUsers()).filter((u) => u.role === "admin" && u.id !== id);
       if (others.length === 0) return jsonError("cannot remove the last admin", 400);
     }
 
-    // Revoke the user's Plaid Items first (needs the tokens the delete
-    // cascades away). Best effort: failures never block the delete.
-    const { failed } = await revokeUserPlaidItems(id);
-
+    // One transaction: last-admin check, read the active Plaid items, delete.
+    // Revoke at Plaid only AFTER the commit, from the rows held in memory, so
+    // a refusal or DB error never leaves revoked-but-kept connections.
+    let items;
     try {
-      await deleteUser(id);
+      items = await deleteUser(id);
     } catch (e) {
       if (e instanceof LastAdminError) return jsonError(e.message, 400);
       throw e;
     }
+    const { failed } = await revokePlaidItems(items);
     return NextResponse.json({ ok: true, plaidRevokeFailed: failed });
   } catch (e) {
     const msg = (e as Error).message;

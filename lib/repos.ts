@@ -253,14 +253,28 @@ export async function updateUserPassword(id: string, newPassword: string): Promi
   });
 }
 
-export async function deleteUser(id: string): Promise<void> {
+/**
+ * Delete a user and return their ACTIVE Plaid item rows (token columns
+ * included) so the caller can revoke them at Plaid AFTER the commit. Last-admin
+ * check, item read and delete are one synchronous transaction: a refusal or DB
+ * error happens before any irreversible Plaid call, and an item created
+ * concurrently cannot slip between the read and the delete. Never log or
+ * return the rows to an HTTP client.
+ */
+export async function deleteUser(id: string): Promise<PlaidItemRow[]> {
   const db = getDb();
-  // Same atomic last-admin rule as updateUserProfile: check and delete in one
-  // synchronous transaction. Cascade deletes all related rows via FK.
-  db.transaction((tx) => {
+  // Same atomic last-admin rule as updateUserProfile. Cascade deletes all
+  // related rows via FK constraints.
+  return db.transaction((tx) => {
     const target = tx.select({ role: users.role }).from(users).where(eq(users.id, id)).get();
     if (target?.role === "admin" && countOtherAdmins(tx, id) === 0) throw new LastAdminError();
+    const items = tx
+      .select()
+      .from(plaidItems)
+      .where(and(eq(plaidItems.userId, id), eq(plaidItems.isActive, true)))
+      .all();
     tx.delete(users).where(eq(users.id, id)).run();
+    return items;
   });
 }
 
