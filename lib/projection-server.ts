@@ -1,6 +1,6 @@
 import "server-only";
 import { cache } from "react";
-import { addDaysIso, todayIso } from "./dates";
+import { addDaysIso, isoDateInTimeZone, todayIso } from "./dates";
 import {
   getSettings,
   listBillPaymentOverridesForUser,
@@ -555,6 +555,11 @@ async function _buildProjection(userId: string): Promise<ProjectionBundle | null
     plaidAccounts: plaidAccts,
     cardPaymentOverrides: creditCardPaymentOverrides,
     remainingPlannedCentsByKey: linked ? remainingCardCents : undefined,
+    // Same timezone as `today`, so a balance edit and a plan date compare as
+    // calendar days (the past-payment cover rule for manual cards).
+    cardEditedOnByCard: new Map(
+      activeCards.map((c) => [c.id, isoDateInTimeZone(c.updatedAt, settings.timezone)] as const),
+    ),
   });
 
   // Paid plans can disappear from the cash generator when their remaining

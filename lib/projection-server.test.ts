@@ -18,7 +18,8 @@ vi.mock("./dates", async (importActual) => {
 });
 
 import { __resetDbCacheForTests, getDb, runMigrations } from "./db/client";
-import { settings, users } from "./db/schema";
+import { creditCards, settings, users } from "./db/schema";
+import { eq } from "drizzle-orm";
 import { newId } from "./ids";
 import { buildProjection } from "./projection-server";
 import {
@@ -451,6 +452,58 @@ describe("buildProjection open-cycle estimate", () => {
       .flatMap((r) => r.events)
       .find((e) => e.label === "No Statement Card (est.)" && e.dueMarker);
     expect(est).toMatchObject({ amountCents: 0, estimated: true, paymentDueCents: 300_00 });
+  });
+});
+
+describe("buildProjection past payment on a manual card's closed cycle", () => {
+  // Mocked today 2026-05-04: the 04-15 cycle closed with no statement and is
+  // due 05-10. A $300 plan dated 04-20 already paid it; the manual balance
+  // still says $300. The card's last edit (updated_at, read in the user's
+  // timezone, America/Los_Angeles) decides whether that balance predates it.
+  async function seed(updatedAtIso: string | null) {
+    const user = await makeUser();
+    const card = await createCreditCard(user.id, {
+      name: "Manual Card",
+      statementDay: 15,
+      dueDay: 10,
+      currentBalanceCents: 300_00,
+      autoPay: false,
+      isActive: true,
+    });
+    await upsertCreditCardPaymentOverride(user.id, card.id, {
+      dueDate: "2026-04-20",
+      amountCents: 300_00,
+      notes: "pays-down:2026-05-10",
+    });
+    if (updatedAtIso) {
+      await getDb()
+        .update(creditCards)
+        .set({ updatedAt: Date.parse(updatedAtIso) })
+        .where(eq(creditCards.id, card.id))
+        .run();
+    }
+    return (await buildProjection(user.id))?.rows
+      .find((r) => r.date === "2026-05-10")
+      ?.events.find((e) => e.dueMarker);
+  }
+
+  it("covers the closed-cycle estimate when the card was last edited before the payment", async () => {
+    // 2026-04-20 05:00 UTC is still 04-19 in Los Angeles: edited the day before.
+    expect(await seed("2026-04-20T05:00:00Z")).toMatchObject({
+      estimated: true,
+      paymentDueCents: 300_00,
+      scheduledCoverCents: 300_00,
+    });
+  });
+
+  it("does not count it when the card was edited on the payment date", async () => {
+    // 2026-04-20 08:00 UTC is 04-20 in Los Angeles: same day, fail toward the due.
+    expect((await seed("2026-04-20T08:00:00Z"))?.scheduledCoverCents).toBe(0);
+  });
+
+  it("does not count it when the card was edited after the payment date", async () => {
+    // Created now by the real clock: edited long after the payment.
+    expect((await seed(null))?.scheduledCoverCents).toBe(0);
   });
 });
 

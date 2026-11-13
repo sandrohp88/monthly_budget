@@ -286,7 +286,7 @@ This is the most foot-gun-heavy area. Lessons learned the hard way:
    - Use the same SQL style as `0000_moaning_madrox.sql` (backticks around identifiers, `--> statement-breakpoint` between statements).
 3. **Update `lib/db/migrations/meta/_journal.json`** — append a new entry with the next `idx` and the `tag` matching the filename (without `.sql`).
 4. Run `npm run check` to confirm types.
-5. Restart `npm run dev` (or rebuild Docker). On boot, `runMigrations()` will apply the new file.
+5. Restart `npm run dev` (or rebuild Docker). On boot, `runMigrations()` will apply the new file: `instrumentation.ts` `register()` runs it before the push scheduler starts (so webhooks/API routes never see a stale schema); the page-level calls stay. Next bundles instrumentation and app pages as separate module instances, so the once-per-process guard in `lib/db/client.ts` is per instance: migrate and the tracking check run once at boot and once more on the first page render in each process, and find nothing to apply. A migration failure at boot fails startup. Known limit: the process stays up and returns 500 (including `/api/health`) until someone restarts the container; `restart: unless-stopped` does not restart an unhealthy container.
 
 ### What NEVER to do
 
@@ -371,6 +371,7 @@ weird gets emitted before merging.
 - `0042_one_time_income` — `paychecks.is_one_time`: one-time income (bonuses) lives on `paychecks` so it projects and deposit-reconciles like a paycheck, but `isScheduledPaycheck` (lib/paycheck-schedule.ts) keeps it out of every schedule read/write — otherwise a schedule edit moves a bonus onto a payday and restates its amount. Set at creation only. Backup v13. The projection carries it as `isOneTime` on the `kind: "paycheck"` event (cash unchanged); anything that derives a PAYDAY / pay cycle from events (insights, calendar PAYCHECK view, ledger sections) must use `isPaydayEvent`/`isPaydayRow`/`paydayDates` (lib/projection-insights.ts), never `kind === "paycheck"` alone.
 - `0043_shared_deposit_income` — drops `paychecks_settled_by_draft_unique_idx` (from 0029). One posted deposit may settle a scheduled paycheck and one-time income together; each row stores its own share. No row rewrite. Shares are capped in `settlePaycheckSharesWithDraft`.
 - `0044_live_balance_at` — `plaid_accounts.live_balance_at`: epoch ms of the SUCCESSFUL live pull that wrote the stored `balance_cents`/`available_balance_cents` pair, null when the pair is cached. Per-account success stamp (unlike 0038's per-item attempt stamp). While `live_balance_at >= plaid_items.balance_refreshed_at` (the latest attempt wrote the pair), cached payloads keep the pair. Not in the backup. See §17 "Cached vs live balances".
+- `0045_plaid_item_health` — `plaid_items.last_error_code` / `last_error_at` / `first_error_at`: the item's recorded health (a short stable code, never a message). The last SUCCESSFUL sync stays `last_synced_at` (written only after a completed cursor read). Not in the backup. See §17 "Item health".
 
 ---
 
@@ -522,7 +523,7 @@ If you switch base images, verify the user UID still matches the host owner.
 ### Backups
 The `budget-backup` container runs `scripts/backup.sh` via crond at 03:00
 local time. It does `VACUUM INTO` to `/backups/budget-YYYYMMDD-HHMMSS.db` and
-keeps the newest 14 of those nightly files. Pre-deploy (and any other ad-hoc) backups go to
+keeps the newest 14 of those nightly files. A missing or empty `/data/budget.db` makes it exit 1 with a message on stderr (cron appends it to `/var/log/backup.log` inside the container; nothing alerts on it). `npm run backup` (`scripts/backup.js`) uses the same naming and nightly-only prune. Pre-deploy (and any other ad-hoc) backups go to
 `/backups/adhoc/`, which the deploy script trims to the newest 20; they never count toward the
 nightly 14 and aren't mirrored offsite. Pull a backup off LXC 125 with `scp`
 from `/opt/budget/backups/`. Note: the backup container is read-only —
@@ -686,7 +687,16 @@ These bit us before. Don't repeat:
     repeats the same carried-forward `recurringEstimate` on every future cycle of a card, so
     summing estimates across months reads as "what cards cost per month if spending continues" —
     never as a growing balance. Any rollup over card events must keep `estimated` markers
-    visually separate from recorded statements for that reason. (A /credit-cards forecast tab
+    visually separate from recorded statements for that reason. The run rate starts at the
+    cycle that already CLOSED (before today) with no statement recorded inside it, while its due
+    date is today or later; a recorded statement for that cycle replaces it, and a passed due
+    with no statement gets no invented overdue; on its due date it merges into an overdue
+    marker riding on today. On a MANUAL card only, payments dated after that close and before
+    today still cover that one marker while the card's `updated_at` (as a calendar day in the
+    user's timezone, passed in as `cardEditedOnByCard`) is earlier than the payment date: the
+    manual balance does not move when the user pays. It adds ONLY money no other rule already
+    credits (plain rows are never date-filtered and already sit in the cover pool) and skips
+    rows on possible promo/variable chunk dates. (A /credit-cards forecast tab
     built on this shipped 2026-07-24 and was removed the same day as redundant with SPENDING —
     see `card-forecast.ts` in git history if that shape is ever wanted again.)
 27. **`kind = 'card_payment'` is NOT enough to keep payments out of card spend.** Rows synced
@@ -772,7 +782,7 @@ In rough order of "what to try":
 
 Optional add-on that links real bank accounts via **Plaid** so the app can
 import transactions and use a live balance as the projection's starting point.
-The flow is polling-only — no webhook endpoint, no public callback URL needed.
+Syncs run on Plaid webhooks (`POST /api/plaid/webhook`, JWT-verified, see `lib/plaid-webhook.ts`) and on the manual Sync buttons. There is no timer.
 
 ### Required env vars
 ```
@@ -811,6 +821,15 @@ All encrypt/decrypt happens through `lib/plaid-crypto.ts`.
 - **A posted transaction supersedes its pending predecessor by id.** Plaid does NOT reuse the `transaction_id` when a pending transaction posts — it issues a new one and points back via `pending_transaction_id`. `supersedePendingPredecessor` dismisses the predecessor; skip it and the same charge is counted twice (once held, once posted). Measured 2026-08-11: 5 of 5 Citi and 2 of 6 Navy Federal posted rows carried that field, so this is the normal path, not an edge case.
 - Account balances are refreshed on every sync from the same response — but that response carries Plaid's **cached** balance. See "Cached vs live balances" below.
 - Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
+
+### Item health (broken connections must not be silent)
+Incident 2026-09-15: one bank login broke, every sync failed in the per-item
+catch, the Sync button still said "Sync complete", and the frozen balance kept
+anchoring the projection labelled "live" for a week (review 2026-11-10 PLAID-2).
+- The per-item catch in `syncPlaidTransactions` stores `normalizeItemErrorCode(plaidErrorCode(err))` (`UNKNOWN_ERROR` for non-Plaid errors) and returns it in `SyncResult.itemErrors`; a fully successful item clears it, but only an error last seen BEFORE that item's sync started (an ITEM webhook can land mid-sync, outside the sync lock). A failure after the cursor save is stamped with the save time (`last_error_at == last_synced_at`) so the UI says "finished with an error". Only failures that reach that catch count. The optional calls (`/transactions/refresh`, `/accounts/get`, the live balance pull, liabilities) catch their own errors and must stay non-fatal.
+- ITEM webhooks: `ERROR` stores the payload's code, `PENDING_EXPIRATION` / `PENDING_DISCONNECT` / `USER_PERMISSION_REVOKED` store the webhook code, `LOGIN_REPAIRED` clears. They never sync. A successful sync keeps a pending code (the bank still works until it expires), and so does a non-login failure (`recordPlaidItemError` keeps a stored pending code unless the new code is login-type: Plaid sends that warning once).
+- `lib/plaid-item-health.ts` (pure) decides `ok | failing | stale | expiring`; stale = no success for `BANK_SYNC_STALE_AFTER_MS` (4 days: a holiday weekend has no webhook and no page-load sync). /accounts warns per item; the dashboard alerts only for items that feed the starting balance and drops the word "live" from the balance label. Nothing changes a number.
+- Plaid Link update mode is not built: the only recovery for a LOGIN-type code (`LOGIN_TYPE_CODES`) is unlink + link again, and the text states its cost (pending drafts dismissed, card links removed, possible duplicate card — PLAID-3). ❌ Never suggest unlinking for any other code: the per-item catch also catches our own bugs and config errors. Don't render a Reconnect button until update mode exists.
 
 ### Client cache invalidation after mutations
 Rule: every client mutation that changes server-rendered data calls
@@ -1227,7 +1246,7 @@ drawing it to the horizon.
 - ❌ Don't log access tokens (encrypted or plaintext) — `lib/log.ts` is fine for everything else.
 - ❌ Don't store the plaintext access token even briefly in the DB — encrypt before insert in the same function.
 - ❌ Don't bypass `getPlaidClient()` — it lazy-validates env vars and surfaces clear errors.
-- ❌ Don't add a webhook endpoint without explicit need — sync-on-load is enough for a single-family deploy and avoids exposing a public ingress.
+- ❌ Don't add a second webhook endpoint or weaken the JWT check in `verifyPlaidWebhook` — the one receiver is the only public Plaid ingress.
 
 ---
 

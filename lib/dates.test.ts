@@ -5,12 +5,23 @@ import {
   endOfMonthsAhead,
   formatIso,
   startOfMonthIso,
+  isoDateInTimeZone,
   todayIso,
 } from "./dates";
 
 describe("dates", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  // ── isoDateInTimeZone ─────────────────────────────────────────────────────
+  describe("isoDateInTimeZone", () => {
+    it("uses the configured timezone, like todayIso", () => {
+      // 2025-03-15 03:30 UTC == 2025-03-14 23:30 America/New_York
+      const ms = Date.parse("2025-03-15T03:30:00Z");
+      expect(isoDateInTimeZone(ms, "America/New_York")).toBe("2025-03-14");
+      expect(isoDateInTimeZone(ms, "UTC")).toBe("2025-03-15");
+    });
   });
 
   // ── todayIso ──────────────────────────────────────────────────────────────

@@ -31,7 +31,8 @@ vi.mock("./plaid-client", () => ({
 }));
 
 import { __resetDbCacheForTests, getDb, runMigrations } from "./db/client";
-import { settings, users } from "./db/schema";
+import { plaidItems, settings, users } from "./db/schema";
+import { eq } from "drizzle-orm";
 import { newId } from "./ids";
 import { buildProjection } from "./projection-server";
 import {
@@ -60,6 +61,9 @@ import {
   listPlaidAccounts,
   listPlaidItems,
   updatePlaidAccount,
+  getLinkedBalanceSnapshot,
+  getPendingDraftOutflow,
+  recordPlaidItemError,
 } from "./repos";
 import { encryptToken } from "./plaid-crypto";
 import {
@@ -3391,5 +3395,273 @@ describe("overlapping syncs", () => {
     await syncPlaidTransactions(user.id);
 
     expect((await getPlaidDraft(user.id, "txn_tv"))?.linkedPromoId).toBeTruthy();
+  });
+});
+
+// Review 2026-11-10 PLAID-2 (incident 2026-09-15): a bank login broke, every
+// sync failed inside the per-item catch, the route still said "Sync complete
+// — 0 new, 0 updated", and nothing recorded that the item was broken while its
+// frozen balance kept anchoring the projection.
+describe("bank item health (broken connections are recorded, not silent)", () => {
+  const loginRequired = () =>
+    Object.assign(new Error("Request failed with status code 400"), {
+      response: { data: { error_type: "ITEM_ERROR", error_code: "ITEM_LOGIN_REQUIRED" } },
+    });
+
+  async function seedBank(
+    userId: string,
+    opts: { name?: string; token?: string; accountId?: string; balanceCents?: number } = {},
+  ) {
+    const token = encryptToken(opts.token ?? "access-token");
+    const item = await createPlaidItem(userId, {
+      institutionId: "ins_bank",
+      institutionName: opts.name ?? "Chase",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: opts.accountId ?? "acct_chk",
+      itemId: item.id,
+      userId,
+      name: "Checking",
+      mask: "4242",
+      type: "depository",
+      subtype: "checking",
+      balanceCents: opts.balanceCents ?? 1_500_00,
+      availableBalanceCents: opts.balanceCents ?? 1_500_00,
+      useAsStartingBalance: true,
+      updatedAt: Date.now(),
+    });
+    return item;
+  }
+
+  function rawItem(id: string) {
+    return getDb().select().from(plaidItems).where(eq(plaidItems.id, id)).get()!;
+  }
+
+  function emptySync(cursor = "c2") {
+    return { data: { added: [], modified: [], removed: [], next_cursor: cursor, has_more: false } };
+  }
+
+  it("stores ITEM_LOGIN_REQUIRED, reports it, keeps last success, and a later good sync clears it", async () => {
+    const user = await makeUser();
+    const item = await seedBank(user.id);
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+    // One good sync: balance $1,500.00 and one pending $250.00 debit.
+    __plaidMock.transactionsSync.mockResolvedValueOnce({
+      data: {
+        added: [
+          {
+            transaction_id: "txn_pend", account_id: "acct_chk", pending: true, date: TODAY,
+            name: "ACH HOLD", original_description: "ACH HOLD", amount: 250,
+            personal_finance_category: { primary: "TRANSFER_OUT" }, merchant_name: null,
+          },
+        ],
+        modified: [], removed: [], next_cursor: "c1", has_more: false,
+      },
+    });
+    const first = await syncPlaidTransactions(user.id);
+    expect(first.itemErrors).toEqual([]);
+    const lastSuccess = rawItem(item.id).lastSyncedAt;
+    expect(lastSuccess).not.toBeNull();
+    expect(rawItem(item.id).lastErrorCode).toBeNull();
+
+    // From now on every Plaid call for this item fails like a broken login.
+    for (const fn of Object.values(__plaidMock)) fn.mockRejectedValue(loginRequired());
+
+    const failed = await syncPlaidTransactions(user.id);
+    expect(failed.itemErrors).toEqual([
+      { itemId: item.id, institutionName: "Chase", code: "ITEM_LOGIN_REQUIRED" },
+    ]);
+    const broken = rawItem(item.id);
+    expect(broken.lastErrorCode).toBe("ITEM_LOGIN_REQUIRED");
+    expect(broken.lastErrorAt).toEqual(expect.any(Number));
+    expect(broken.firstErrorAt).toBe(broken.lastErrorAt);
+    expect(broken.lastSyncedAt).toBe(lastSuccess);
+    // This PR records and surfaces; it does not change any number.
+    expect((await getLinkedBalanceSnapshot(user.id))?.balanceCents).toBe(1_500_00);
+    expect(await getPendingDraftOutflow(user.id)).toBe(250_00);
+
+    // A second failure keeps the first-seen time and moves the last-seen time.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await syncPlaidTransactions(user.id);
+    const again = rawItem(item.id);
+    expect(again.firstErrorAt).toBe(broken.firstErrorAt);
+    expect(again.lastErrorAt).toBeGreaterThan(broken.lastErrorAt!);
+
+    // The login is repaired: the next fully successful sync clears the error.
+    for (const fn of Object.values(__plaidMock)) fn.mockReset();
+    __plaidMock.transactionsRefresh.mockResolvedValue({ data: { request_id: "r" } });
+    __plaidMock.transactionsSync.mockResolvedValue(emptySync());
+    __plaidMock.accountsGet.mockResolvedValue({ data: { accounts: [] } });
+    __plaidMock.accountsBalanceGet.mockResolvedValue({ data: { accounts: [] } });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+    const repaired = await syncPlaidTransactions(user.id);
+    expect(repaired.itemErrors).toEqual([]);
+    const healthy = rawItem(item.id);
+    expect(healthy.lastErrorCode).toBeNull();
+    expect(healthy.lastErrorAt).toBeNull();
+    expect(healthy.firstErrorAt).toBeNull();
+    expect(healthy.lastSyncedAt).toBeGreaterThan(lastSuccess!);
+  });
+
+  it("optional calls that may fail (refresh, accounts, live balance, liabilities) do not mark the item broken", async () => {
+    const user = await makeUser();
+    const item = await seedBank(user.id);
+    __plaidMock.transactionsRefresh.mockRejectedValue({
+      response: { data: { error_code: "PRODUCTS_NOT_SUPPORTED" } },
+      message: "Request failed with status code 400",
+    });
+    __plaidMock.accountsGet.mockRejectedValue(new Error("Request failed with status code 500"));
+    __plaidMock.accountsBalanceGet.mockRejectedValue({
+      response: { data: { error_code: "BALANCE_LIMIT" } },
+      message: "Request failed with status code 429",
+    });
+    __plaidMock.liabilitiesGet.mockRejectedValue({
+      response: { data: { error_code: "PRODUCTS_NOT_SUPPORTED" } },
+      message: "Request failed with status code 400",
+    });
+    __plaidMock.transactionsSync.mockResolvedValue(emptySync());
+
+    const res = await syncPlaidTransactions(user.id);
+
+    expect(res.itemErrors).toEqual([]);
+    expect(rawItem(item.id).lastErrorCode).toBeNull();
+    expect(rawItem(item.id).lastSyncedAt).toEqual(expect.any(Number));
+  });
+
+  it("two items, one broken: the other still syncs and stays healthy", async () => {
+    const user = await makeUser();
+    const good = await seedBank(user.id, { name: "Alliant", token: "token-good", accountId: "acct_good" });
+    const bad = await seedBank(user.id, { name: "Chase", token: "token-bad", accountId: "acct_bad" });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+    __plaidMock.transactionsSync.mockImplementation(async (req: { access_token: string }) => {
+      if (req.access_token === "token-bad") throw loginRequired();
+      return emptySync("good-cursor");
+    });
+
+    const res = await syncPlaidTransactions(user.id);
+
+    expect(res.itemErrors).toEqual([
+      { itemId: bad.id, institutionName: "Chase", code: "ITEM_LOGIN_REQUIRED" },
+    ]);
+    expect(rawItem(good.id)).toMatchObject({ lastErrorCode: null, cursor: "good-cursor" });
+    expect(rawItem(good.id).lastSyncedAt).toEqual(expect.any(Number));
+    expect(rawItem(bad.id)).toMatchObject({ lastErrorCode: "ITEM_LOGIN_REQUIRED", lastSyncedAt: null });
+  });
+
+  it("stores a stable code, never the message, for a non-Plaid error", async () => {
+    const user = await makeUser();
+    const item = await seedBank(user.id);
+    __plaidMock.transactionsSync.mockRejectedValue(
+      new Error("socket hang up access-production-secret-token"),
+    );
+
+    const res = await syncPlaidTransactions(user.id);
+
+    expect(res.itemErrors).toEqual([
+      { itemId: item.id, institutionName: "Chase", code: "UNKNOWN_ERROR" },
+    ]);
+    expect(rawItem(item.id).lastErrorCode).toBe("UNKNOWN_ERROR");
+  });
+
+  it("a successful sync keeps a webhook's pending-expiration warning", async () => {
+    const user = await makeUser();
+    const item = await seedBank(user.id);
+    await recordPlaidItemError(user.id, item.id, "PENDING_EXPIRATION", Date.now());
+    __plaidMock.transactionsSync.mockResolvedValue(emptySync());
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+
+    await syncPlaidTransactions(user.id);
+
+    // The bank still works today; the warning stays until the item is
+    // repaired (LOGIN_REPAIRED) or removed and re-added.
+    expect(rawItem(item.id).lastErrorCode).toBe("PENDING_EXPIRATION");
+  });
+
+  // Review of PR #172 S2: Plaid sends PENDING_EXPIRATION once. A transient
+  // failure must not overwrite it, or the next good sync erases it for good.
+  it("a transient failure keeps a pending-expiration warning; a login failure replaces it", async () => {
+    const user = await makeUser();
+    const item = await seedBank(user.id);
+    const warnedAt = Date.now() - 60_000;
+    await recordPlaidItemError(user.id, item.id, "PENDING_EXPIRATION", warnedAt);
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+    __plaidMock.transactionsSync.mockRejectedValueOnce({
+      response: { data: { error_type: "INSTITUTION_ERROR", error_code: "INSTITUTION_DOWN" } },
+      message: "Request failed with status code 400",
+    });
+
+    const failed = await syncPlaidTransactions(user.id);
+
+    // The result (and so the toast) still reports the transient failure.
+    expect(failed.itemErrors).toEqual([
+      { itemId: item.id, institutionName: "Chase", code: "INSTITUTION_DOWN" },
+    ]);
+    const kept = rawItem(item.id);
+    expect(kept.lastErrorCode).toBe("PENDING_EXPIRATION");
+    expect(kept.lastErrorAt).toBeGreaterThan(warnedAt);
+    expect(kept.firstErrorAt).toBe(warnedAt);
+
+    // The next good sync does not erase the warning either.
+    __plaidMock.transactionsSync.mockResolvedValue(emptySync());
+    await syncPlaidTransactions(user.id);
+    expect(rawItem(item.id).lastErrorCode).toBe("PENDING_EXPIRATION");
+
+    // A login-type failure is more urgent than the warning and replaces it.
+    __plaidMock.transactionsSync.mockRejectedValue(loginRequired());
+    await syncPlaidTransactions(user.id);
+    expect(rawItem(item.id).lastErrorCode).toBe("ITEM_LOGIN_REQUIRED");
+  });
+
+  // Review of PR #172 N2: the webhook write is not under the user sync lock.
+  // An ITEM ERROR recorded while an older sync is still running must survive
+  // that sync's success.
+  it("an error recorded during an in-flight sync survives that sync's success", async () => {
+    const user = await makeUser();
+    const item = await seedBank(user.id);
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    __plaidMock.transactionsSync.mockImplementation(async () => {
+      entered();
+      await gate;
+      return emptySync();
+    });
+
+    const sync = syncPlaidTransactions(user.id);
+    await inFlight;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // What handlePlaidWebhook does for ITEM/ERROR, while the sync runs.
+    await recordPlaidItemError(user.id, item.id, "ITEM_LOGIN_REQUIRED", Date.now());
+    release();
+    const res = await sync;
+
+    expect(res.itemErrors).toEqual([]);
+    expect(rawItem(item.id).lastErrorCode).toBe("ITEM_LOGIN_REQUIRED");
+  });
+
+  it("the health write is user-scoped: another user's id touches nothing", async () => {
+    const user = await makeUser();
+    const item = await seedBank(user.id);
+    const otherId = newId();
+    getDb()
+      .insert(users)
+      .values({ id: otherId, email: "other@x.com", passwordHash: "x".repeat(64), displayName: "O", role: "member" })
+      .run();
+
+    await recordPlaidItemError(otherId, item.id, "ITEM_LOGIN_REQUIRED", Date.now());
+
+    expect(rawItem(item.id).lastErrorCode).toBeNull();
   });
 });
