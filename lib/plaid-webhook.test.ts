@@ -14,6 +14,8 @@ vi.mock("./repos", () => ({
   getPlaidItemByPlaidItemId: vi.fn(),
   listActivePlaidItemsMissingPlaidItemId: vi.fn(),
   setPlaidItemPlaidItemId: vi.fn(),
+  recordPlaidItemError: vi.fn(),
+  clearPlaidItemError: vi.fn(),
 }));
 vi.mock("./plaid-sync", () => ({ syncPlaidTransactions: vi.fn() }));
 vi.mock("./plaid-client", () => ({ getPlaidClient: vi.fn() }));
@@ -163,6 +165,8 @@ function makeDeps(overrides: Partial<WebhookDeps> = {}): WebhookDeps {
     listItemsMissingPlaidItemId: vi.fn().mockResolvedValue([]),
     setItemPlaidItemId: vi.fn().mockResolvedValue(undefined),
     resolvePlaidItemId: vi.fn().mockResolvedValue("plaid-item-1"),
+    recordItemError: vi.fn().mockResolvedValue(undefined),
+    clearItemError: vi.fn().mockResolvedValue(undefined),
     sync: vi.fn().mockResolvedValue({
       added: 1,
       modified: 0,
@@ -196,10 +200,10 @@ describe("handlePlaidWebhook", () => {
   it("ignores non-TRANSACTIONS webhook types without syncing", async () => {
     const deps = makeDeps();
     const outcome = await handlePlaidWebhook(
-      { webhook_type: "ITEM", webhook_code: "ERROR", item_id: "plaid-item-1" },
+      { webhook_type: "HOLDINGS", webhook_code: "DEFAULT_UPDATE", item_id: "plaid-item-1" },
       deps,
     );
-    expect(outcome).toEqual({ action: "ignored", reason: "unhandled type ITEM" });
+    expect(outcome).toEqual({ action: "ignored", reason: "unhandled type HOLDINGS" });
     expect(deps.sync).not.toHaveBeenCalled();
   });
 
@@ -492,6 +496,149 @@ describe("handlePlaidWebhook: webhooks during an in-flight sync", () => {
 });
 
 // Review 2026-09-24 C12.
+// Review 2026-11-10 PLAID-2: every ITEM webhook used to be ignored, so Plaid
+// telling us a login broke (or would soon expire) changed nothing anywhere.
+describe("handlePlaidWebhook: ITEM health webhooks", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("ERROR stores the code from the payload for that item only, and does not sync", async () => {
+    const deps = makeDeps();
+    const outcome = await handlePlaidWebhook(
+      {
+        webhook_type: "ITEM",
+        webhook_code: "ERROR",
+        item_id: "plaid-item-1",
+        error: { error_type: "ITEM_ERROR", error_code: "ITEM_LOGIN_REQUIRED", error_message: "x" },
+      },
+      deps,
+    );
+    expect(outcome).toEqual({
+      action: "health-updated",
+      itemId: "local-item-1",
+      code: "ITEM_LOGIN_REQUIRED",
+    });
+    expect(deps.recordItemError).toHaveBeenCalledTimes(1);
+    expect(deps.recordItemError).toHaveBeenCalledWith(
+      "user-1",
+      "local-item-1",
+      "ITEM_LOGIN_REQUIRED",
+      expect.any(Number),
+    );
+    expect(deps.clearItemError).not.toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps.sync).not.toHaveBeenCalled();
+  });
+
+  it("ERROR with no usable code stores UNKNOWN_ERROR, never free text", async () => {
+    const deps = makeDeps();
+    await handlePlaidWebhook(
+      {
+        webhook_type: "ITEM",
+        webhook_code: "ERROR",
+        item_id: "plaid-item-1",
+        error: { error_code: "access-production-abc token here" },
+      },
+      deps,
+    );
+    expect(deps.recordItemError).toHaveBeenCalledWith(
+      "user-1",
+      "local-item-1",
+      "UNKNOWN_ERROR",
+      expect.any(Number),
+    );
+  });
+
+  it.each(["PENDING_EXPIRATION", "PENDING_DISCONNECT", "USER_PERMISSION_REVOKED"])(
+    "%s stores its own code (needs re-authentication)",
+    async (code) => {
+      const deps = makeDeps();
+      const outcome = await handlePlaidWebhook(
+        { webhook_type: "ITEM", webhook_code: code, item_id: "plaid-item-1" },
+        deps,
+      );
+      expect(outcome).toEqual({ action: "health-updated", itemId: "local-item-1", code });
+      expect(deps.recordItemError).toHaveBeenCalledWith(
+        "user-1",
+        "local-item-1",
+        code,
+        expect.any(Number),
+      );
+      expect(deps.sync).not.toHaveBeenCalled();
+    },
+  );
+
+  it("LOGIN_REPAIRED clears the error, including a pending warning", async () => {
+    const deps = makeDeps();
+    const outcome = await handlePlaidWebhook(
+      { webhook_type: "ITEM", webhook_code: "LOGIN_REPAIRED", item_id: "plaid-item-1" },
+      deps,
+    );
+    expect(outcome).toEqual({ action: "health-updated", itemId: "local-item-1", code: null });
+    expect(deps.clearItemError).toHaveBeenCalledWith("user-1", "local-item-1", {
+      keepPending: false,
+    });
+    expect(deps.recordItemError).not.toHaveBeenCalled();
+  });
+
+  it("other ITEM codes stay ignored and write nothing", async () => {
+    const deps = makeDeps();
+    const outcome = await handlePlaidWebhook(
+      { webhook_type: "ITEM", webhook_code: "NEW_ACCOUNTS_AVAILABLE", item_id: "plaid-item-1" },
+      deps,
+    );
+    expect(outcome).toEqual({ action: "ignored", reason: "unhandled code NEW_ACCOUNTS_AVAILABLE" });
+    expect(deps.getItem).not.toHaveBeenCalled();
+    expect(deps.recordItemError).not.toHaveBeenCalled();
+    expect(deps.clearItemError).not.toHaveBeenCalled();
+  });
+
+  it("an ITEM webhook for an unknown item writes nothing", async () => {
+    const deps = makeDeps({ getItem: vi.fn().mockResolvedValue(undefined) });
+    const outcome = await handlePlaidWebhook(
+      {
+        webhook_type: "ITEM",
+        webhook_code: "ERROR",
+        item_id: "nope",
+        error: { error_code: "ITEM_LOGIN_REQUIRED" },
+      },
+      deps,
+    );
+    expect(outcome).toEqual({ action: "ignored", reason: "unknown item" });
+    expect(deps.recordItemError).not.toHaveBeenCalled();
+    expect(deps.clearItemError).not.toHaveBeenCalled();
+  });
+
+  it("only the item the payload names is touched: another user's item cannot be reached", async () => {
+    const otherUsersItem = { ...ITEM, id: "local-item-2", userId: "user-2", plaidItemId: "plaid-item-2" };
+    const getItem = vi.fn(async (plaidItemId: string) =>
+      plaidItemId === "plaid-item-2" ? otherUsersItem : plaidItemId === "plaid-item-1" ? ITEM : undefined,
+    );
+    const deps = makeDeps({ getItem: getItem as never });
+    await handlePlaidWebhook(
+      {
+        webhook_type: "ITEM",
+        webhook_code: "ERROR",
+        item_id: "plaid-item-1",
+        // Extra fields in the body cannot redirect the write.
+        user_id: "user-2",
+        local_item_id: "local-item-2",
+        error: { error_code: "ITEM_LOGIN_REQUIRED" },
+      },
+      deps,
+    );
+    expect(getItem).toHaveBeenCalledWith("plaid-item-1");
+    expect(deps.recordItemError).toHaveBeenCalledTimes(1);
+    expect(deps.recordItemError).toHaveBeenCalledWith(
+      "user-1",
+      "local-item-1",
+      "ITEM_LOGIN_REQUIRED",
+      expect.any(Number),
+    );
+  });
+});
+
 describe("webhook key hygiene", () => {
   it("rejects a token signed with a key Plaid has expired", async () => {
     const now = Date.now();

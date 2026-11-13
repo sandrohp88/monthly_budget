@@ -36,6 +36,8 @@ import {
   listStartingBalanceDraftsInRange,
   listPaychecksInRange,
   listUnreconciledPaychecksInRange,
+  recordPlaidItemError,
+  clearPlaidItemError,
 } from "./repos";
 import type { PlaidTransactionDraftRow } from "./db/schema";
 import { addDaysIso, DEFAULT_TIMEZONE, todayIso } from "./dates";
@@ -58,6 +60,7 @@ import {
 } from "./paypal-special-financing";
 import { log } from "./log";
 import { inferLinkedCardCycle } from "./linked-card-cycle";
+import { normalizeItemErrorCode } from "./plaid-item-health";
 
 // Pure helpers live in plaid-helpers.ts so they don't drag in "server-only"
 // when imported from tests. Re-exported here for callers that already import
@@ -123,7 +126,20 @@ export interface SyncResult {
    * for items anchoring a projection.
    */
   transactionsRefreshed: number;
+  /**
+   * Items whose sync failed in this run (the per-item catch). Empty when all
+   * items synced. The route still answers 200 for a partial failure; the
+   * Sync buttons name these banks instead of saying "Sync complete".
+   */
+  itemErrors: SyncItemError[];
 }
+
+export type SyncItemError = {
+  itemId: string;
+  institutionName: string;
+  /** Short stable code (Plaid `error_code` or UNKNOWN_ERROR), never a message. */
+  code: string;
+};
 
 type PlaidTransactionWithOriginalDescription = {
   original_description?: string | null;
@@ -536,8 +552,8 @@ async function reconcilePaycheckDeposits(userId: string, today: string): Promise
 
 /**
  * Pulls new/modified transactions from Plaid for the user's active items.
- * Upserts drafts and advances each item's cursor.
- * This is polling-only — no webhook required.
+ * Upserts drafts and advances each item's cursor, and records each item's
+ * health (a failure stores its code; a full success clears it).
  */
 /**
  * Retire the pending draft that a now-posted transaction replaces.
@@ -609,10 +625,14 @@ async function syncPlaidTransactionsUnlocked(
   let totalStatementsReconciled = 0;
   let totalLiveBalances = 0;
   let totalTransactionRefreshes = 0;
+  const itemErrors: SyncItemError[] = [];
 
   const plaid = getPlaidClient();
 
   for (const item of targets) {
+    // Health bookkeeping (see clearPlaidItemError / recordPlaidItemError).
+    const itemStartedAt = Date.now();
+    let cursorSavedAt: number | null = null;
     try {
       const accessToken = decryptToken(
         item.accessTokenEnc,
@@ -915,7 +935,9 @@ async function syncPlaidTransactionsUnlocked(
       }
 
       // Persist the advanced cursor.
-      await updatePlaidItemCursor(item.id, cursor ?? "", Date.now());
+      const syncedAt = Date.now();
+      await updatePlaidItemCursor(item.id, cursor ?? "", syncedAt);
+      cursorSavedAt = syncedAt;
       // Fetched once and shared by the two promo passes below.
       const approvedDrafts = await listPlaidDrafts(userId, "approved");
       await autoCreatePromosFromExistingDrafts(userId, item.id, approvedDrafts);
@@ -964,8 +986,32 @@ async function syncPlaidTransactionsUnlocked(
       const liab = await syncCreditCardLiabilitiesForItem(userId, item.id, accessToken);
       totalCardsUpdated += liab.cardsUpdated;
       totalStatementsCreated += liab.statementsCreated;
+
+      // The whole item synced: a failure recorded BEFORE this sync started is
+      // over. One recorded during it (an ITEM webhook) stays, and so does a
+      // PENDING_EXPIRATION warning — the bank still works today.
+      await clearPlaidItemError(userId, item.id, {
+        keepPending: true,
+        recordedBefore: itemStartedAt,
+      });
     } catch (err) {
-      log.error(`plaid-sync: failed for item ${item.id}: ${(err as Error).message}`);
+      // Only failures that reach here mark the item broken. The optional
+      // calls above (transactions refresh, accounts/get, the live balance
+      // pull, liabilities) catch their own errors and stay non-fatal.
+      const code = normalizeItemErrorCode(plaidErrorCode(err));
+      log.error(`plaid-sync: failed for item ${item.id} (${code}): ${(err as Error).message}`);
+      itemErrors.push({ itemId: item.id, institutionName: item.institutionName, code });
+      try {
+        // A failure AFTER the cursor save (new transactions are stored) is
+        // stamped with that save's time, so `last_error_at ==
+        // last_synced_at` tells the UI "finished with an error", not "not
+        // syncing since" (see BankItemHealth.finishedWithError).
+        await recordPlaidItemError(userId, item.id, code, cursorSavedAt ?? Date.now());
+      } catch (recordErr) {
+        log.error(
+          `plaid-sync: could not record the failure for item ${item.id}: ${(recordErr as Error).message}`,
+        );
+      }
     }
   }
 
@@ -988,6 +1034,7 @@ async function syncPlaidTransactionsUnlocked(
     paychecksReconciled,
     liveBalancesRefreshed: totalLiveBalances,
     transactionsRefreshed: totalTransactionRefreshes,
+    itemErrors,
   };
 }
 

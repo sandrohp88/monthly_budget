@@ -24,6 +24,17 @@ import { PlaidLinkButton } from "@/components/plaid-link-button";
 import { PlaidLinkCardDialog } from "@/components/plaid-link-card-dialog";
 import { cn } from "@/lib/cn";
 import { interestSavingCashDueCents } from "@/lib/credit-cards";
+import { isoDateInTimeZone } from "@/lib/dates";
+import {
+  assessBankHealth,
+  bankHealthAction,
+  bankHealthLastSyncLabel,
+  bankHealthReason,
+  bankHealthShortLabel,
+  syncFailureMessage,
+  type BankItemHealth,
+} from "@/lib/plaid-item-health";
+import type { SyncItemError } from "@/lib/plaid-sync";
 import type {
   PlaidItemRow,
   PlaidAccountRow,
@@ -42,9 +53,15 @@ type CardWithStatements = {
 export function AccountsClient({
   initialItems,
   initialCards,
+  nowMs,
+  timeZone,
 }: {
   initialItems: ItemWithAccounts[];
   initialCards: CardWithStatements[];
+  /** Server render time — the clock item health is judged against. */
+  nowMs: number;
+  /** settings.timezone: sync dates are shown as the user's calendar date. */
+  timeZone: string;
 }) {
   const router = useRouter();
   const [items, setItems] = React.useState<ItemWithAccounts[]>(initialItems);
@@ -66,9 +83,24 @@ export function AccountsClient({
   const totalAccounts = items.reduce((n, i) => n + i.accounts.length, 0);
   const lastSynced = items
     .map((i) => i.lastSyncedAt)
-    .filter(Boolean)
-    .sort()
+    .filter((t): t is number => t != null)
+    .sort((a, b) => a - b)
     .at(-1);
+  const health = assessBankHealth({
+    items,
+    accounts: items.flatMap((i) =>
+      i.accounts.map((a) => ({ itemId: i.id, useAsStartingBalance: a.useAsStartingBalance })),
+    ),
+    now: nowMs,
+  });
+  const healthById = new Map(health.items.map((h) => [h.itemId, h] as const));
+  // One healthy item must not hide a broken one: while any item is unhealthy
+  // the tile shows the oldest last success among unhealthy items and names
+  // that bank.
+  const oldest = health.oldestUnhealthy;
+  const othersNeedingAttention = oldest
+    ? health.unhealthy.filter((h) => h.itemId !== oldest.itemId).length
+    : 0;
 
   // ── data fetches ─────────────────────────────────────────────────────────
   const refreshItems = async () => {
@@ -100,9 +132,12 @@ export function AccountsClient({
         statementsCreated?: number;
         statementsReconciled?: number;
         paychecksReconciled?: number;
+        itemErrors?: SyncItemError[];
         error?: string;
       };
       if (!res.ok) throw new Error(json.error ?? "Sync failed");
+      const failedPart =
+        (json.itemErrors?.length ?? 0) > 0 ? syncFailureMessage(json.itemErrors!) : null;
       const txnPart = `${json.added ?? 0} new, ${json.modified ?? 0} updated`;
       const cardPart =
         (json.cardsUpdated ?? 0) > 0 || (json.statementsCreated ?? 0) > 0
@@ -116,7 +151,8 @@ export function AccountsClient({
         (json.paychecksReconciled ?? 0) > 0
           ? ` · ${json.paychecksReconciled} paycheck${json.paychecksReconciled === 1 ? "" : "s"} received`
           : "";
-      toast.success(`Sync complete — ${txnPart}${cardPart}${reconciledPart}${paycheckPart}`);
+      if (failedPart) toast.error(failedPart);
+      else toast.success(`Sync complete — ${txnPart}${cardPart}${reconciledPart}${paycheckPart}`);
       await Promise.all([refreshItems(), refreshCards()]);
       // Plaid changes data consumed throughout the app. Clear Next's client
       // route cache so pages visited before this sync render fresh server data
@@ -208,11 +244,33 @@ export function AccountsClient({
           delta="approved on sync"
           badge={<Badge variant="success">ON</Badge>}
         />
-        <Tile
-          label="Last sync"
-          value={lastSynced ? <DateLabel iso={new Date(lastSynced).toISOString().slice(0, 10)} format="short" /> : "—"}
-          delta={lastSynced ? `${new Date().toLocaleTimeString()}` : "never synced"}
-        />
+        {oldest ? (
+          <Tile
+            label="Last sync"
+            variant={health.unhealthy.some((h) => h.status === "failing") ? "red" : "amber"}
+            value={
+              oldest.lastSuccessAt != null ? (
+                <DateLabel iso={isoDateInTimeZone(oldest.lastSuccessAt, timeZone)} format="short" />
+              ) : (
+                "Never"
+              )
+            }
+            delta={
+              <>
+                {oldest.institutionName} {bankHealthShortLabel(oldest)}
+                {othersNeedingAttention > 0
+                  ? ` · ${othersNeedingAttention} more need${othersNeedingAttention === 1 ? "s" : ""} attention`
+                  : ""}
+              </>
+            }
+          />
+        ) : (
+          <Tile
+            label="Last sync"
+            value={lastSynced ? <DateLabel iso={isoDateInTimeZone(lastSynced, timeZone)} format="short" /> : "—"}
+            delta={lastSynced ? "all banks syncing" : "never synced"}
+          />
+        )}
       </TileGrid>
 
       <div className="space-y-4">
@@ -231,6 +289,8 @@ export function AccountsClient({
             <InstitutionCard
               key={item.id}
               item={item}
+              health={healthById.get(item.id)!}
+              timeZone={timeZone}
               linkByPlaidAccount={linkByPlaidAccount}
               onUnlink={() => unlinkItem(item.id, item.institutionName)}
               onToggle={toggleAccountPref}
@@ -264,6 +324,8 @@ export function AccountsClient({
 
 function InstitutionCard({
   item,
+  health,
+  timeZone,
   linkByPlaidAccount,
   onUnlink,
   onToggle,
@@ -272,6 +334,8 @@ function InstitutionCard({
   unlinkingId,
 }: {
   item: ItemWithAccounts;
+  health: BankItemHealth;
+  timeZone: string;
   linkByPlaidAccount: Map<string, CardWithStatements>;
   onUnlink: () => void;
   onToggle: (id: string, field: "useAsStartingBalance" | "syncEnabled", value: boolean) => void;
@@ -279,8 +343,17 @@ function InstitutionCard({
   onUnlinkCard: (plaidAccountId: string) => void;
   unlinkingId: string | null;
 }) {
+  const unhealthy = health.status !== "ok";
+  const severe = health.status === "failing";
   return (
-    <div className="relative overflow-hidden rounded-sm border border-[var(--border-2)] bg-[var(--bg-card)] p-4">
+    <div
+      className={cn(
+        "relative overflow-hidden rounded-sm border bg-[var(--bg-card)] p-4",
+        !unhealthy && "border-[var(--border-2)]",
+        unhealthy && !severe && "border-[color-mix(in_oklch,var(--amber)_45%,transparent)]",
+        severe && "border-[color-mix(in_oklch,var(--red)_45%,transparent)]",
+      )}
+    >
       <span className="absolute right-2 top-2 h-2 w-2 border-r border-t border-[var(--mint-dim)]" />
       <span className="absolute bottom-2 left-2 h-2 w-2 border-b border-l border-[var(--mint-dim)]" />
 
@@ -296,7 +369,7 @@ function InstitutionCard({
             <div className="text-2xs text-[var(--text-3)]">
               {item.accounts.length} account{item.accounts.length !== 1 ? "s" : ""}
               {item.lastSyncedAt ? (
-                <> · Last sync <DateLabel iso={new Date(item.lastSyncedAt).toISOString().slice(0, 10)} format="short" /></>
+                <> · {bankHealthLastSyncLabel(health)} <DateLabel iso={isoDateInTimeZone(item.lastSyncedAt, timeZone)} format="short" /></>
               ) : (
                 " · Never synced"
               )}
@@ -307,6 +380,37 @@ function InstitutionCard({
           <Trash2 className="h-3 w-3" />
         </Button>
       </div>
+
+      {unhealthy ? (
+        <div
+          role="group"
+          aria-label={`${item.institutionName} connection problem`}
+          className={cn(
+            "mb-4 rounded-sm border px-3 py-2.5 text-2xs text-[var(--text-1)]",
+            severe
+              ? "border-[color-mix(in_oklch,var(--red)_30%,transparent)] bg-[var(--red-glow)]"
+              : "border-[color-mix(in_oklch,var(--amber)_25%,transparent)] bg-[color-mix(in_oklch,var(--amber)_8%,transparent)]",
+          )}
+        >
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <StatusPill variant={severe ? "danger" : "warn"}>
+              {bankHealthShortLabel(health)}
+            </StatusPill>
+            <span className="font-semibold text-[var(--text-0)]">{bankHealthReason(health)}</span>
+          </div>
+          <p className="leading-snug">
+            {health.lastSuccessAt != null ? (
+              <>
+                {bankHealthLastSyncLabel(health)}{" "}
+                <DateLabel iso={isoDateInTimeZone(health.lastSuccessAt, timeZone)} format="long" />.{" "}
+              </>
+            ) : (
+              "This bank has never synced. "
+            )}
+            {bankHealthAction(health)}
+          </p>
+        </div>
+      ) : null}
 
       <div className="space-y-2">
         {item.accounts.map((acct) => (

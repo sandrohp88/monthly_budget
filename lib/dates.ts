@@ -24,6 +24,16 @@ export function todayIso(timeZone: string): string {
   return formatter.format(now);
 }
 
+/** Calendar date of an epoch-ms instant in the given timezone, as ISO YYYY-MM-DD. */
+export function isoDateInTimeZone(epochMs: number, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(epochMs));
+}
+
 /** First day of the month containing `iso`, as ISO YYYY-MM-DD. */
 export function startOfMonthIso(iso: string): string {
   return `${iso.slice(0, 7)}-01`;
