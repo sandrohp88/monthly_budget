@@ -4,7 +4,7 @@ import {
   applyCardPaymentOps,
   CardPaymentConflictError,
   getCreditCard,
-  upsertCreditCardPaymentOverride,
+  putCreditCardPaymentOverride,
 } from "@/lib/repos";
 import { creditCardPaymentOverrideSchema } from "@/lib/validation";
 
@@ -21,12 +21,21 @@ export async function PUT(req: Request, ctx: Ctx) {
   const data = await readJson(req, creditCardPaymentOverrideSchema);
   if (data instanceof NextResponse) return data;
 
-  const override = await upsertCreditCardPaymentOverride(auth.userId, id, {
-    dueDate: data.dueDate,
-    amountCents: data.amountCents,
-    notes: data.notes ?? null,
-  });
-  return NextResponse.json({ override });
+  // Same rules as the calendar's batch endpoint: a plan with a bank
+  // transaction linked to it can't be zeroed without confirmation (409).
+  try {
+    const override = await putCreditCardPaymentOverride(auth.userId, id, {
+      dueDate: data.dueDate,
+      amountCents: data.amountCents,
+      notes: data.notes ?? null,
+    });
+    return NextResponse.json({ override });
+  } catch (e) {
+    if (e instanceof CardPaymentConflictError && e.code) {
+      return NextResponse.json({ error: e.message, code: e.code }, { status: 409 });
+    }
+    throw e;
+  }
 }
 
 export async function DELETE(req: Request, ctx: Ctx) {

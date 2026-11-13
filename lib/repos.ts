@@ -812,6 +812,37 @@ export async function upsertCreditCardPaymentOverride(
     .get();
 }
 
+/**
+ * Upsert ONE planned card payment through applyCardPaymentOps, so it gets the
+ * same ownership check and bank-transaction link rule as the calendar's batch
+ * (a plan with a linked bank transaction can't be set to 0 without
+ * confirmation). Overwrites the row at (card, date), as the single-row PUT
+ * route always has.
+ */
+export async function putCreditCardPaymentOverride(
+  userId: string,
+  cardId: string,
+  data: { dueDate: string; amountCents: number; notes?: string | null },
+  opts: { unlinkAllocations?: boolean } = {},
+): Promise<CreditCardPaymentOverrideRow | undefined> {
+  applyCardPaymentOps(
+    userId,
+    [{ op: "put", cardId, dueDate: data.dueDate, amountCents: data.amountCents, notes: data.notes ?? null, replace: true }],
+    opts,
+  );
+  return getDb()
+    .select()
+    .from(creditCardPaymentOverrides)
+    .where(
+      and(
+        eq(creditCardPaymentOverrides.userId, userId),
+        eq(creditCardPaymentOverrides.cardId, cardId),
+        eq(creditCardPaymentOverrides.dueDate, data.dueDate),
+      ),
+    )
+    .get();
+}
+
 export async function deleteCreditCardPaymentOverride(
   userId: string,
   cardId: string,
