@@ -17,6 +17,7 @@ import {
   findOrphanedAllocationDraftIds,
   listCreditCardPaymentOverridesForUser,
   listDraftAllocations,
+  putCreditCardPaymentOverride,
   replaceDraftAllocations,
   updateBill,
   upsertCreditCardPaymentOverride,
@@ -210,6 +211,50 @@ describe("applyCardPaymentOps / bank-transaction links", () => {
       { op: "put", cardId, dueDate: "2026-10-25", amountCents: 49_500, notes: null, replace: true },
     ]);
     expect(await linkDates("txn_pay")).toEqual([["2026-10-25", 50_000]]);
+  });
+
+  // Review PAY-6: the single-row PUT route used to skip the link rule above.
+  it("a single-row put refuses to zero a linked plan and changes nothing", async () => {
+    await linkDebit("txn_pay", 50_000, [{ date: "2026-10-25", cents: 50_000 }]);
+    const before = await rows();
+    let error: unknown;
+    try {
+      await putCreditCardPaymentOverride("u", cardId, { dueDate: "2026-10-25", amountCents: 0 });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(CardPaymentConflictError);
+    expect((error as CardPaymentConflictError).code).toBe("linked_payment");
+    expect(await rows()).toEqual(before);
+    expect(await linkDates("txn_pay")).toEqual([["2026-10-25", 50_000]]);
+    expect(await findOrphanedAllocationDraftIds("u")).toEqual(new Set());
+  });
+
+  it("a single-row put that edits a linked plan's amount leaves the link alone", async () => {
+    await linkDebit("txn_pay", 50_000, [{ date: "2026-10-25", cents: 50_000 }]);
+    const row = await putCreditCardPaymentOverride("u", cardId, { dueDate: "2026-10-25", amountCents: 49_500, notes: "edited" });
+    expect(row).toMatchObject({ cardId, dueDate: "2026-10-25", amountCents: 49_500, notes: "edited" });
+    expect(await linkDates("txn_pay")).toEqual([["2026-10-25", 50_000]]);
+  });
+
+  it("a single-row put on an unlinked plan overwrites it, and can create a new plan", async () => {
+    const edited = await putCreditCardPaymentOverride("u", cardId, { dueDate: "2026-10-10", amountCents: 0, notes: null });
+    expect(edited).toMatchObject({ dueDate: "2026-10-10", amountCents: 0, notes: null });
+    const created = await putCreditCardPaymentOverride("u", cardId, { dueDate: "2026-11-25", amountCents: 12_300 });
+    expect(created).toMatchObject({ cardId, dueDate: "2026-11-25", amountCents: 12_300, notes: null, trackPosting: true });
+    expect(await rows()).toEqual([
+      ["2026-10-10", 0, null],
+      ["2026-10-25", 50_000, null],
+      ["2026-11-25", 12_300, null],
+    ]);
+  });
+
+  it("a single-row put for another user's card is 'card not found' and writes nothing", async () => {
+    const before = await rows();
+    await expect(
+      putCreditCardPaymentOverride("other", cardId, { dueDate: "2026-12-25", amountCents: 100 }),
+    ).rejects.toThrow("card not found");
+    expect(await rows()).toEqual(before);
   });
 
   it("flags links left pointing at a removed plan or a bill date that moved", async () => {
