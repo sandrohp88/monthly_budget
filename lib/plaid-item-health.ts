@@ -240,10 +240,11 @@ export function bankHealthLastSyncLabel(h: BankItemHealth): string {
  *
  * Only a LOGIN-type failure suggests unlinking. Plaid Link update mode is not
  * built, so unlink + link again is the one recovery for those — say so, with
- * its cost, instead of offering a Reconnect button that does nothing. Until
- * review finding PLAID-3 is fixed, `deactivatePlaidItem` dismisses the bank's
- * pending transactions and unlinks its cards, and linking again can create a
- * duplicate card.
+ * its cost, instead of offering a Reconnect button that does nothing.
+ * `deactivatePlaidItem` dismisses the bank's pending transactions and unlinks
+ * its cards. Linking again re-links a card only when it can prove the card is
+ * the same account (`matchRelinkCards`, PLAID-3); any other card comes back as
+ * a duplicate.
  *
  * Every other failure (UNKNOWN_ERROR, INSTITUTION_DOWN, our own bugs and
  * config errors, which the per-item catch also catches) gets only "try again;
@@ -262,7 +263,8 @@ export function bankHealthAction(h: BankItemHealth): string {
         return (
           "To fix this, unlink this bank with the trash button and link it again. " +
           "Reconnecting in place is not available yet. " +
-          "Unlinking removes this bank's pending transactions and its card links, and linking again can create a duplicate card: check the Credit cards page afterwards."
+          "Unlinking removes this bank's pending transactions and its card links. " +
+          "Linking again reconnects each card it can match to its account; a card it cannot match comes back as a duplicate card: check the Credit cards page afterwards."
         );
       }
       return "Tap Sync now to try again. If it keeps failing, the problem may be in the app: check the server log.";

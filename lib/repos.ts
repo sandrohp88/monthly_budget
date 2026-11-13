@@ -79,6 +79,7 @@ import { hashPassword } from "./auth";
 import { calculateMonthlyHistoryAverage } from "./variable-bills";
 import { log } from "./log";
 import { DEFAULT_TIMEZONE } from "./dates";
+import type { FormerCreditAccount } from "./plaid-relink";
 
 const DEFAULT_CATEGORIES: ReadonlyArray<{ name: string; color: string; kind: "expense" | "income" }> = [
   { name: "Housing", color: "#2563eb", kind: "expense" },
@@ -183,6 +184,24 @@ export async function createMember(
   return (await listUsers()).find((u) => u.id === userId)!;
 }
 
+/** Thrown when a change would leave the household with no admin. */
+export class LastAdminError extends Error {
+  constructor() {
+    super("cannot remove the last admin");
+    this.name = "LastAdminError";
+  }
+}
+
+type UserTx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+function countOtherAdmins(tx: UserTx, id: string): number {
+  return tx
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.role, "admin"), ne(users.id, id)))
+    .all().length;
+}
+
 export async function updateUserProfile(
   id: string,
   patch: { displayName?: string; role?: "admin" | "member" },
@@ -197,9 +216,20 @@ export async function updateUserProfile(
   // Revoking also drops the user's push subscriptions, in the same
   // transaction: those devices are signed out and must not keep receiving
   // this user's card alerts (review 2026-11-10 AUTH-5).
-  const current = patch.role !== undefined ? await getUserById(id) : undefined;
-  const bump = current !== undefined && current.role !== patch.role;
+  // The last-admin rule is enforced INSIDE this transaction. better-sqlite3 is
+  // synchronous, so two requests cannot interleave inside one db.transaction:
+  // the role read, the admin count and the write are one atomic step, which a
+  // route-level pre-check cannot guarantee (two admins demoting each other at
+  // the same time would both pass it). A throw rolls the whole write back.
   db.transaction((tx) => {
+    const current =
+      patch.role !== undefined
+        ? tx.select({ role: users.role }).from(users).where(eq(users.id, id)).get()
+        : undefined;
+    const bump = current !== undefined && current.role !== patch.role;
+    if (bump && current.role === "admin" && countOtherAdmins(tx, id) === 0) {
+      throw new LastAdminError();
+    }
     tx.update(users)
       .set(bump ? { ...update, sessionVersion: sql`${users.sessionVersion} + 1` } : update)
       .where(eq(users.id, id))
@@ -224,10 +254,29 @@ export async function updateUserPassword(id: string, newPassword: string): Promi
   });
 }
 
-export async function deleteUser(id: string): Promise<void> {
+/**
+ * Delete a user and return their ACTIVE Plaid item rows (token columns
+ * included) so the caller can revoke them at Plaid AFTER the commit. Last-admin
+ * check, item read and delete are one synchronous transaction: a refusal or DB
+ * error happens before any irreversible Plaid call, and an item created
+ * concurrently cannot slip between the read and the delete. Never log or
+ * return the rows to an HTTP client.
+ */
+export async function deleteUser(id: string): Promise<PlaidItemRow[]> {
   const db = getDb();
-  // Cascade deletes all related rows via FK constraints
-  await db.delete(users).where(eq(users.id, id)).run();
+  // Same atomic last-admin rule as updateUserProfile. Cascade deletes all
+  // related rows via FK constraints.
+  return db.transaction((tx) => {
+    const target = tx.select({ role: users.role }).from(users).where(eq(users.id, id)).get();
+    if (target?.role === "admin" && countOtherAdmins(tx, id) === 0) throw new LastAdminError();
+    const items = tx
+      .select()
+      .from(plaidItems)
+      .where(and(eq(plaidItems.userId, id), eq(plaidItems.isActive, true)))
+      .all();
+    tx.delete(users).where(eq(users.id, id)).run();
+    return items;
+  });
 }
 
 // ── setup ─────────────────────────────────────────────────────────────────────
@@ -2569,6 +2618,65 @@ export async function getCreditCardByPlaidAccountId(
       ),
     )
     .get();
+}
+
+/**
+ * Credit accounts on this user's DEACTIVATED Plaid items, each with the cards
+ * provably tied to it: a statement of the card was settled by a draft of that
+ * account (`settled_by_draft_id` → draft `account_id`). Deactivation nulls
+ * `credit_cards.plaid_account_id`, but these rows survive (gotcha 29). The
+ * exchange uses them to re-link a card instead of creating a duplicate
+ * (`matchRelinkCards`, PLAID-3).
+ */
+export async function listFormerPlaidCreditAccounts(
+  userId: string,
+): Promise<FormerCreditAccount[]> {
+  const db = getDb();
+  const accounts = db
+    .select({
+      id: plaidAccounts.id,
+      name: plaidAccounts.name,
+      mask: plaidAccounts.mask,
+      institutionId: plaidItems.institutionId,
+    })
+    .from(plaidAccounts)
+    .innerJoin(plaidItems, eq(plaidAccounts.itemId, plaidItems.id))
+    .where(
+      and(
+        eq(plaidAccounts.userId, userId),
+        eq(plaidItems.userId, userId),
+        eq(plaidItems.isActive, false),
+        eq(plaidAccounts.type, "credit"),
+      ),
+    )
+    .all();
+  if (accounts.length === 0) return [];
+  const ties = db
+    .selectDistinct({
+      cardId: creditCardStatements.cardId,
+      accountId: plaidTransactionDrafts.accountId,
+    })
+    .from(creditCardStatements)
+    .innerJoin(creditCards, eq(creditCardStatements.cardId, creditCards.id))
+    .innerJoin(
+      plaidTransactionDrafts,
+      eq(creditCardStatements.settledByDraftId, plaidTransactionDrafts.id),
+    )
+    .where(
+      and(
+        eq(creditCards.userId, userId),
+        eq(plaidTransactionDrafts.userId, userId),
+        inArray(
+          plaidTransactionDrafts.accountId,
+          accounts.map((a) => a.id),
+        ),
+      ),
+    )
+    .all();
+  return accounts.map((a) => ({
+    ...a,
+    settledCardIds: ties.filter((t) => t.accountId === a.id).map((t) => t.cardId),
+  }));
 }
 
 /**

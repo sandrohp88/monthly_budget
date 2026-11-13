@@ -212,7 +212,8 @@ describe("error codes and wording", () => {
 // Review of PR #172 (B1, S1): the per-item catch catches EVERY exception —
 // our own bugs and config errors too. Unlinking cannot fix those and loses
 // state (pending drafts dismissed, cards unlinked, a duplicate card on
-// re-link until PLAID-3 is fixed), so only login-type codes may suggest it.
+// re-link when the card cannot be matched, PLAID-3), so only login-type codes
+// may suggest it.
 describe("bankHealthAction per code class", () => {
   const failing = (code: string) => assessItemHealth(item({ lastErrorCode: code }), NOW);
 
@@ -223,7 +224,9 @@ describe("bankHealthAction per code class", () => {
       expect(action).toMatch(/unlink this bank/i);
       expect(action).toMatch(/link it again/i);
       expect(action).toMatch(/removes this bank's pending transactions and its card links/i);
-      expect(action).toMatch(/duplicate card/i);
+      expect(action).toMatch(/reconnects each card it can match to its account/i);
+      expect(action).toMatch(/a card it cannot match comes back as a duplicate card/i);
+      expect(action).toMatch(/check the Credit cards page afterwards/i);
     },
   );
 

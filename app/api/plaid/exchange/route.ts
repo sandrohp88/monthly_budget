@@ -10,7 +10,12 @@ import {
   getCreditCardByPlaidAccountId,
   createCreditCard,
   deactivatePlaidItem,
+  listCreditCards,
+  listFormerPlaidCreditAccounts,
+  seedCreditLimitFromPlaid,
+  setCreditCardPlaidLink,
 } from "@/lib/repos";
+import { matchRelinkCards } from "@/lib/plaid-relink";
 import {
   cachedBalancePair,
   syncCreditCardLiabilitiesForItem,
@@ -78,15 +83,48 @@ export async function POST(req: Request) {
       });
     }
 
-    // Auto-create a credit_cards row for each credit-type account that isn't
-    // already linked to one. Idempotent on re-link (the unique index on
-    // plaid_account_id + the existence check both protect against dupes).
-    // Cycle days here are placeholders — overwritten by the liabilities sync
-    // call below (or the next /api/plaid/sync run if Plaid hiccups).
-    for (const acct of accountsRes.data.accounts) {
-      if (acct.type !== "credit") continue;
+    // Linking a bank AGAIN (the only recovery from a broken login) gives the
+    // same real accounts NEW account_ids. Re-link the user's existing,
+    // now-unlinked card for the same account instead of creating a second one
+    // that would owe the same open statement (PLAID-3). Conservative: any
+    // ambiguity → no match, and a card is created as below.
+    const creditAccounts = accountsRes.data.accounts.filter((a) => a.type === "credit");
+    const relinks =
+      creditAccounts.length === 0
+        ? new Map<string, string>()
+        : matchRelinkCards({
+            institutionId: body.institutionId,
+            newAccounts: creditAccounts.map((a) => ({ id: a.account_id, mask: a.mask ?? null })),
+            unlinkedCards: (await listCreditCards(auth.userId, false)).filter(
+              (c) => c.plaidAccountId == null,
+            ),
+            formerAccounts: await listFormerPlaidCreditAccounts(auth.userId),
+          });
+
+    // Otherwise auto-create a credit_cards row for each credit-type account
+    // that isn't already linked to one. Idempotent on re-link (the unique
+    // index on plaid_account_id + the existence check both protect against
+    // dupes). Cycle days here are placeholders — overwritten by the
+    // liabilities sync call below (or the next /api/plaid/sync run if Plaid
+    // hiccups).
+    for (const acct of creditAccounts) {
       const existing = await getCreditCardByPlaidAccountId(auth.userId, acct.account_id);
       if (existing) continue;
+      const relinkCardId = relinks.get(acct.account_id);
+      if (relinkCardId) {
+        // Same steps as "link to existing" on /accounts (link-card route):
+        // the link (balance init, updatedAt), then the credit line only
+        // while the card has none. The liabilities pull below follows.
+        const linked = await setCreditCardPlaidLink(auth.userId, relinkCardId, acct.account_id);
+        if (linked.ok) {
+          if (acct.balances.limit != null) {
+            await seedCreditLimitFromPlaid(relinkCardId, toCents(acct.balances.limit));
+          }
+          log.info(`exchange: re-linked existing card ${relinkCardId} to a new Plaid account`);
+          continue;
+        }
+        log.warn(`exchange: re-link skipped, creating a card: ${linked.error}`);
+      }
       const displayName = acct.mask ? `${acct.name} ****${acct.mask}` : acct.name;
       await createCreditCard(auth.userId, {
         name: displayName,
