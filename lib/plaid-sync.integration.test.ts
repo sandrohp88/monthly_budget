@@ -1153,6 +1153,129 @@ describe("syncPlaidTransactions card-payment reconciliation", () => {
       (await listStatements(card.id)).find((s) => s.id === statementOpen.id)!.paidAmountCents,
     ).toBeNull();
   });
+
+  it("KNOWN LIMITATION (re-key loop order): a re-keyed payment of a draft-settled statement lands on the hand-paid older cycle", async () => {
+    // Documents CURRENT behavior, not the desired one. Plaid re-keys the
+    // payment that step 3 used to settle the current statement: one sync adds
+    // it under a new id and removes the old id. The cause is LOOP ORDER in
+    // syncPlaidTransactions (lib/plaid-sync.ts): the `added` loop runs before
+    // the `removed` loop, so the new id is matched while the current
+    // statement still carries the old id's stamp; it is therefore consumed on
+    // the hand-paid older cycle, and only then does the removal re-open the
+    // current statement. This is a separate issue from PLAID-6 (a removed
+    // stamped payment erases a MANUAL paid record): a provenance column for
+    // PLAID-6 alone will not flip this test; fixing it needs the removals to
+    // be applied before the additions are matched (or a re-match after them).
+    const user = await makeUser();
+    const token = encryptToken("access-token");
+    const item = await createPlaidItem(user.id, {
+      institutionId: "ins_chase",
+      institutionName: "Chase",
+      accessTokenEnc: token.enc,
+      accessTokenIv: token.iv,
+      accessTokenTag: token.tag,
+      cursor: null,
+      lastSyncedAt: null,
+      isActive: true,
+    });
+    await upsertPlaidAccount({
+      id: "acct_rekey",
+      itemId: item.id,
+      userId: user.id,
+      name: "Sapphire",
+      mask: "1111",
+      type: "credit",
+      subtype: "credit card",
+      balanceCents: 300_00,
+      updatedAt: Date.now(),
+    });
+    const card = await createCreditCard(user.id, {
+      name: "Sapphire",
+      statementDay: 30,
+      dueDay: 26,
+      autoPay: true,
+      isActive: true,
+    });
+    await setCreditCardPlaidLink(user.id, card.id, "acct_rekey");
+    const today = todayIso(DEFAULT_TIMEZONE);
+    const statementHandPaid = await createStatement(card.id, {
+      statementDate: addDaysIso(today, -40),
+      dueDate: addDaysIso(today, -14),
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: 300_00,
+      paidDate: addDaysIso(today, -15),
+      notes: null,
+    });
+    const statementCurrent = await createStatement(card.id, {
+      statementDate: addDaysIso(today, -10),
+      dueDate: addDaysIso(today, 16),
+      statementBalanceCents: 300_00,
+      minimumPaymentCents: null,
+      paidAmountCents: null,
+      paidDate: null,
+      notes: null,
+    });
+    const payment = (transactionId: string) => ({
+      transaction_id: transactionId,
+      account_id: "acct_rekey",
+      pending: false,
+      date: addDaysIso(today, -1),
+      name: "Autopay Payment Thank You",
+      original_description: "AUTOPAY PAYMENT",
+      amount: 300.0,
+      personal_finance_category: {
+        primary: "LOAN_PAYMENTS",
+        detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+      },
+      merchant_name: null,
+    });
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+    const read = async () => {
+      const stmts = await listStatements(card.id);
+      return {
+        handPaid: stmts.find((s) => s.id === statementHandPaid.id)!,
+        current: stmts.find((s) => s.id === statementCurrent.id)!,
+      };
+    };
+
+    __plaidMock.transactionsSync.mockResolvedValueOnce({
+      data: {
+        next_cursor: "c1",
+        has_more: false,
+        accounts: [],
+        added: [payment("pay_old")],
+        modified: [],
+        removed: [],
+      },
+    });
+    expect((await syncPlaidTransactions(user.id, item.id)).statementsReconciled).toBe(1);
+    const afterFirst = await read();
+    expect(afterFirst.current.paidAmountCents).toBe(300_00);
+    expect(afterFirst.current.settledByDraftId).toBe("pay_old");
+    expect(afterFirst.handPaid.settledByDraftId).toBeNull();
+
+    __plaidMock.transactionsSync.mockResolvedValueOnce({
+      data: {
+        next_cursor: "c2",
+        has_more: false,
+        accounts: [],
+        added: [payment("pay_new")],
+        modified: [],
+        removed: [{ transaction_id: "pay_old" }],
+      },
+    });
+    await syncPlaidTransactions(user.id, item.id);
+    const afterRekey = await read();
+    // Current (limited) behavior: the current statement is open again and the
+    // re-keyed payment is consumed on the older, hand-paid cycle.
+    expect(afterRekey.current.paidAmountCents).toBeNull();
+    expect(afterRekey.current.paidDate).toBeNull();
+    expect(afterRekey.current.settledByDraftId).toBeNull();
+    expect(afterRekey.handPaid.settledByDraftId).toBe("pay_new");
+    expect(afterRekey.handPaid.paidAmountCents).toBe(300_00);
+    expect(afterRekey.handPaid.paidDate).toBe(addDaysIso(today, -15));
+  });
 });
 
 async function makeUser() {
