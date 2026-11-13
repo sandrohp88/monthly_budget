@@ -1719,14 +1719,100 @@ describe("projectCardPayments — past payments cover a manual card's closed-cyc
     expect(alertOn(r, "2026-06-06")).toMatchObject([{ dueDate: "2026-06-10", shortfallCents: 200_00 }]);
   });
 
-  it("plain and over-sized past payments count, capped at what the marker owes", () => {
+  it("a past PLAIN row is already pool cover: counted once, not again", () => {
+    // Plain overrides are never date-filtered, so the cover pool already
+    // credits this $100. The past rule must not add it a second time.
+    const r = base({
+      cardEditedOnByCard: new Map([["c1", "2026-05-18"]]),
+      cardPaymentOverrides: [override({ dueDate: "2026-05-20", amountCents: 100_00, notes: null })],
+    });
+    expect(june(r)).toMatchObject({ paymentDueCents: 300_00, scheduledCoverCents: 100_00 });
+    expect(alertOn(r, "2026-06-06")).toMatchObject([{ dueDate: "2026-06-10", shortfallCents: 200_00 }]);
+  });
+
+  it("with an overdue statement, the past plain $100 is used once across both markers", () => {
+    // The pool pays the overdue $100 (oldest first, late cover); the 06-10
+    // estimate ($300 − $100 unpaid = $200) gets nothing more from it.
+    const r = base({
+      cardEditedOnByCard: new Map([["c1", "2026-05-18"]]),
+      statements: [
+        stmt({ statementDate: "2026-04-15", dueDate: "2026-05-10", statementBalanceCents: 100_00 }),
+      ],
+      cardPaymentOverrides: [override({ dueDate: "2026-05-20", amountCents: 100_00, notes: null })],
+    });
+    const overdue = markersOf(r).find((e) => e.overdueSinceDate === "2026-05-10");
+    expect(overdue).toMatchObject({ date: "2026-06-06", paymentDueCents: 100_00, scheduledCoverCents: 100_00 });
+    expect(june(r)).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 0 });
+    const total = markersOf(r)
+      .filter((e) => e.date <= "2026-06-10")
+      .reduce((sum, e) => sum + (e.scheduledCoverCents ?? 0), 0);
+    expect(total).toBe(100_00);
+  });
+
+  it("a past pays-down row (dropped by the date filter) counts in full", () => {
+    const r = base({ cardPaymentOverrides: [paid(100_00)] });
+    expect(june(r)?.scheduledCoverCents).toBe(100_00);
+  });
+
+  it("a past paydown aimed at another due date (a possible chunk) adds nothing", () => {
     const r = base({
       cardPaymentOverrides: [
-        override({ id: "o1", dueDate: "2026-05-20", amountCents: 250_00, notes: null }),
-        paid(250_00),
+        override({ dueDate: "2026-06-05", amountCents: 100_00, notes: "pays-down:2026-07-10" }),
       ],
     });
-    expect(june(r)).toMatchObject({ paymentDueCents: 300_00, scheduledCoverCents: 300_00 });
+    expect(june(r)?.scheduledCoverCents).toBe(0);
+  });
+
+  it("one plain $100 and one pays-down $100 give $200, not $300", () => {
+    const r = base({
+      cardEditedOnByCard: new Map([["c1", "2026-05-18"]]),
+      cardPaymentOverrides: [
+        override({ id: "o1", dueDate: "2026-05-20", amountCents: 100_00, notes: null }),
+        override({ id: "o2", dueDate: "2026-06-05", amountCents: 100_00, notes: "pays-down:2026-06-10" }),
+      ],
+    });
+    expect(june(r)?.scheduledCoverCents).toBe(200_00);
+  });
+
+  it("a moved-to vacate row adds nothing", () => {
+    const r = base({
+      cardPaymentOverrides: [
+        override({ dueDate: "2026-05-25", amountCents: 0, notes: "moved-to:2026-06-01" }),
+      ],
+    });
+    expect(june(r)?.scheduledCoverCents).toBe(0);
+  });
+
+  it("a posted plain row (linked checking) counts once; one on a promo chunk date does not", () => {
+    // Linked mode: a fully posted plan's effective amount is 0, so the pool no
+    // longer credits it — the past rule adds the posted $100 exactly once.
+    const posted = base({
+      cardEditedOnByCard: new Map([["c1", "2026-05-18"]]),
+      cardPaymentOverrides: [override({ dueDate: "2026-05-20", amountCents: 100_00, notes: null })],
+      remainingPlannedCentsByKey: new Map([["c1:2026-05-20", 0]]),
+    });
+    expect(june(posted)?.scheduledCoverCents).toBe(100_00);
+    // The same posted row on a promo's scheduled payment date replaced that
+    // chunk: it paid promo principal, not the closed cycle's estimate.
+    const chunk = base({
+      cardEditedOnByCard: new Map([["c1", "2026-05-18"]]),
+      promos: [promo({ remainingAmountCents: 100_00 })],
+      promoPayments: [
+        {
+          id: "pp1",
+          userId: "u1",
+          promoId: "p1",
+          dueDate: "2026-05-20",
+          amountCents: 50_00,
+          note: null,
+          createdAt: 0,
+          updatedAt: 0,
+        } satisfies CreditCardPromoPaymentRow,
+      ],
+      cardPaymentOverrides: [override({ dueDate: "2026-05-20", amountCents: 50_00, notes: null })],
+      remainingPlannedCentsByKey: new Map([["c1:2026-05-20", 0]]),
+    });
+    expect(june(chunk)).toMatchObject({ paymentDueCents: 200_00, scheduledCoverCents: 0 });
   });
 
   it("an in-flight tracked plan is counted once: unposted part as today, posted part as past", () => {

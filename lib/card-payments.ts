@@ -35,6 +35,7 @@
 import {
   dueDateFromStatement,
   interestSavingCashDueCents,
+  nextDayOfMonthOnOrAfter,
   nextStatementDateOnOrAfter,
   previousStatementDateOnOrBefore,
   projectPromoScheduleWithBalances,
@@ -915,20 +916,53 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   // already made toward the closed cycle (dated after its close, before today)
   // still covers that cycle's estimate — while the card has not been edited
   // on/after the payment date (an edit means the balance may already show it).
-  // Display cover only, on that one marker, capped at what it owes. A plan
-  // still in flight already covers through the rules above with its unposted
-  // remainder, so only its posted part counts here.
+  // Display cover only, on that one marker, capped at what it owes.
+  //
+  // It may only add money NO rule above already credits: per row, the
+  // original amount minus the amount the engine still treats as effective.
+  //   • plain / moved-from rows are never date-filtered: their effective
+  //     amount (`remaining ?? original`) is already in the cover pool, so
+  //     only a linked-checking posted part (original − remaining) is new;
+  //   • pays-down rows dated before today drop out of every rule unless
+  //     still in flight, so all but the unposted remainder is new.
+  // Rows that may have paid a promo/variable chunk instead of this cycle are
+  // skipped: the chunk claim only sees chunks dated today or later, so a past
+  // row (or the date a paydown / moved payment aimed at) on a due-day
+  // occurrence, a promo deadline or a scheduled promo payment date never
+  // counts here — except a paydown aimed at the closed cycle's own due date,
+  // which spends on the marker first (§17a). `moved-to:` rows never count.
   for (const [cardId, closed] of closedCycleEstimateByCard) {
     const editedOn = input.cardEditedOnByCard?.get(cardId);
-    if (editedOn == null) continue;
+    const card = cardById.get(cardId);
+    if (editedOn == null || !card) continue;
+    const cardPromos = promosByCard.get(cardId) ?? [];
+    const mayBeChunkDate = (date: string) =>
+      nextDayOfMonthOnOrAfter(date, card.dueDay) === date ||
+      cardPromos.some(
+        (p) =>
+          p.endDate === date ||
+          (promoPaymentsByPromoId.get(p.id) ?? []).some((pp) => pp.dueDate === date),
+      );
     let past = 0;
     for (const o of input.cardPaymentOverrides) {
       if (o.cardId !== cardId || o.amountCents <= 0 || isMovedToVacate(o.notes)) continue;
       if (o.dueDate <= closed.statementDate || o.dueDate >= today || editedOn >= o.dueDate) {
         continue;
       }
-      const unposted = input.remainingPlannedCentsByKey?.get(overrideKey(cardId, o.dueDate)) ?? 0;
-      past += Math.max(0, o.amountCents - Math.max(0, unposted));
+      const key = overrideKey(cardId, o.dueDate);
+      if (claimedOverrideKeys.has(key) || mayBeChunkDate(o.dueDate)) continue;
+      const remaining = input.remainingPlannedCentsByKey?.get(key);
+      const paydownTarget = paydownTargetDate(o.notes);
+      let effective: number;
+      if (paydownTarget != null) {
+        if (paydownTarget !== closed.marker.dueDate && mayBeChunkDate(paydownTarget)) continue;
+        effective = Math.max(0, remaining ?? 0); // in flight → unposted remainder, else 0
+      } else {
+        const movedFrom = movedFromDate(o.notes);
+        if (movedFrom != null && mayBeChunkDate(movedFrom)) continue;
+        effective = Math.max(0, remaining ?? o.amountCents); // already in the pool
+      }
+      past += Math.max(0, o.amountCents - effective);
     }
     if (past <= 0) continue;
     const m = closed.marker;
