@@ -286,7 +286,7 @@ This is the most foot-gun-heavy area. Lessons learned the hard way:
    - Use the same SQL style as `0000_moaning_madrox.sql` (backticks around identifiers, `--> statement-breakpoint` between statements).
 3. **Update `lib/db/migrations/meta/_journal.json`** — append a new entry with the next `idx` and the `tag` matching the filename (without `.sql`).
 4. Run `npm run check` to confirm types.
-5. Restart `npm run dev` (or rebuild Docker). On boot, `runMigrations()` will apply the new file: `instrumentation.ts` `register()` runs it before the push scheduler starts (so webhooks/API routes never see a stale schema); the page-level calls are cheap no-ops after that. A migration failure there fails startup.
+5. Restart `npm run dev` (or rebuild Docker). On boot, `runMigrations()` will apply the new file: `instrumentation.ts` `register()` runs it before the push scheduler starts (so webhooks/API routes never see a stale schema); the page-level calls stay. Next bundles instrumentation and app pages as separate module instances, so the once-per-process guard in `lib/db/client.ts` is per instance: migrate and the tracking check run once at boot and once more on the first page render in each process, and find nothing to apply. A migration failure at boot fails startup. Known limit: the process stays up and returns 500 (including `/api/health`) until someone restarts the container; `restart: unless-stopped` does not restart an unhealthy container.
 
 ### What NEVER to do
 
