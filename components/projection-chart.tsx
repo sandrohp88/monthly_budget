@@ -75,6 +75,18 @@ function readChartTokens(): ChartTokens {
   };
 }
 
+/** Axis labels only: "$15K" instead of "$15,000.00". Ticks are round numbers,
+ *  so the cents carried no information and cost a third of a phone's chart
+ *  width. Tooltips and every figure outside the axis stay exact. */
+function formatAxisMoney(units: number, currency: string): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(units);
+}
+
 export function ProjectionChart({ data }: { data: ReadonlyArray<Point> }) {
   const currency = useCurrency();
   // useTheme triggers a re-render on theme change; we don't read its
@@ -109,7 +121,14 @@ export function ProjectionChart({ data }: { data: ReadonlyArray<Point> }) {
   return (
     <div className="h-72 w-full">
       <ResponsiveContainer>
-        <AreaChart data={formatted} margin={{ top: 12, right: 16, bottom: 0, left: 8 }}>
+        {/* Keyed on the resolved colours: Recharts caches each series' tooltip
+            colour, so without a remount the tooltip kept the pre-hydration
+            fallback cyan (1.5:1 on the light card) after the tokens loaded. */}
+        <AreaChart
+          key={`${themeKey ?? "default"}-${tokens.cyan}`}
+          data={formatted}
+          margin={{ top: 12, right: 12, bottom: 0, left: 0 }}
+        >
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={tokens.cyan} stopOpacity={0.28} />
@@ -125,9 +144,9 @@ export function ProjectionChart({ data }: { data: ReadonlyArray<Point> }) {
             tickFormatter={(v: string) => v.slice(5)}
           />
           <YAxis
-            tickFormatter={(v: number) => formatCents(Math.round(v * 100), currency)}
+            tickFormatter={(v: number) => formatAxisMoney(v, currency)}
             tick={{ fontSize: 11, fill: tokens.text3, fontFamily: "var(--font-ui)" }}
-            width={80}
+            width={52}
             stroke={tokens.border2}
           />
           <Tooltip

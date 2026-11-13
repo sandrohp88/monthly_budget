@@ -417,7 +417,7 @@ function DayCell({
         "cursor-pointer border-b border-r border-[var(--border-raw)] p-1.5 text-left align-top transition-colors",
         "hover:bg-[var(--bg-2)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--mint)]",
         isToday ? "bg-[var(--mint-glow)]" : "bg-[var(--bg-1)]",
-        isPast && !isToday ? "opacity-60" : "",
+        isPast && !isToday ? "calendar-past" : "",
         isDropHover
           ? dragOverValid
             ? "outline outline-2 outline-[var(--mint)] outline-offset-[-2px]"
@@ -579,8 +579,8 @@ function CompactDayRow({
           : band
             ? "bg-[color-mix(in_oklch,var(--mint)_11%,transparent)]"
             : "bg-[var(--bg-1)]",
-        "hover:bg-[var(--bg-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--mint-dim)]",
-        isPast && !isToday ? "opacity-60" : "",
+        "hover:bg-[var(--bg-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]",
+        isPast && !isToday ? "calendar-past" : "",
       )}
     >
       <div className="w-9 shrink-0 pt-0.5 text-center">
@@ -1425,7 +1425,7 @@ export function CalendarClient({
                 aria-pressed={view === v}
                 className={cn(
                   "cursor-pointer rounded-full px-3 py-1 text-[11px] font-semibold transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--mint-dim)]",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]",
                   view === v
                     ? "bg-[var(--mint)] text-[var(--button-primary-fg)]"
                     : "text-[var(--text-2)] hover:bg-[var(--bg-2)] hover:text-[var(--text-0)]",

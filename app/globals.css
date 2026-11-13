@@ -67,7 +67,7 @@
   /* ── Type scale ───────────────────────────────────────────────────────
      Tailwind defaults (text-xs = 12px … ) plus one smaller step. 11px is the
      legibility floor — nothing below text-2xs ships.                        */
-  --text-2xs: 0.6875rem; /* 11px */
+  --text-2xs: 0.75rem; /* 10.5px at the 14px root; 9.6px was below a readable floor */
   --text-2xs--line-height: 1rem;
 
   /* ── Motion ───────────────────────────────────────────────────────────
@@ -453,6 +453,33 @@
     border-color: hsl(var(--border));
   }
 
+  /* Derived per theme from that theme's own tokens, so all six themes get
+     them without six copies. --focus-ring: the accent already holds >=4.5:1
+     as text on every surface, so it clears the 3:1 focus-indicator floor.
+     --control-border: input/select/switch edges need 3:1 against the surface
+     (WCAG 1.4.11); --border-raw is a 1.3:1 divider hairline, not a control edge. */
+  :root,
+  .dark,
+  [data-theme] {
+    --focus-ring: var(--mint);
+    --control-border: color-mix(in srgb, var(--text-2) 78%, var(--bg-1));
+  }
+
+  /* One visible keyboard focus indicator for everything that does not draw
+     its own ring. The UA default was near-invisible on dark surfaces. */
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+  /* Radix moves focus into dialogs/menus programmatically; the container
+     itself is not a control and should not draw a ring. */
+  [role="dialog"]:focus-visible,
+  [role="menu"]:focus-visible,
+  [role="listbox"]:focus-visible,
+  main:focus-visible {
+    outline: none;
+  }
+
   html,
   body {
     font-family: var(--font-ui), system-ui, sans-serif;
@@ -484,6 +511,11 @@
 
   /* Tabular figures for money/data — same font, aligned digits. */
   .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Chart axis money lines up digit-for-digit like every other figure. */
+  .recharts-cartesian-axis-tick-value,
+  .recharts-tooltip-item-value {
     font-variant-numeric: tabular-nums;
   }
 
@@ -630,4 +662,74 @@
   .ui-card:has(table.stack-table) table.stack-table tr:last-child {
     margin-bottom: 0;
   }
+}
+
+/* ----------------------------------------------------------------------------
+   SUMMARY TABLE (phone)
+
+   A <Table className="summary-table"> keeps one row per record on phones
+   instead of exploding each row into a five-line card: the first cell (the
+   row's name) and the last cell (its headline figure) share line one, the
+   middle cells sit on a compact labelled second line. Same cells, same
+   order in the DOM; only the phone layout changes.
+   -------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+  table.summary-table,
+  table.summary-table tbody {
+    display: block;
+    width: 100%;
+  }
+  table.summary-table thead {
+    display: none;
+  }
+  table.summary-table tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: 0.5rem;
+    row-gap: 0.25rem;
+    padding: 0.625rem 1rem;
+  }
+  table.summary-table td {
+    padding: 0;
+    border: 0;
+    text-align: left;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    grid-row: 2;
+  }
+  table.summary-table td::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--text-3);
+    font-size: 0.6875rem;
+    font-weight: 500;
+  }
+  table.summary-table td:first-child {
+    grid-row: 1;
+    grid-column: 1 / 3;
+    font-size: 0.8125rem;
+  }
+  table.summary-table td:last-child {
+    grid-row: 1;
+    grid-column: 3;
+    font-size: 0.875rem;
+    text-align: right;
+  }
+  table.summary-table td:first-child::before,
+  table.summary-table td:last-child::before {
+    content: none;
+  }
+  table.summary-table td:nth-last-child(2) {
+    text-align: right;
+  }
+}
+
+/* Calendar days already behind today read as "done" through a recessed
+   surface and muted colour, not through opacity: 60% opacity pushed the day
+   number and the money chips to 2.6-3.3:1. */
+.calendar-past {
+  background: var(--bg-0);
+}
+.calendar-past > * {
+  filter: saturate(0.6);
 }

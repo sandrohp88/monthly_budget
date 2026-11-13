@@ -54,7 +54,7 @@ export function AppShell({
     <CurrencyProvider currency={currency}>
       <div
         data-app-shell
-        className="flex h-screen w-screen overflow-hidden bg-[var(--bg-0)] text-[var(--text-0)]"
+        className="flex h-screen w-full overflow-hidden bg-[var(--bg-0)] text-[var(--text-0)]"
       >
         <Sidebar displayName={displayName} role={role} summary={sidebarSummary ?? null} />
         <MobileNav

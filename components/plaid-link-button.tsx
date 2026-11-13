@@ -81,7 +81,6 @@ export function PlaidLinkButton({ onLinked }: PlaidLinkButtonProps) {
 
   return (
     <Button
-      id="plaid-link-button"
       variant="primary"
       onClick={fetchLinkToken}
       disabled={fetching || exchanging}
