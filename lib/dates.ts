@@ -24,7 +24,7 @@ export function todayIso(timeZone: string): string {
   return formatter.format(now);
 }
 
-/** The calendar date of the instant `epochMs` in the given timezone, as ISO YYYY-MM-DD. */
+/** Calendar date of an epoch-ms instant in the given timezone, as ISO YYYY-MM-DD. */
 export function isoDateInTimeZone(epochMs: number, timeZone: string): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,

@@ -16,14 +16,17 @@ import { DAY_MS } from "./dates";
 /**
  * How long an item may go without a successful sync before the app says its
  * data may be out of date. Syncs here run only on Plaid webhooks and manual
- * taps (no timer), and Plaid polls a bank 1–4 times a day and sends a webhook
- * only when something changed. An active checking account normally changes
- * at least every business day, so a normal weekend gap stays under 3 days
- * (Fri evening → Mon morning). 3 days is long enough to stay quiet then, and
- * short enough to catch the 2026-09-15 case in half the week it went
- * unnoticed. A false alarm on a long weekend clears with one tap of Sync now.
+ * taps (no timer, no sync on page load), and Plaid polls a bank 1–4 times a
+ * day and sends a webhook only when something changed. So a healthy, quiet
+ * account gets no sync while nothing posts. The longest normal quiet gap is a
+ * holiday weekend: last posting Friday 17:00, next posting Tuesday 05:00 after
+ * a Monday holiday = 3.5 days. 3 days raised a false alarm on Monday evening;
+ * 4 days stays quiet through that gap and still catches the 2026-09-15 case
+ * (a week unnoticed) in about half the time. A broken login is reported at
+ * once anyway, by the sync error or Plaid's ITEM webhook; this threshold is
+ * only the backstop when no sync runs at all.
  */
-export const BANK_SYNC_STALE_AFTER_MS = 3 * DAY_MS;
+export const BANK_SYNC_STALE_AFTER_MS = 4 * DAY_MS;
 
 /** Stored for an error that carries no usable Plaid code. */
 export const UNKNOWN_ERROR_CODE = "UNKNOWN_ERROR";
@@ -38,8 +41,24 @@ export const PENDING_REAUTH_CODES: ReadonlySet<string> = new Set([
   "PENDING_DISCONNECT",
 ]);
 
-/** Codes the user can only fix by signing in to the bank again. */
-const LOGIN_TYPE_CODES: ReadonlySet<string> = new Set([
+/**
+ * Codes that only the user can fix, by signing in to the bank again through
+ * Plaid Link. Only these may suggest unlinking the bank (the one recovery
+ * today, because Link update mode is not built). Sources, Plaid API docs:
+ * - "Errors > Item errors" (error_type ITEM_ERROR, resolved with Link update
+ *   mode): ITEM_LOGIN_REQUIRED, INVALID_CREDENTIALS, INVALID_MFA,
+ *   INVALID_UPDATED_USERNAME, ITEM_LOCKED, ACCESS_NOT_GRANTED,
+ *   USER_PERMISSION_REVOKED.
+ * - "Webhooks > Item": USER_PERMISSION_REVOKED (consent revoked at the bank),
+ *   PENDING_EXPIRATION / PENDING_DISCONNECT (consent will expire; the item
+ *   still works until then, and once it stops a sync returns
+ *   ITEM_LOGIN_REQUIRED). Pending codes are in this set for classification,
+ *   but their status is `expiring`, which never suggests unlinking.
+ * Every other code (UNKNOWN_ERROR, INSTITUTION_DOWN, RATE_LIMIT, an app bug
+ * or config error caught by the per-item catch) must NOT suggest unlinking:
+ * unlinking cannot help and loses state (see `bankHealthAction`).
+ */
+export const LOGIN_TYPE_CODES: ReadonlySet<string> = new Set([
   "ITEM_LOGIN_REQUIRED",
   "INVALID_CREDENTIALS",
   "INVALID_MFA",
@@ -74,6 +93,8 @@ export type BankItemHealthInput = {
   /** When the item was linked (epoch ms). Staleness reference before a first sync. */
   createdAt: number;
   lastErrorCode: string | null;
+  /** When the current error was last seen (epoch ms). */
+  lastErrorAt: number | null;
 };
 
 /**
@@ -89,6 +110,13 @@ export type BankItemHealth = {
   status: BankItemStatus;
   code: string | null;
   lastSuccessAt: number | null;
+  /**
+   * The failing sync saved new transactions before it threw: the per-item
+   * catch records a failure AFTER the cursor save with `last_error_at` equal
+   * to `last_synced_at`. Then "not syncing since <date>" would contradict
+   * itself; the text says the last sync finished with an error instead.
+   */
+  finishedWithError: boolean;
   /** True when one of the item's accounts feeds the starting balance. */
   anchorsBalance: boolean;
 };
@@ -112,6 +140,11 @@ export function assessItemHealth(
     status,
     code,
     lastSuccessAt: item.lastSyncedAt ?? null,
+    finishedWithError:
+      status === "failing" &&
+      !isLoginTypeCode(code) &&
+      item.lastSyncedAt != null &&
+      item.lastErrorAt === item.lastSyncedAt,
     anchorsBalance,
   };
 }
@@ -166,7 +199,7 @@ export function bankHealthShortLabel(h: BankItemHealth): string {
     case "ok":
       return "syncing";
     case "failing":
-      return "not syncing";
+      return h.finishedWithError ? "sync error" : "not syncing";
     case "stale":
       return "no recent sync";
     case "expiring":
@@ -190,21 +223,50 @@ export function bankHealthReason(h: BankItemHealth): string {
         return "Access to this bank was turned off. Syncing has stopped.";
       }
       if (isLoginTypeCode(h.code)) return "The bank needs you to sign in again. Syncing has stopped.";
+      if (h.finishedWithError) {
+        return `The last sync finished with an error (${h.code ?? UNKNOWN_ERROR_CODE}). New transactions were saved, but balances may not be up to date.`;
+      }
       return `The last sync failed (${h.code ?? UNKNOWN_ERROR_CODE}).`;
   }
 }
 
+/** The text before the date of `lastSuccessAt` ("Last successful sync Sep 15"). */
+export function bankHealthLastSyncLabel(h: BankItemHealth): string {
+  return h.finishedWithError ? "Last sync (finished with an error)" : "Last successful sync";
+}
+
 /**
- * What the user can do today. Plaid Link update mode is not built yet, so
- * for a login problem the only recovery is to unlink the bank and link it
- * again — say so instead of offering a Reconnect button that does nothing.
+ * What the user can do today.
+ *
+ * Only a LOGIN-type failure suggests unlinking. Plaid Link update mode is not
+ * built, so unlink + link again is the one recovery for those — say so, with
+ * its cost, instead of offering a Reconnect button that does nothing. Until
+ * review finding PLAID-3 is fixed, `deactivatePlaidItem` dismisses the bank's
+ * pending transactions and unlinks its cards, and linking again can create a
+ * duplicate card.
+ *
+ * Every other failure (UNKNOWN_ERROR, INSTITUTION_DOWN, our own bugs and
+ * config errors, which the per-item catch also catches) gets only "try again;
+ * it may be the app": unlinking cannot fix those and loses state.
  */
 export function bankHealthAction(h: BankItemHealth): string {
-  if (h.status === "ok") return "";
-  if (h.status === "expiring" || isLoginTypeCode(h.code)) {
-    return "To fix this, unlink this bank with the trash button and link it again. Reconnecting in place is not available yet.";
+  switch (h.status) {
+    case "ok":
+      return "";
+    case "expiring":
+      return "It still syncs for now. When it stops, this page shows how to fix it.";
+    case "stale":
+      return "Tap Sync now to check for new data.";
+    case "failing":
+      if (isLoginTypeCode(h.code)) {
+        return (
+          "To fix this, unlink this bank with the trash button and link it again. " +
+          "Reconnecting in place is not available yet. " +
+          "Unlinking removes this bank's pending transactions and its card links, and linking again can create a duplicate card: check the Credit cards page afterwards."
+        );
+      }
+      return "Tap Sync now to try again. If it keeps failing, the problem may be in the app: check the server log.";
   }
-  return "Tap Sync now to try again. If it keeps failing, unlink this bank and link it again.";
 }
 
 /** Toast text after a manual sync in which one or more items failed. */

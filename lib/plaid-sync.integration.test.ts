@@ -3583,6 +3583,74 @@ describe("bank item health (broken connections are recorded, not silent)", () =>
     expect(rawItem(item.id).lastErrorCode).toBe("PENDING_EXPIRATION");
   });
 
+  // Review of PR #172 S2: Plaid sends PENDING_EXPIRATION once. A transient
+  // failure must not overwrite it, or the next good sync erases it for good.
+  it("a transient failure keeps a pending-expiration warning; a login failure replaces it", async () => {
+    const user = await makeUser();
+    const item = await seedBank(user.id);
+    const warnedAt = Date.now() - 60_000;
+    await recordPlaidItemError(user.id, item.id, "PENDING_EXPIRATION", warnedAt);
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+    __plaidMock.transactionsSync.mockRejectedValueOnce({
+      response: { data: { error_type: "INSTITUTION_ERROR", error_code: "INSTITUTION_DOWN" } },
+      message: "Request failed with status code 400",
+    });
+
+    const failed = await syncPlaidTransactions(user.id);
+
+    // The result (and so the toast) still reports the transient failure.
+    expect(failed.itemErrors).toEqual([
+      { itemId: item.id, institutionName: "Chase", code: "INSTITUTION_DOWN" },
+    ]);
+    const kept = rawItem(item.id);
+    expect(kept.lastErrorCode).toBe("PENDING_EXPIRATION");
+    expect(kept.lastErrorAt).toBeGreaterThan(warnedAt);
+    expect(kept.firstErrorAt).toBe(warnedAt);
+
+    // The next good sync does not erase the warning either.
+    __plaidMock.transactionsSync.mockResolvedValue(emptySync());
+    await syncPlaidTransactions(user.id);
+    expect(rawItem(item.id).lastErrorCode).toBe("PENDING_EXPIRATION");
+
+    // A login-type failure is more urgent than the warning and replaces it.
+    __plaidMock.transactionsSync.mockRejectedValue(loginRequired());
+    await syncPlaidTransactions(user.id);
+    expect(rawItem(item.id).lastErrorCode).toBe("ITEM_LOGIN_REQUIRED");
+  });
+
+  // Review of PR #172 N2: the webhook write is not under the user sync lock.
+  // An ITEM ERROR recorded while an older sync is still running must survive
+  // that sync's success.
+  it("an error recorded during an in-flight sync survives that sync's success", async () => {
+    const user = await makeUser();
+    const item = await seedBank(user.id);
+    __plaidMock.liabilitiesGet.mockResolvedValue({ data: { liabilities: { credit: [] } } });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    __plaidMock.transactionsSync.mockImplementation(async () => {
+      entered();
+      await gate;
+      return emptySync();
+    });
+
+    const sync = syncPlaidTransactions(user.id);
+    await inFlight;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // What handlePlaidWebhook does for ITEM/ERROR, while the sync runs.
+    await recordPlaidItemError(user.id, item.id, "ITEM_LOGIN_REQUIRED", Date.now());
+    release();
+    const res = await sync;
+
+    expect(res.itemErrors).toEqual([]);
+    expect(rawItem(item.id).lastErrorCode).toBe("ITEM_LOGIN_REQUIRED");
+  });
+
   it("the health write is user-scoped: another user's id touches nothing", async () => {
     const user = await makeUser();
     const item = await seedBank(user.id);

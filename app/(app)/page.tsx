@@ -22,7 +22,7 @@ import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import { ProjectionChart } from "@/components/projection-chart";
 import { addDaysIso, DEFAULT_TIMEZONE, isoDateInTimeZone, todayIso } from "@/lib/dates";
-import { assessBankHealth, bankHealthReason } from "@/lib/plaid-item-health";
+import { assessBankHealth, bankHealthReason, bankHealthShortLabel } from "@/lib/plaid-item-health";
 import { findWorstDay } from "@/lib/projection";
 import { findUncoveredCardDues } from "@/lib/projection-insights";
 import { showsPostedBalance } from "@/lib/soft-balance";
@@ -219,8 +219,8 @@ export default async function DashboardPage() {
                 )}{" "}
                 ·{" "}
                 {staleAnchors.length === 1
-                  ? `${staleAnchors[0]!.institutionName} not syncing`
-                  : `${staleAnchors.length} banks not syncing`}
+                  ? `${staleAnchors[0]!.institutionName} ${bankHealthShortLabel(staleAnchors[0]!)}`
+                  : `${staleAnchors.length} banks not up to date`}
               </>
             ) : liveBalance != null ? (
               "live · linked accounts"
@@ -320,6 +320,8 @@ export default async function DashboardPage() {
               </strong>{" "}
               {h.status === "expiring" ? (
                 "connection expires soon. Then it will stop syncing."
+              ) : h.finishedWithError ? (
+                <>— {bankHealthReason(h)}</>
               ) : (
                 <>
                   {h.lastSuccessAt != null ? (

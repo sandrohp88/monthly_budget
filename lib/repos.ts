@@ -1,6 +1,6 @@
 import { looksLikeCardPayment, looksLikeReversal } from "./plaid-transaction-kind";
 import { addDaysIso, todayIso } from "./dates";
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "./db/client";
 import {
   interestSavingCashDueCents,
@@ -72,7 +72,7 @@ import {
   type VariableBillRow,
 } from "./db/schema";
 import { newId } from "./ids";
-import { PENDING_REAUTH_CODES } from "./plaid-item-health";
+import { isLoginTypeCode, PENDING_REAUTH_CODES } from "./plaid-item-health";
 import { enumerateBillOccurrences, splitIsValid } from "./bill-reconciliation";
 import { matchAllocatedIncome } from "./paycheck-reconciliation";
 import { hashPassword } from "./auth";
@@ -2284,6 +2284,12 @@ export async function markItemTransactionsRefreshed(id: string, at: number): Pro
  * problem. Only the item owned by `userId` is touched; the webhook path passes
  * the owner of the item that Plaid's `item_id` resolved to. `code` must be
  * normalized (`normalizeItemErrorCode`) — never an error message.
+ *
+ * A stored PENDING_EXPIRATION / PENDING_DISCONNECT is kept when the new code
+ * is not a login-type code. Plaid sends that warning ONCE; a transient
+ * failure (INSTITUTION_DOWN) overwriting it and the next good sync clearing
+ * it would lose it for good. The time still moves, and the sync result still
+ * reports the transient failure.
  */
 export async function recordPlaidItemError(
   userId: string,
@@ -2295,7 +2301,12 @@ export async function recordPlaidItemError(
   await db
     .update(plaidItems)
     .set({
-      lastErrorCode: code,
+      lastErrorCode: isLoginTypeCode(code)
+        ? code
+        : sql`CASE WHEN ${plaidItems.lastErrorCode} IN (${sql.join(
+            [...PENDING_REAUTH_CODES].map((c) => sql`${c}`),
+            sql`, `,
+          )}) THEN ${plaidItems.lastErrorCode} ELSE ${code} END`,
       lastErrorAt: at,
       firstErrorAt: sql`coalesce(${plaidItems.firstErrorAt}, ${at})`,
     })
@@ -2308,17 +2319,25 @@ export async function recordPlaidItemError(
  * true`: a PENDING_EXPIRATION / PENDING_DISCONNECT warning describes a bank
  * that still works today, so only LOGIN_REPAIRED (`keepPending: false`) or
  * removing the item ends it.
+ *
+ * A sync also passes `recordedBefore` = the time it started: it clears only an
+ * error last seen BEFORE that. The webhook write is not under the user sync
+ * lock, so an ITEM ERROR that arrives while a sync started earlier is still
+ * running must survive that sync's success.
  */
 export async function clearPlaidItemError(
   userId: string,
   itemId: string,
-  opts: { keepPending: boolean },
+  opts: { keepPending: boolean; recordedBefore?: number },
 ): Promise<void> {
   const db = getDb();
   const scope = and(
     eq(plaidItems.userId, userId),
     eq(plaidItems.id, itemId),
     isNotNull(plaidItems.lastErrorCode),
+    opts.recordedBefore != null
+      ? or(isNull(plaidItems.lastErrorAt), lt(plaidItems.lastErrorAt, opts.recordedBefore))
+      : undefined,
   );
   await db
     .update(plaidItems)

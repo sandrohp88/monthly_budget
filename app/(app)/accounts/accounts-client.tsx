@@ -28,6 +28,7 @@ import { isoDateInTimeZone } from "@/lib/dates";
 import {
   assessBankHealth,
   bankHealthAction,
+  bankHealthLastSyncLabel,
   bankHealthReason,
   bankHealthShortLabel,
   syncFailureMessage,
@@ -368,7 +369,7 @@ function InstitutionCard({
             <div className="text-2xs text-[var(--text-3)]">
               {item.accounts.length} account{item.accounts.length !== 1 ? "s" : ""}
               {item.lastSyncedAt ? (
-                <> · Last successful sync <DateLabel iso={isoDateInTimeZone(item.lastSyncedAt, timeZone)} format="short" /></>
+                <> · {bankHealthLastSyncLabel(health)} <DateLabel iso={isoDateInTimeZone(item.lastSyncedAt, timeZone)} format="short" /></>
               ) : (
                 " · Never synced"
               )}
@@ -400,7 +401,7 @@ function InstitutionCard({
           <p className="leading-snug">
             {health.lastSuccessAt != null ? (
               <>
-                Last successful sync{" "}
+                {bankHealthLastSyncLabel(health)}{" "}
                 <DateLabel iso={isoDateInTimeZone(health.lastSuccessAt, timeZone)} format="long" />.{" "}
               </>
             ) : (

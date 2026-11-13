@@ -4,7 +4,10 @@ import {
   assessItemHealth,
   BANK_SYNC_STALE_AFTER_MS,
   bankHealthAction,
+  bankHealthLastSyncLabel,
   bankHealthReason,
+  bankHealthShortLabel,
+  LOGIN_TYPE_CODES,
   isLoginTypeCode,
   normalizeItemErrorCode,
   syncFailureMessage,
@@ -23,6 +26,7 @@ function item(overrides: Partial<BankItemHealthInput> = {}): BankItemHealthInput
     lastSyncedAt: NOW - HOUR,
     createdAt: NOW - 100 * 24 * HOUR,
     lastErrorCode: null,
+    lastErrorAt: null,
     ...overrides,
   };
 }
@@ -202,6 +206,105 @@ describe("error codes and wording", () => {
     expect(bankHealthReason(h)).toMatch(/sign in again/i);
     expect(bankHealthAction(h)).toMatch(/unlink this bank/i);
     expect(bankHealthAction(h)).toMatch(/link it again/i);
+  });
+});
+
+// Review of PR #172 (B1, S1): the per-item catch catches EVERY exception —
+// our own bugs and config errors too. Unlinking cannot fix those and loses
+// state (pending drafts dismissed, cards unlinked, a duplicate card on
+// re-link until PLAID-3 is fixed), so only login-type codes may suggest it.
+describe("bankHealthAction per code class", () => {
+  const failing = (code: string) => assessItemHealth(item({ lastErrorCode: code }), NOW);
+
+  it.each([...LOGIN_TYPE_CODES].filter((c) => !c.startsWith("PENDING_")))(
+    "%s (login-type) suggests unlink + link again and states its cost",
+    (code) => {
+      const action = bankHealthAction(failing(code));
+      expect(action).toMatch(/unlink this bank/i);
+      expect(action).toMatch(/link it again/i);
+      expect(action).toMatch(/removes this bank's pending transactions and its card links/i);
+      expect(action).toMatch(/duplicate card/i);
+    },
+  );
+
+  it.each(["UNKNOWN_ERROR", "INSTITUTION_DOWN", "INTERNAL_SERVER_ERROR", "RATE_LIMIT_EXCEEDED"])(
+    "%s (not login-type) only suggests a retry and never unlinking",
+    (code) => {
+      const action = bankHealthAction(failing(code));
+      expect(action).toBe(
+        "Tap Sync now to try again. If it keeps failing, the problem may be in the app: check the server log.",
+      );
+      expect(action).not.toMatch(/unlink/i);
+    },
+  );
+
+  it("an expiring connection does not suggest unlinking yet", () => {
+    const action = bankHealthAction(assessItemHealth(item({ lastErrorCode: "PENDING_EXPIRATION" }), NOW));
+    expect(action).not.toMatch(/unlink/i);
+  });
+
+  it("a stale item (no error) only suggests a sync", () => {
+    const action = bankHealthAction(
+      assessItemHealth(item({ lastSyncedAt: NOW - BANK_SYNC_STALE_AFTER_MS - 1 }), NOW),
+    );
+    expect(action).toBe("Tap Sync now to check for new data.");
+  });
+
+  it("a healthy item has no action", () => {
+    expect(bankHealthAction(assessItemHealth(item(), NOW))).toBe("");
+  });
+});
+
+describe("a failure after the cursor save (transactions were stored)", () => {
+  // The per-item catch stamps such a failure with the cursor save's time.
+  const savedAt = NOW - HOUR;
+
+  it("says the last sync finished with an error, not 'not syncing since'", () => {
+    const h = assessItemHealth(
+      item({ lastSyncedAt: savedAt, lastErrorAt: savedAt, lastErrorCode: "UNKNOWN_ERROR" }),
+      NOW,
+    );
+    expect(h).toMatchObject({ status: "failing", finishedWithError: true });
+    expect(bankHealthShortLabel(h)).toBe("sync error");
+    expect(bankHealthReason(h)).toBe(
+      "The last sync finished with an error (UNKNOWN_ERROR). New transactions were saved, but balances may not be up to date.",
+    );
+    expect(bankHealthLastSyncLabel(h)).toBe("Last sync (finished with an error)");
+  });
+
+  it("a failure before the cursor save keeps the 'not syncing' wording", () => {
+    const h = assessItemHealth(
+      item({ lastSyncedAt: savedAt, lastErrorAt: NOW - 1000, lastErrorCode: "UNKNOWN_ERROR" }),
+      NOW,
+    );
+    expect(h.finishedWithError).toBe(false);
+    expect(bankHealthShortLabel(h)).toBe("not syncing");
+    expect(bankHealthReason(h)).toBe("The last sync failed (UNKNOWN_ERROR).");
+    expect(bankHealthLastSyncLabel(h)).toBe("Last successful sync");
+  });
+
+  it("a login-type code is never 'finished with an error'", () => {
+    const h = assessItemHealth(
+      item({ lastSyncedAt: savedAt, lastErrorAt: savedAt, lastErrorCode: "ITEM_LOGIN_REQUIRED" }),
+      NOW,
+    );
+    expect(h.finishedWithError).toBe(false);
+    expect(bankHealthShortLabel(h)).toBe("not syncing");
+  });
+});
+
+describe("staleness threshold", () => {
+  it("is 4 days so a holiday weekend (Fri 17:00 → Tue 05:00) raises no alarm", () => {
+    expect(BANK_SYNC_STALE_AFTER_MS).toBe(4 * 24 * HOUR);
+    const friday = Date.UTC(2026, 8, 4, 21, 0); // Fri 17:00 New York
+    const tuesday = Date.UTC(2026, 8, 8, 9, 0); // Tue 05:00 New York, after Labor Day
+    expect(assessItemHealth(item({ lastSyncedAt: friday }), tuesday).status).toBe("ok");
+  });
+
+  it("the stale reason states the threshold", () => {
+    const h = assessItemHealth(item({ lastSyncedAt: NOW - BANK_SYNC_STALE_AFTER_MS - 1 }), NOW);
+    expect(bankHealthReason(h)).toBe("No successful sync in more than 4 days.");
+    expect(bankHealthShortLabel(h)).toBe("no recent sync");
   });
 });
 
