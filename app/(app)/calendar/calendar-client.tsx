@@ -415,8 +415,8 @@ function DayCell({
       className={cn(
         minHeightClass,
         "cursor-pointer border-b border-r border-[var(--border-raw)] p-1.5 text-left align-top transition-colors",
-        "hover:bg-[var(--bg-2)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--mint)]",
-        isToday ? "bg-[var(--mint-glow)]" : "bg-[var(--bg-1)]",
+        "hover:bg-[var(--bg-2)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-1px] focus-visible:outline-[var(--mint)]",
+        isToday ? "bg-[var(--mint-glow)]" : isPast ? "bg-[var(--bg-0)]" : "bg-[var(--bg-1)]",
         isPast && !isToday ? "calendar-past" : "",
         isDropHover
           ? dragOverValid
@@ -578,7 +578,9 @@ function CompactDayRow({
           ? "bg-[var(--mint-glow)]"
           : band
             ? "bg-[color-mix(in_oklch,var(--mint)_11%,transparent)]"
-            : "bg-[var(--bg-1)]",
+            : isPast
+              ? "bg-[var(--bg-0)]"
+              : "bg-[var(--bg-1)]",
         "hover:bg-[var(--bg-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]",
         isPast && !isToday ? "calendar-past" : "",
       )}

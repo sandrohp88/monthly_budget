@@ -715,9 +715,14 @@
     font-size: 0.875rem;
     text-align: right;
   }
-  table.summary-table td:first-child::before,
-  table.summary-table td:last-child::before {
+  table.summary-table td:first-child::before {
     content: none;
+  }
+  /* The headline figure keeps its column name, inline, so it cannot be
+     read as the labelled figure below it. */
+  table.summary-table td:last-child::before {
+    display: inline;
+    margin-right: 0.375rem;
   }
   table.summary-table td:nth-last-child(2) {
     text-align: right;
@@ -725,11 +730,8 @@
 }
 
 /* Calendar days already behind today read as "done" through a recessed
-   surface and muted colour, not through opacity: 60% opacity pushed the day
+   surface (set where the cell picks its background) and muted colour, not through opacity: 60% opacity pushed the day
    number and the money chips to 2.6-3.3:1. */
-.calendar-past {
-  background: var(--bg-0);
-}
 .calendar-past > * {
   filter: saturate(0.6);
 }

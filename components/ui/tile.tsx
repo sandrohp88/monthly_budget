@@ -39,7 +39,7 @@ export function Tile({
           compact ? "mb-1.5 text-[11px]" : "mb-2 text-[12px] md:mb-3",
         )}
       >
-        <span className="min-w-0 truncate">{label}</span>
+        <span className="min-w-0">{label}</span>
         {badge}
       </div>
       <div
@@ -83,6 +83,8 @@ export function TileGrid({
           "grid-cols-2 md:grid-cols-3 max-md:[&>*:last-child:nth-child(odd)]:col-span-2"
         : cols === 4
           ? "grid-cols-2 lg:grid-cols-4"
-          : "grid-cols-[repeat(auto-fit,minmax(150px,1fr))] max-md:[&>*:last-child:nth-child(odd)]:col-span-2";
+          : // Explicit two-up below md: with auto-fit the odd-last-tile span
+            // would land on a 1- or 4-track grid at some widths.
+            "grid-cols-2 md:grid-cols-[repeat(auto-fit,minmax(180px,1fr))] max-md:[&>*:last-child:nth-child(odd)]:col-span-2";
   return <div className={cn("grid gap-2.5", colsClass, className)}>{children}</div>;
 }
