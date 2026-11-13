@@ -6,6 +6,17 @@
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    // Migrate before anything else touches the DB: API routes (Plaid webhook)
+    // and the push timer can run before any page renders. A failure throws
+    // from register() so boot fails loudly instead of limping on a stale schema.
+    const { runMigrations } = await import("./lib/db/client");
+    try {
+      runMigrations();
+    } catch (err) {
+      // Next does not print errors thrown from register(); log, then rethrow.
+      console.error("[boot] database migration failed, refusing to start:", err);
+      throw err;
+    }
     const { startPushScheduler } = await import("./lib/push-scheduler");
     startPushScheduler();
   }
