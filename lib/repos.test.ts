@@ -83,6 +83,7 @@ import {
   updateUserPassword,
   updateUserProfile,
   deleteUser,
+  getUserById,
 } from "./repos";
 
 // ── per-test SQLite fixture ────────────────────────────────────────────────
@@ -1412,6 +1413,7 @@ describe("repos / statement paid transitions", () => {
 
   it("push subscriptions: deleting a user cascades to their subscriptions", async () => {
     const { id: userId } = await makeUser("push-deleted@example.com");
+    await makeUser("push-deleted-other-admin@example.com"); // the last admin cannot be deleted
     await upsertPushSubscription(userId, { endpoint: "https://push.example/sub/gone", p256dh: "k", auth: "a" });
     await deleteUser(userId);
     expect(await listAllPushSubscriptions()).toHaveLength(0);
@@ -2068,5 +2070,81 @@ describe("repos / archivePaychecks", () => {
       isOneTime: true,
     });
     expect(bonus.isOneTime).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Last-admin invariant (review 2026-11-10 AUTH-6)
+// ────────────────────────────────────────────────────────────────────────────
+describe("repos / last admin cannot be demoted or deleted", () => {
+  async function makeRoleUser(email: string, role: "admin" | "member"): Promise<string> {
+    const id = newId();
+    await getDb()
+      .insert(users)
+      .values({ id, email, passwordHash: "x".repeat(64), displayName: email, role })
+      .run();
+    return id;
+  }
+  const LAST = "cannot remove the last admin";
+
+  it("the sole admin cannot demote themself", async () => {
+    const a = await makeRoleUser("a@x.test", "admin");
+    await expect(updateUserProfile(a, { role: "member" })).rejects.toThrow(LAST);
+    expect((await getUserById(a))?.role).toBe("admin");
+  });
+
+  it("with two admins one demotion works, the next is refused (either direction)", async () => {
+    const a = await makeRoleUser("a@x.test", "admin");
+    const b = await makeRoleUser("b@x.test", "admin");
+    await updateUserProfile(b, { role: "member" });
+    // a demoting b's mirror image: now only a is admin
+    await expect(updateUserProfile(a, { role: "member" })).rejects.toThrow(LAST);
+    expect((await getUserById(a))?.role).toBe("admin");
+  });
+
+  it("simultaneous mutual demotion: the second write is refused, one admin remains", async () => {
+    const a = await makeRoleUser("a@x.test", "admin");
+    const b = await makeRoleUser("b@x.test", "admin");
+    // Both requests passed any route-level pre-check before either write.
+    const first = updateUserProfile(b, { role: "member" });
+    const second = updateUserProfile(a, { role: "member" });
+    const results = await Promise.allSettled([first, second]);
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+    const roles = [(await getUserById(a))?.role, (await getUserById(b))?.role];
+    expect(roles.filter((r) => r === "admin")).toHaveLength(1);
+  });
+
+  it("a refused demotion keeps sessionVersion and push subscriptions", async () => {
+    const a = await makeRoleUser("a@x.test", "admin");
+    const before = (await getUserById(a))!.sessionVersion;
+    await expect(updateUserProfile(a, { role: "member" })).rejects.toThrow(LAST);
+    expect((await getUserById(a))!.sessionVersion).toBe(before);
+  });
+
+  it("deleting the last admin is refused", async () => {
+    const a = await makeRoleUser("a@x.test", "admin");
+    await expect(deleteUser(a)).rejects.toThrow(LAST);
+    expect(await getUserById(a)).toBeDefined();
+  });
+
+  it("deleting an admin works while another admin remains; deleting a member always works", async () => {
+    const a = await makeRoleUser("a@x.test", "admin");
+    const b = await makeRoleUser("b@x.test", "admin");
+    const m = await makeRoleUser("m@x.test", "member");
+    await deleteUser(m);
+    await deleteUser(b);
+    expect(await getUserById(b)).toBeUndefined();
+    await expect(deleteUser(a)).rejects.toThrow(LAST);
+  });
+
+  it("a member is not affected by the rule, and promoting always works", async () => {
+    const a = await makeRoleUser("a@x.test", "admin");
+    const m = await makeRoleUser("m@x.test", "member");
+    await updateUserProfile(m, { role: "member", displayName: "M2" });
+    expect((await getUserById(m))?.displayName).toBe("M2");
+    await updateUserProfile(m, { role: "admin" });
+    expect((await getUserById(m))?.role).toBe("admin");
+    await updateUserProfile(a, { role: "member" });
+    expect((await getUserById(a))?.role).toBe("member");
   });
 });

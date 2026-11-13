@@ -393,6 +393,8 @@ weird gets emitted before merging.
 - Use `requireAdmin()` from `lib/auth.ts` to gate admin-only routes
 - The session callback in `auth.config.ts` propagates `role` from JWT → session
 - Family-member CRUD lives in `app/api/users/*`
+- **Last-admin rule**: `updateUserProfile` and `deleteUser` (lib/repos.ts) refuse, inside their own synchronous transaction, any change that leaves zero admins (`LastAdminError` -> 400). Never re-implement it as a route pre-check only: that races.
+- Deleting a user first revokes their ACTIVE Plaid Items at Plaid (`lib/plaid-revoke.ts`, best effort; the response carries `plaidRevokeFailed`). Reuse `revokePlaidItemAtPlaid` for any new path that drops tokens.
 
 ### When you need the current user in a server component or route
 ```ts

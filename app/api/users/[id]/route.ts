@@ -6,9 +6,11 @@ import {
   updateUserProfile,
   updateUserPassword,
   deleteUser,
+  LastAdminError,
   listUsers,
 } from "@/lib/repos";
 import { jsonError } from "@/lib/api";
+import { revokeUserPlaidItems } from "@/lib/plaid-revoke";
 import argon2 from "argon2";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -54,14 +56,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
       return jsonError("forbidden", 403);
     }
 
-    // Prevent an admin from demoting themselves if they're the last admin
-    if (parsed.data.role === "member" && callerId === id) {
-      const allUsers = await listUsers();
-      const adminCount = allUsers.filter((u) => u.role === "admin").length;
-      if (adminCount <= 1) return jsonError("cannot remove the last admin", 400);
+    // The last-admin rule (self or other) is enforced atomically inside
+    // updateUserProfile's transaction; map its error to the existing 400.
+    let updated;
+    try {
+      updated = await updateUserProfile(id, parsed.data);
+    } catch (e) {
+      if (e instanceof LastAdminError) return jsonError(e.message, 400);
+      throw e;
     }
-
-    const updated = await updateUserProfile(id, parsed.data);
     if (!updated) return jsonError("not found", 404);
     return NextResponse.json(updated);
   } catch (e) {
@@ -80,8 +83,24 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     const target = await getUserById(id);
     if (!target) return jsonError("not found", 404);
 
-    await deleteUser(id);
-    return NextResponse.json({ ok: true });
+    // Refuse before touching Plaid when this is the last admin; deleteUser
+    // re-checks atomically inside its transaction.
+    if (target.role === "admin") {
+      const others = (await listUsers()).filter((u) => u.role === "admin" && u.id !== id);
+      if (others.length === 0) return jsonError("cannot remove the last admin", 400);
+    }
+
+    // Revoke the user's Plaid Items first (needs the tokens the delete
+    // cascades away). Best effort: failures never block the delete.
+    const { failed } = await revokeUserPlaidItems(id);
+
+    try {
+      await deleteUser(id);
+    } catch (e) {
+      if (e instanceof LastAdminError) return jsonError(e.message, 400);
+      throw e;
+    }
+    return NextResponse.json({ ok: true, plaidRevokeFailed: failed });
   } catch (e) {
     const msg = (e as Error).message;
     return jsonError(msg, msg === "forbidden" ? 403 : 401);
