@@ -79,6 +79,7 @@ import { hashPassword } from "./auth";
 import { calculateMonthlyHistoryAverage } from "./variable-bills";
 import { log } from "./log";
 import { DEFAULT_TIMEZONE } from "./dates";
+import type { FormerCreditAccount } from "./plaid-relink";
 
 const DEFAULT_CATEGORIES: ReadonlyArray<{ name: string; color: string; kind: "expense" | "income" }> = [
   { name: "Housing", color: "#2563eb", kind: "expense" },
@@ -2569,6 +2570,65 @@ export async function getCreditCardByPlaidAccountId(
       ),
     )
     .get();
+}
+
+/**
+ * Credit accounts on this user's DEACTIVATED Plaid items, each with the cards
+ * provably tied to it: a statement of the card was settled by a draft of that
+ * account (`settled_by_draft_id` → draft `account_id`). Deactivation nulls
+ * `credit_cards.plaid_account_id`, but these rows survive (gotcha 29). The
+ * exchange uses them to re-link a card instead of creating a duplicate
+ * (`matchRelinkCards`, PLAID-3).
+ */
+export async function listFormerPlaidCreditAccounts(
+  userId: string,
+): Promise<FormerCreditAccount[]> {
+  const db = getDb();
+  const accounts = db
+    .select({
+      id: plaidAccounts.id,
+      name: plaidAccounts.name,
+      mask: plaidAccounts.mask,
+      institutionId: plaidItems.institutionId,
+    })
+    .from(plaidAccounts)
+    .innerJoin(plaidItems, eq(plaidAccounts.itemId, plaidItems.id))
+    .where(
+      and(
+        eq(plaidAccounts.userId, userId),
+        eq(plaidItems.userId, userId),
+        eq(plaidItems.isActive, false),
+        eq(plaidAccounts.type, "credit"),
+      ),
+    )
+    .all();
+  if (accounts.length === 0) return [];
+  const ties = db
+    .selectDistinct({
+      cardId: creditCardStatements.cardId,
+      accountId: plaidTransactionDrafts.accountId,
+    })
+    .from(creditCardStatements)
+    .innerJoin(creditCards, eq(creditCardStatements.cardId, creditCards.id))
+    .innerJoin(
+      plaidTransactionDrafts,
+      eq(creditCardStatements.settledByDraftId, plaidTransactionDrafts.id),
+    )
+    .where(
+      and(
+        eq(creditCards.userId, userId),
+        eq(plaidTransactionDrafts.userId, userId),
+        inArray(
+          plaidTransactionDrafts.accountId,
+          accounts.map((a) => a.id),
+        ),
+      ),
+    )
+    .all();
+  return accounts.map((a) => ({
+    ...a,
+    settledCardIds: ties.filter((t) => t.accountId === a.id).map((t) => t.cardId),
+  }));
 }
 
 /**

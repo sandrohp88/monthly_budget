@@ -808,7 +808,7 @@ All encrypt/decrypt happens through `lib/plaid-crypto.ts`.
 
 ### Routes (`app/api/plaid/`)
 - `POST link-token` — creates a short-lived (~30 min) Link token for the frontend widget. Requests `Transactions` (required) + `Liabilities` (optional, see "credit card linkage" below).
-- `POST exchange` — swaps the public token for a permanent access token, encrypts it, fetches initial accounts
+- `POST exchange` — swaps the public token for a permanent access token, encrypts it, fetches initial accounts, re-links or creates a card per credit account (see "When a card is auto-created"), then pulls Liabilities
 - `GET/PATCH/DELETE items[/id]` — manage connected institutions. DELETE first nulls `credit_cards.plaid_account_id` for any cards linked to this item's accounts (so manual cards survive the unlink).
 - `GET/PATCH accounts/[id]` — toggle `syncEnabled` / `useAsStartingBalance`
 - `POST accounts/[id]/link-card` — map a Plaid credit-type account to a manual `credit_cards` row. Body: `{ creditCardId }` (link existing), `{ creditCardId: null }` (unlink), or `{ createNew: { name } }` (create + link). On success, immediately runs Liabilities for the parent item so the card has real cycle days + statement before the response returns.
@@ -829,7 +829,7 @@ anchoring the projection labelled "live" for a week (review 2026-11-10 PLAID-2).
 - The per-item catch in `syncPlaidTransactions` stores `normalizeItemErrorCode(plaidErrorCode(err))` (`UNKNOWN_ERROR` for non-Plaid errors) and returns it in `SyncResult.itemErrors`; a fully successful item clears it, but only an error last seen BEFORE that item's sync started (an ITEM webhook can land mid-sync, outside the sync lock). A failure after the cursor save is stamped with the save time (`last_error_at == last_synced_at`) so the UI says "finished with an error". Only failures that reach that catch count. The optional calls (`/transactions/refresh`, `/accounts/get`, the live balance pull, liabilities) catch their own errors and must stay non-fatal.
 - ITEM webhooks: `ERROR` stores the payload's code, `PENDING_EXPIRATION` / `PENDING_DISCONNECT` / `USER_PERMISSION_REVOKED` store the webhook code, `LOGIN_REPAIRED` clears. They never sync. A successful sync keeps a pending code (the bank still works until it expires), and so does a non-login failure (`recordPlaidItemError` keeps a stored pending code unless the new code is login-type: Plaid sends that warning once).
 - `lib/plaid-item-health.ts` (pure) decides `ok | failing | stale | expiring`; stale = no success for `BANK_SYNC_STALE_AFTER_MS` (4 days: a holiday weekend has no webhook and no page-load sync). /accounts warns per item; the dashboard alerts only for items that feed the starting balance and drops the word "live" from the balance label. Nothing changes a number.
-- Plaid Link update mode is not built: the only recovery for a LOGIN-type code (`LOGIN_TYPE_CODES`) is unlink + link again, and the text states its cost (pending drafts dismissed, card links removed, possible duplicate card — PLAID-3). ❌ Never suggest unlinking for any other code: the per-item catch also catches our own bugs and config errors. Don't render a Reconnect button until update mode exists.
+- Plaid Link update mode is not built: the only recovery for a LOGIN-type code (`LOGIN_TYPE_CODES`) is unlink + link again, and the text states its cost (pending drafts dismissed, card links removed; linking again re-links only the cards it can match, any other comes back as a duplicate — see "When a card is auto-created"). ❌ Never suggest unlinking for any other code: the per-item catch also catches our own bugs and config errors. Don't render a Reconnect button until update mode exists.
 
 ### Client cache invalidation after mutations
 Rule: every client mutation that changes server-rendered data calls
@@ -1004,12 +1004,27 @@ If the bank doesn't support Liabilities (most non-credit-card-issuing banks),
 cached balance still refreshes, and transaction history can still infer the
 cycle once enough recurring payments have posted.
 
-### Why we DON'T auto-create a card on link
-Earlier versions auto-created a `credit_cards` row whenever a credit-type
-Plaid account appeared, deduping by name. That broke when users had existing
-manual cards (silent duplicates) or when banks reported generic names ("Apple
-Card"). Now nothing gets auto-created — the user explicitly picks "link to
-existing" or "create new" via the `/accounts` page chooser.
+### When a card is auto-created (only on link, never on sync)
+`POST exchange` (a new bank link) gives every credit-type account a card:
+it RE-LINKS the user's existing card for the same real account when it can
+prove it, and otherwise creates one named `<account name> ****<mask>` with
+placeholder cycle days. Sync never creates or links a card; after the link,
+the user can still re-map on `/accounts` ("link to existing" / "create new").
+An earlier version deduped by NAME and made silent duplicates; don't go back.
+
+Re-link (PLAID-3): unlink + link again is the only recovery from a broken
+login, and Plaid issues NEW account_ids, so without it the same open statement
+was owed on two cards. `matchRelinkCards` (`lib/plaid-relink.ts`, pure) picks
+an ACTIVE card with `plaid_account_id` NULL whose evidence names exactly one
+(institution, mask) equal to the new account's: a statement settled by a
+draft of a former account on a deactivated item
+(`listFormerPlaidCreditAccounts`), or the unrenamed auto-created name of such
+an account. Exactly one card per account and one account per card, else no
+re-link and a new card as before. The re-link uses `setCreditCardPlaidLink` +
+`seedCreditLimitFromPlaid`, like "link to existing"; nothing else on the card
+changes. ❌ Never match by mask alone or by name alone: a wrong re-link puts
+one account's statements and balance on another card, worse than a duplicate.
+Known fallback: a renamed card with no draft-settled statement gets a new card.
 
 ### "Use as starting balance" opt-in
 In `lib/projection-server.ts`, if any of the user's accounts has
