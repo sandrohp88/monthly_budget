@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import {
   Building2,
   Link2,
@@ -47,7 +46,6 @@ export function AccountsClient({
   initialItems: ItemWithAccounts[];
   initialCards: CardWithStatements[];
 }) {
-  const router = useRouter();
   const refreshAfterMutation = useRefreshAfterMutation();
   const [items, setItems] = React.useState<ItemWithAccounts[]>(initialItems);
   const [cards, setCards] = React.useState<CardWithStatements[]>(initialCards);
@@ -123,7 +121,7 @@ export function AccountsClient({
       // Plaid changes data consumed throughout the app. Clear Next's client
       // route cache so pages visited before this sync render fresh server data
       // the next time the user opens them.
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {

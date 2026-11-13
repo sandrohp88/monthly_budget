@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +19,7 @@ import { cn } from "@/lib/cn";
 import { daysBetween } from "@/lib/dates";
 import { MATCH_WINDOW_DAYS, enumerateBillOccurrences } from "@/lib/bill-reconciliation";
 import { PAYCHECK_MATCH_WINDOW_DAYS } from "@/lib/paycheck-reconciliation";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 export type SplitBillOption = {
   id: string;
@@ -184,7 +184,7 @@ export function TransactionSplitDialog({
   direction?: "credit" | "debit";
   onClose: () => void;
 }) {
-  const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [saving, setSaving] = React.useState(false);
   const incomeSplit = direction === "credit";
   const candidates = React.useMemo(
@@ -245,7 +245,7 @@ export function TransactionSplitDialog({
           ? "Split cleared — back to automatic matching"
           : `Split across ${allocations.length} ${allocations.length === 1 ? "item" : "items"}`,
       );
-      router.refresh();
+      refreshAfterMutation();
       onClose();
     } catch (err) {
       toast.error((err as Error).message);

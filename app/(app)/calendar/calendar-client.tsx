@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { AlertTriangle, ChevronLeft, ChevronRight, CreditCard, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -41,6 +40,7 @@ import { cardPaymentLateWarning, cardPaymentMoveError } from "@/lib/card-payment
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
 import { paydayDates } from "@/lib/projection-insights";
 import type { CardPaymentOp } from "@/lib/validation";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -766,7 +766,7 @@ export function CalendarClient({
   overrides: ReadonlyArray<{ cardId: string; dueDate: string }>;
   timezone: string;
 }) {
-  const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [view, setView] = React.useState<"month" | "paycheck" | "compact">("month");
   const [year, setYear] = React.useState(() => Number(today.slice(0, 4)));
   const [month, setMonth] = React.useState(() => Number(today.slice(5, 7)));
@@ -1111,7 +1111,7 @@ export function CalendarClient({
       setSelectedDate(null);
       toast.success("Bill added");
       // Events come from the server projection bundle — refetch it.
-      router.refresh();
+      refreshAfterMutation();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -1177,7 +1177,7 @@ export function CalendarClient({
       toast.success("Card payment scheduled");
       setSchedulingPayment(null);
       setSelectedDate(null);
-      router.refresh();
+      refreshAfterMutation();
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -1192,7 +1192,7 @@ export function CalendarClient({
       toast.success("Scheduled payment removed");
       setSchedulingPayment(null);
       setSelectedDate(null);
-      router.refresh();
+      refreshAfterMutation();
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -1253,7 +1253,7 @@ export function CalendarClient({
       toast.success("Card payment plan saved");
       setPlanningCardPayment(null);
       setSelectedDate(null);
-      router.refresh();
+      refreshAfterMutation();
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -1273,7 +1273,7 @@ export function CalendarClient({
       toast.success("Card payment plan reset");
       setPlanningCardPayment(null);
       setSelectedDate(null);
-      router.refresh();
+      refreshAfterMutation();
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -1297,7 +1297,7 @@ export function CalendarClient({
       await applyCardPaymentOps(ops);
       toast.success("Scheduled payment deleted");
       setSelectedDate(null);
-      router.refresh();
+      refreshAfterMutation();
     } catch (error) {
       toast.error((error as Error).message);
     } finally {

@@ -56,7 +56,11 @@ const BALANCE_STEP_CENTS = 2468_10;
  * projection summary and is not re-rendered on client navigation, so after a
  * bill archive the sidebar kept the old 30-day delta on every page. (b) Back
  * restored the dashboard payload cached before a settings save. Every client
- * mutation now ends in useRefreshAfterMutation (CLAUDE.md §17).
+ * mutation now ends in refreshAfterMutation() (CLAUDE.md §17).
+ *
+ * The spec navigates IMMEDIATELY after each success toast, on purpose: a
+ * navigation discards a pending router.refresh(), and the helper must still
+ * leave the destination and the layout fresh. Do not add waits here.
  */
 test("bill and settings writes refresh the sidebar and the cached dashboard", async ({ page }) => {
   await ensureAuth(page);

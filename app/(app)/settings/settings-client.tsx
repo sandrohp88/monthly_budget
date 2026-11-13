@@ -504,8 +504,6 @@ export function SettingsClient({
           onSaved={async () => {
             setUserDialog(null);
             await refreshUsers();
-            // Editing yourself changes the name and role in the sidebar.
-            if (editTarget.id === currentUser.id) refreshAfterMutation();
           }}
         />
       ) : null}
@@ -801,6 +799,7 @@ function UserEditDialog({
   onSaved: () => void;
 }) {
   const isSelf = user.id === currentUserId;
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [displayName, setDisplayName] = React.useState(user.displayName);
   const [role, setRole] = React.useState<"admin" | "member">(user.role as "admin" | "member");
   const [newPassword, setNewPassword] = React.useState("");
@@ -817,6 +816,9 @@ function UserEditDialog({
       });
       const profileJson = await profileRes.json();
       if (!profileRes.ok) throw new Error(profileJson.error ?? "update failed");
+      // Editing yourself changes the name and role in the sidebar. Refresh
+      // now: the password reset below may still fail.
+      if (isSelf) refreshAfterMutation();
 
       if (newPassword) {
         const pwRes = await fetch(`/api/users/${user.id}`, {

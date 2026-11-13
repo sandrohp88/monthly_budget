@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { Check, Link2, Pencil, RefreshCw, Search, Sparkles, Split, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
@@ -99,7 +98,6 @@ export function TransactionsClient({
   plannedCardPayments?: SplitExtraOption[];
   incomes?: SplitIncomeOption[];
 }) {
-  const router = useRouter();
   // Linking, un-matching, editing or deleting a transaction settles or
   // un-settles bills, statements and paychecks: projection inputs on the
   // dashboard, calendar and sidebar, and billMatches on this page.
@@ -193,7 +191,7 @@ export function TransactionsClient({
       // The sync also changes projections, balances, statements, and reports.
       // Refreshing here invalidates Next's full client route cache, not just
       // the transaction rows maintained in local state.
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -542,7 +540,7 @@ function TransactionBillLinkDialog({
   onClose: () => void;
   onSaved: (updated: DraftWithAccount) => void;
 }) {
-  const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   // Radix Select can't use an empty-string item value, so "not linked" gets a sentinel.
   const NONE = "__none__";
   const [billId, setBillId] = React.useState<string>(transaction.linkedBillId ?? NONE);
@@ -563,7 +561,7 @@ function TransactionBillLinkDialog({
       onSaved({ ...transaction, ...json.draft });
       // The PAID BILL markers come from the server-side reconciliation —
       // refresh re-renders the page with the new match (and learned alias).
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {

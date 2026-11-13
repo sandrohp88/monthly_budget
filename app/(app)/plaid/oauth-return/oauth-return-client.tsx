@@ -65,9 +65,11 @@ export function OAuthReturnClient() {
         toast.success("Account linked successfully");
         try { window.localStorage.removeItem(PLAID_LINK_TOKEN_STORAGE_KEY); } catch {}
         // A new item is a new balance source; the shared layout (sidebar) is
-        // not re-rendered by the client navigation below.
-        refreshAfterMutation();
+        // not re-rendered by a client navigation. Navigate first: a refresh
+        // dispatched before it would be discarded by it, while one dispatched
+        // after it is queued behind it.
         router.replace("/accounts");
+        refreshAfterMutation();
       } catch (err) {
         toast.error((err as Error).message);
         setError((err as Error).message);

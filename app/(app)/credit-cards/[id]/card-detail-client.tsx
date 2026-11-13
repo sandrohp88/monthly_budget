@@ -57,6 +57,7 @@ import {
   StatementEditDialog,
   type PromoScheduledPayment,
 } from "../card-dialogs";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 export type CycleEstimate = {
   window: { start: string; end: string };
@@ -104,6 +105,7 @@ export function CardDetailClient({
   timezone: string;
 }) {
   const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   const today = todayIso(timezone);
 
   const [editOpen, setEditOpen] = React.useState(false);
@@ -116,7 +118,7 @@ export function CardDetailClient({
   const [schedulePromo, setSchedulePromo] = React.useState<CreditCardPromoRow | null>(null);
   const [reconcileOpen, setReconcileOpen] = React.useState(false);
 
-  const refresh = () => router.refresh();
+  const refresh = () => refreshAfterMutation();
 
   const archiveCard = async () => {
     if (!(await confirmDialog({ title: "Archive this card?", description: "Statement history is kept.", confirmText: "Archive" }))) return;
@@ -148,7 +150,7 @@ export function CardDetailClient({
     }
     toast.success("Card archived");
     router.push("/credit-cards");
-    router.refresh();
+    refreshAfterMutation();
   };
 
   const name = cardDisplayName(card.name, institution);

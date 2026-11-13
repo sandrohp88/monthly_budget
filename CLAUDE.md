@@ -813,30 +813,46 @@ All encrypt/decrypt happens through `lib/plaid-crypto.ts`.
 - Amount sign convention: **positive = expense/debit, negative = refund/credit** (matches Plaid's convention; multiply by 100 and round).
 
 ### Client cache invalidation after mutations
-Rule: every client mutation that changes server-rendered data calls the
-refresh returned by `useRefreshAfterMutation()` (`lib/refresh-after-mutation.ts`)
-on success, after its own local state update and toast. A plain `fetch` to an
-API route does not invalidate Next's client route cache: Back restores page
-payloads cached before the write (the dashboard keeps the old starting balance,
-or still treats an un-matched bill as paid), and the shared `(app)` layout —
-the sidebar net position and 30-day delta from `buildProjection` — is not
-re-rendered on client navigation, so it stays stale on every page until a
-reload. In Next 15, `router.refresh()` clears that whole route cache and
-re-renders server components while preserving client and browser state, so
-local lists, open dialogs and focus survive. The helper coalesces bursts (the
-paycheck inline editors save per keystroke): one refresh at once, then at most
-one trailing refresh per 500 ms. Do not swap it for full reloads. Plaid syncs
-(`/accounts`, `/transactions`) and paycheck creates/deletes/schedule saves
-already call `router.refresh()` directly; that also satisfies the rule.
-`lib/refresh-after-mutation.contract.test.ts` fails for any file under
-`app/(app)/**` or `components/**` with a mutating `fetch` (POST/PUT/PATCH/DELETE)
-that neither calls the helper, `router.refresh()` nor `window.location.reload()`;
-a file that only mutates through a caller's callback, or changes nothing
-server-rendered (push subscriptions), goes on its allowlist with a reason.
-Note for paychecks: migration 0029 does not recreate a deleted occurrence —
-`settlePaycheckWithDraft` refuses an inactive row, and the matcher only sees
-active unreconciled paychecks — so a stale cached projection there is wrong
-until refreshed.
+Rule: every client mutation that changes server-rendered data calls
+`refreshAfterMutation()` (from `const refreshAfterMutation =
+useRefreshAfterMutation()`, `lib/refresh-after-mutation.ts`) on success, after
+its own local state update and toast. Never a bare `router.refresh()`.
+
+Why: a plain `fetch` to an API route does not invalidate Next's client route
+cache. Back restores page payloads cached before the write (the dashboard keeps
+the old starting balance, or still treats an un-matched bill as paid), and the
+shared `(app)` layout — the sidebar net position and 30-day delta from
+`buildProjection` — is not re-rendered on client navigation, so it stays stale
+on every page until a reload. `router.refresh()` clears that cache and
+re-renders server components (layout included) while keeping client state —
+but only once its server response is APPLIED. In Next 15 (checked in 15.5.26,
+`app-router-instance.js` `dispatchAction`) a refresh is an async router
+action; a NAVIGATE or RESTORE (Back/Forward) dispatched while it is pending
+marks it `discarded` and its result, including the cache reset, is dropped.
+A refresh dispatched while a navigation is pending is queued behind it instead,
+so navigate first, then refresh (as `card-detail-client` archive and the Plaid
+OAuth return do).
+
+The helper handles the discard: a leading refresh at once plus always one
+trailing refresh 500 ms later (calls in between are absorbed, so
+save-per-keystroke editors cost about 2 refreshes/s), and for 10 s after the
+last mutation `<RefreshOnNavigation />` (mounted once in `app/(app)/layout.tsx`)
+re-requests a coalesced refresh after every client navigation commits, which
+re-renders the page the user landed on and the layout. Navigations never extend
+the 10 s, so there is no loop. Remaining gap: if every refresh in those 10 s is
+discarded by navigations, data stays stale until the next mutation or reload.
+Do not swap the helper for full reloads or a bare `router.refresh()`.
+
+`lib/refresh-after-mutation.contract.test.ts` counts, per file under
+`app/(app)/**` and `components/**`, mutating `fetch` call sites
+(POST/PUT/PATCH/DELETE) against `refreshAfterMutation()` /
+`window.location.reload()` calls; they must match, or differ by the exact number
+in its `FETCHES_MINUS_REFRESHES` table with a reason (a read-only POST, a dialog
+whose caller refreshes, push subscriptions). It also forbids a bare
+`router.refresh()` there. Note for paychecks: migration 0029 does not recreate a
+deleted occurrence — `settlePaycheckWithDraft` refuses an inactive row, and the
+matcher only sees active unreconciled paychecks — so a stale cached projection
+there is wrong until refreshed.
 
 ### Cached vs live balances (read before touching balance code)
 `/transactions/sync`'s `data.accounts` and `/accounts/get` both return the

@@ -1,12 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Money } from "@/components/money";
 import { dollarsToCents } from "@/lib/money";
 import { cn } from "@/lib/cn";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 /**
  * Click-to-edit current balance for MANUAL credit cards (linked cards sync
@@ -26,7 +26,7 @@ export function InlineBalanceEditor({
   textClassName?: string;
   inputClassName?: string;
 }) {
-  const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [editing, setEditing] = React.useState(false);
   const [text, setText] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -74,7 +74,7 @@ export function InlineBalanceEditor({
       }
       toast.success("Balance updated");
       setEditing(false);
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
