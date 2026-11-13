@@ -286,7 +286,7 @@ This is the most foot-gun-heavy area. Lessons learned the hard way:
    - Use the same SQL style as `0000_moaning_madrox.sql` (backticks around identifiers, `--> statement-breakpoint` between statements).
 3. **Update `lib/db/migrations/meta/_journal.json`** — append a new entry with the next `idx` and the `tag` matching the filename (without `.sql`).
 4. Run `npm run check` to confirm types.
-5. Restart `npm run dev` (or rebuild Docker). On boot, `runMigrations()` will apply the new file.
+5. Restart `npm run dev` (or rebuild Docker). On boot, `runMigrations()` will apply the new file: `instrumentation.ts` `register()` runs it before the push scheduler starts (so webhooks/API routes never see a stale schema); the page-level calls stay. Next bundles instrumentation and app pages as separate module instances, so the once-per-process guard in `lib/db/client.ts` is per instance: migrate and the tracking check run once at boot and once more on the first page render in each process, and find nothing to apply. A migration failure at boot fails startup. Known limit: the process stays up and returns 500 (including `/api/health`) until someone restarts the container; `restart: unless-stopped` does not restart an unhealthy container.
 
 ### What NEVER to do
 
@@ -522,7 +522,7 @@ If you switch base images, verify the user UID still matches the host owner.
 ### Backups
 The `budget-backup` container runs `scripts/backup.sh` via crond at 03:00
 local time. It does `VACUUM INTO` to `/backups/budget-YYYYMMDD-HHMMSS.db` and
-keeps the newest 14 of those nightly files. Pre-deploy (and any other ad-hoc) backups go to
+keeps the newest 14 of those nightly files. A missing or empty `/data/budget.db` makes it exit 1 with a message on stderr (cron appends it to `/var/log/backup.log` inside the container; nothing alerts on it). `npm run backup` (`scripts/backup.js`) uses the same naming and nightly-only prune. Pre-deploy (and any other ad-hoc) backups go to
 `/backups/adhoc/`, which the deploy script trims to the newest 20; they never count toward the
 nightly 14 and aren't mirrored offsite. Pull a backup off LXC 125 with `scp`
 from `/opt/budget/backups/`. Note: the backup container is read-only —

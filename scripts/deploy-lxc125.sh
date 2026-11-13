@@ -29,9 +29,11 @@
 #
 #   PRUNE_UNTRACKED=1 scripts/deploy-lxc125.sh
 #
-# Migrations run on the first page render; the startup check fails loudly if
-# migration tracking is out of sync (see CLAUDE.md §7). Load /login after a
-# deploy and check the logs.
+# Migrations run at server boot (instrumentation register()); the startup check
+# fails loudly if migration tracking is out of sync (see CLAUDE.md §7). A
+# migration failure makes every request, including /api/health, return 500,
+# which fails this script's health poll. Load /login after a deploy and check
+# the logs.
 set -euo pipefail
 
 HOST=pve-7050
