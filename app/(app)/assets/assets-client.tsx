@@ -38,6 +38,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { todayIso } from "@/lib/dates";
 import type { AssetRow } from "@/lib/db/schema";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 const ASSET_CATEGORIES = [
   { value: "real_estate", label: "Real estate" },
@@ -64,6 +65,8 @@ export function AssetsClient({
   initialAssets: AssetRow[];
   timezone: string;
 }) {
+  // Assets feed net worth on /reports (not the sidebar or the projection).
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [items, setItems] = React.useState<AssetRow[]>(initialAssets);
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<AssetRow | null>(null);
@@ -96,6 +99,7 @@ export function AssetsClient({
       const res = await fetch(`/api/assets/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("delete failed");
       toast.success("Asset archived");
+      refreshAfterMutation();
     } catch (err) {
       setItems(prev);
       toast.error((err as Error).message);
@@ -278,6 +282,7 @@ export function AssetsClient({
               }
               setDialogOpen(false);
               setEditing(null);
+              refreshAfterMutation();
             }}
           />
         </DialogContent>

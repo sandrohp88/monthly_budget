@@ -17,6 +17,7 @@ import { MoneyInput } from "@/components/money-input";
 import { Money } from "@/components/money";
 import { cn } from "@/lib/cn";
 import type { DraftWithAccount } from "@/app/api/plaid/drafts/route";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 interface PlaidDraftApproveDialogProps {
   draft: DraftWithAccount;
@@ -44,6 +45,7 @@ export function PlaidDraftApproveDialog({
   onClose,
   onApproved,
 }: PlaidDraftApproveDialogProps) {
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [date, setDate] = React.useState(draft.date);
   const [description, setDescription] = React.useState(
     draft.merchantName ?? draft.description,
@@ -117,6 +119,8 @@ export function PlaidDraftApproveDialog({
           : "Transaction approved and added to one-time expenses",
       );
       onApproved();
+      // Approval adds a one-time expense or a promo: both feed the projection.
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {

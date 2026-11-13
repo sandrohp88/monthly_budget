@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { Check, Link2, Pencil, RefreshCw, Search, Sparkles, Split, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
@@ -42,6 +41,7 @@ import { looksLikeReversal } from "@/lib/plaid-transaction-kind";
 import { syncFailureMessage } from "@/lib/plaid-item-health";
 import type { SyncItemError } from "@/lib/plaid-sync";
 import type { DraftWithAccount } from "@/app/api/plaid/drafts/route";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 type FilterKey = "all" | "debits" | "credits" | "bills" | "card_payments" | "promos";
 
@@ -100,7 +100,10 @@ export function TransactionsClient({
   plannedCardPayments?: SplitExtraOption[];
   incomes?: SplitIncomeOption[];
 }) {
-  const router = useRouter();
+  // Linking, un-matching, editing or deleting a transaction settles or
+  // un-settles bills, statements and paychecks: projection inputs on the
+  // dashboard, calendar and sidebar, and billMatches on this page.
+  const refreshAfterMutation = useRefreshAfterMutation();
   const invalidSplits = React.useMemo(() => new Set(invalidSplitIds), [invalidSplitIds]);
   const orphanedSplits = React.useMemo(() => new Set(orphanedSplitIds), [orphanedSplitIds]);
   const [transactions, setTransactions] = React.useState(initialTransactions);
@@ -143,6 +146,7 @@ export function TransactionsClient({
       if (!res.ok || !json.draft) throw new Error(json.error ?? "Confirm failed");
       setTransactions((rows) => rows.map((r) => (r.id === txn.id ? json.draft! : r)));
       toast.success(`Linked to ${match.billName}`);
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     }
@@ -161,6 +165,7 @@ export function TransactionsClient({
       setTransactions((rows) => rows.map((r) => (r.id === txn.id ? json.draft! : r)));
       setRejectedMatchIds((ids) => new Set([...ids, txn.id]));
       toast.success("Match removed — this transaction won't auto-match bills");
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     }
@@ -196,7 +201,7 @@ export function TransactionsClient({
       // The sync also changes projections, balances, statements, and reports.
       // Refreshing here invalidates Next's full client route cache, not just
       // the transaction rows maintained in local state.
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -212,6 +217,7 @@ export function TransactionsClient({
       const res = await fetch(`/api/plaid/drafts/${txn.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Delete failed");
       toast.success("Transaction deleted");
+      refreshAfterMutation();
     } catch (err) {
       setTransactions(previous);
       toast.error((err as Error).message);
@@ -485,6 +491,7 @@ export function TransactionsClient({
           onSaved={(updated) => {
             setTransactions((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
             setEditing(null);
+            refreshAfterMutation();
           }}
         />
       ) : null}
@@ -496,6 +503,7 @@ export function TransactionsClient({
           onSaved={(updated) => {
             setTransactions((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
             setPromoTxn(null);
+            refreshAfterMutation();
           }}
         />
       ) : null}
@@ -542,7 +550,7 @@ function TransactionBillLinkDialog({
   onClose: () => void;
   onSaved: (updated: DraftWithAccount) => void;
 }) {
-  const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   // Radix Select can't use an empty-string item value, so "not linked" gets a sentinel.
   const NONE = "__none__";
   const [billId, setBillId] = React.useState<string>(transaction.linkedBillId ?? NONE);
@@ -563,7 +571,7 @@ function TransactionBillLinkDialog({
       onSaved({ ...transaction, ...json.draft });
       // The PAID BILL markers come from the server-side reconciliation —
       // refresh re-renders the page with the new match (and learned alias).
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {

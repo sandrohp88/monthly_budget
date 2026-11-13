@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { usePlaidLink } from "react-plaid-link";
 import { toast } from "sonner";
 import { PLAID_LINK_TOKEN_STORAGE_KEY } from "@/lib/plaid-link-storage";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 /**
@@ -24,6 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
  */
 export function OAuthReturnClient() {
   const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [linkToken, setLinkToken] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [exchanging, setExchanging] = React.useState(false);
@@ -62,7 +64,12 @@ export function OAuthReturnClient() {
         if (!res.ok) throw new Error(json.error ?? "Exchange failed");
         toast.success("Account linked successfully");
         try { window.localStorage.removeItem(PLAID_LINK_TOKEN_STORAGE_KEY); } catch {}
+        // A new item is a new balance source; the shared layout (sidebar) is
+        // not re-rendered by a client navigation. Navigate first: a refresh
+        // dispatched before it would be discarded by it, while one dispatched
+        // after it is queued behind it.
         router.replace("/accounts");
+        refreshAfterMutation();
       } catch (err) {
         toast.error((err as Error).message);
         setError((err as Error).message);

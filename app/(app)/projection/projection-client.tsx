@@ -20,7 +20,6 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +44,7 @@ import { addDaysIso, startOfMonthIso } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 import { balanceToneClass } from "@/lib/balance-tone";
 import { showsPostedBalance } from "@/lib/soft-balance";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Filter
@@ -214,7 +214,7 @@ export function ProjectionClient({
   promoSummariesByCard: Record<string, PromoPaymentSummary[]>;
   variableBillCategories?: Record<string, string[]>;
 }) {
-  const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [filter, setFilter] = React.useState<FilterKey>("ALL");
   const [cardsOnly, setCardsOnly] = React.useState(false);
   const [adjustingPayment, setAdjustingPayment] = React.useState<PaymentAdjustment | null>(null);
@@ -359,7 +359,7 @@ export function ProjectionClient({
           : "Planned payment updated",
       );
       setAdjustingPayment(null);
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -380,7 +380,7 @@ export function ProjectionClient({
       }
       toast.success("Planned payment reset");
       setAdjustingPayment(null);
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {

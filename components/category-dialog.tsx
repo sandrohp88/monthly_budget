@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/cn";
 import type { CategoryRow } from "@/lib/db/schema";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 const PALETTE = [
   "#4ade80", "#22c55e", "#16a34a", "#14b8a6",
@@ -34,6 +35,7 @@ export function CategoryDialog({
   onCreated: (c: CategoryRow) => void;
   defaultKind?: "expense" | "income";
 }) {
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [name, setName] = React.useState("");
   const [color, setColor] = React.useState(PALETTE[0]!);
   const [kind, setKind] = React.useState<"expense" | "income">(defaultKind);
@@ -63,6 +65,8 @@ export function CategoryDialog({
       if (!res.ok) throw new Error(json.error ?? "create failed");
       toast.success(`Category "${name.trim()}" added`);
       onCreated(json.category as CategoryRow);
+      // Other pages render the category list (bill/expense forms, reports).
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {

@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AlertBar } from "@/components/ui/alert-bar";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
@@ -10,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Money } from "@/components/money";
 import { DateLabel } from "@/components/date-label";
 import type { UnpaidRecentOccurrence } from "@/lib/bill-reconciliation";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
 type Answered = {
   billId: string;
@@ -52,7 +52,7 @@ export function PendingPostingAlert({
   unattributedCents: number;
   today: string;
 }) {
-  const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [busy, setBusy] = React.useState<string | null>(null);
 
   async function send(
@@ -86,7 +86,7 @@ export function PendingPostingAlert({
         throw new Error(payload?.error ?? "Could not save");
       }
       toast.success(successMessage);
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -115,7 +115,7 @@ export function PendingPostingAlert({
       }
       if (!res.ok) throw new Error("Could not cancel the plan");
       toast.success("Payment plan cancelled — reserved cash released");
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {

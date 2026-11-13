@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import {
   Building2,
   Link2,
@@ -24,6 +23,7 @@ import { PlaidLinkButton } from "@/components/plaid-link-button";
 import { PlaidLinkCardDialog } from "@/components/plaid-link-card-dialog";
 import { cn } from "@/lib/cn";
 import { interestSavingCashDueCents } from "@/lib/credit-cards";
+import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 import { isoDateInTimeZone } from "@/lib/dates";
 import {
   assessBankHealth,
@@ -63,7 +63,7 @@ export function AccountsClient({
   /** settings.timezone: sync dates are shown as the user's calendar date. */
   timeZone: string;
 }) {
-  const router = useRouter();
+  const refreshAfterMutation = useRefreshAfterMutation();
   const [items, setItems] = React.useState<ItemWithAccounts[]>(initialItems);
   const [cards, setCards] = React.useState<CardWithStatements[]>(initialCards);
   const [syncing, setSyncing] = React.useState(false);
@@ -157,7 +157,7 @@ export function AccountsClient({
       // Plaid changes data consumed throughout the app. Clear Next's client
       // route cache so pages visited before this sync render fresh server data
       // the next time the user opens them.
-      router.refresh();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -171,6 +171,8 @@ export function AccountsClient({
     if (!res.ok) { toast.error("Unlink failed"); return; }
     toast.success(`${name} unlinked`);
     await Promise.all([refreshItems(), refreshCards()]);
+    // Its balances, transactions and linked cards leave every projection.
+    refreshAfterMutation();
   };
 
   const unlinkCardFromPlaid = async (plaidAccountId: string) => {
@@ -187,6 +189,7 @@ export function AccountsClient({
       }
       toast.success("Card unlinked from Plaid account");
       await refreshCards();
+      refreshAfterMutation();
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -206,6 +209,9 @@ export function AccountsClient({
     });
     if (!res.ok) { toast.error("Update failed"); return; }
     await refreshItems();
+    // useAsStartingBalance replaces the projection's starting balance (the
+    // sidebar and dashboard); syncEnabled changes what the next sync imports.
+    refreshAfterMutation();
   };
 
   // ── render ────────────────────────────────────────────────────────────────
@@ -229,6 +235,7 @@ export function AccountsClient({
               onLinked={async () => {
                 await refreshItems();
                 toast.success("Account linked — click Sync Now to import transactions");
+                refreshAfterMutation();
               }}
             />
           </div>
@@ -281,7 +288,12 @@ export function AccountsClient({
               <p className="text-[11px] tracking-wide text-[var(--text-2)]">
                 Link a bank account or credit card to start importing transactions automatically.
               </p>
-              <PlaidLinkButton onLinked={async () => { await refreshItems(); }} />
+              <PlaidLinkButton
+                onLinked={async () => {
+                  await refreshItems();
+                  refreshAfterMutation();
+                }}
+              />
             </div>
           </Card>
         ) : (
