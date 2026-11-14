@@ -1,5 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { test, expect } from "@playwright/test";
 import { ensureAuth } from "./auth";
+
+const assetName = `Vintage Guitar Asset E2E ${randomUUID()}`;
+
+test.afterEach(async ({ page }) => {
+  // Keep the total-assets assertions valid when this test reuses a DB.
+  const response = await page.request.get("/api/assets");
+  expect(response.ok()).toBe(true);
+  const { assets } = (await response.json()) as { assets: { id: string; name: string }[] };
+  for (const asset of assets.filter((asset) => asset.name === assetName)) {
+    const removed = await page.request.delete(`/api/assets/${asset.id}`);
+    expect(removed.ok()).toBe(true);
+  }
+});
 
 test("asset: add via UI, appears with its value, edit updates value and the net-worth tile", async ({
   page,
@@ -11,12 +25,12 @@ test("asset: add via UI, appears with its value, edit updates value and the net-
 
   const createDialog = page.getByRole("dialog");
   await expect(createDialog.getByRole("heading", { name: /add asset/i })).toBeVisible();
-  await createDialog.locator("#name").fill("Vintage Guitar Asset E2E");
+  await createDialog.locator("#name").fill(assetName);
   await createDialog.locator("input[inputmode='decimal']").fill("812.34");
   await createDialog.getByRole("button", { name: /^save$/i }).click();
   await expect(createDialog).toBeHidden();
 
-  const assetRow = page.locator("tr").filter({ hasText: "Vintage Guitar Asset E2E" });
+  const assetRow = page.locator("tr").filter({ hasText: assetName });
   await expect(assetRow).toHaveCount(1);
   await expect(assetRow).toContainText("$812.34");
 

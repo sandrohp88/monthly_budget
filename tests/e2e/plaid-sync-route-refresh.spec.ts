@@ -94,7 +94,7 @@ test("Plaid sync buttons invalidate data cached for other pages", async ({ page 
     });
 
     await page.getByRole("button", { name: /sync now/i }).click();
-    await expect(page.getByText(/sync complete/i)).toBeVisible();
+    await expect(page.getByText("Sync complete — 1 new, 0 updated", { exact: true })).toBeVisible();
 
     await page.getByRole("link", { name: /^credit cards/i }).first().click();
     await page.waitForURL("**/credit-cards");
@@ -107,7 +107,7 @@ test("Plaid sync buttons invalidate data cached for other pages", async ({ page 
     await page.getByRole("link", { name: /^transactions/i }).first().click();
     await page.waitForURL("**/transactions");
     await page.getByRole("button", { name: /sync now/i }).click();
-    await expect(page.getByText(/sync complete/i)).toBeVisible();
+    await expect(page.getByText("Sync complete - 1 new, 0 updated", { exact: true })).toBeVisible();
 
     await page.getByRole("link", { name: /^credit cards/i }).first().click();
     await page.waitForURL("**/credit-cards");
