@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError, readJson } from "@/lib/api";
 import { importAll, previewImport } from "@/lib/repos";
-import { writePreImportSnapshot } from "@/lib/backup-snapshot";
+import { deletePreImportSnapshot, prunePreImportSnapshots, writePreImportSnapshot } from "@/lib/backup-snapshot";
 import { backupImportSchema } from "@/lib/validation";
 
 /**
@@ -26,7 +26,13 @@ export async function POST(req: Request) {
     if (!confirmed) return NextResponse.json({ ok: true, applied: false, preview });
 
     const snapshot = await writePreImportSnapshot(auth.userId);
-    await importAll(auth.userId, data);
+    try {
+      await importAll(auth.userId, data);
+    } catch (e) {
+      deletePreImportSnapshot(snapshot);
+      throw e;
+    }
+    prunePreImportSnapshots(auth.userId);
     return NextResponse.json({
       ok: true,
       applied: true,

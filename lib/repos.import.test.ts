@@ -5,6 +5,7 @@ import fs from "node:fs";
 
 vi.mock("./auth", () => ({
   hashPassword: async (p: string) => `mock-hash-${p}`,
+  getCurrentUserId: vi.fn(),
 }));
 vi.mock("server-only", () => ({}));
 
@@ -28,8 +29,10 @@ import {
   assets,
 } from "./db/schema";
 import { newId } from "./ids";
+import { getCurrentUserId } from "./auth";
+import { POST as importBackup } from "@/app/api/backup/import/route";
 import { buildProjection } from "./projection-server";
-import { snapshotDir, writePreImportSnapshot } from "./backup-snapshot";
+import { prunePreImportSnapshots, snapshotDir, writePreImportSnapshot } from "./backup-snapshot";
 import {
   importAll,
   exportAll,
@@ -75,6 +78,8 @@ beforeEach(() => {
   runMigrations();
 });
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
   __resetDbCacheForTests();
   try {
     fs.rmSync(dbDir, { recursive: true, force: true });
@@ -919,16 +924,106 @@ describe("backup import / semantic round trip", () => {
 });
 
 describe("backup import / pre-import snapshot", () => {
-  it("writes the current data and keeps only the newest five per user", async () => {
+  it("failed confirm attempts preserve every older snapshot and its contents", async () => {
+    const user = await makeUser("a@example.com");
+    const other = await makeUser("other@example.com");
+    const card = await createCreditCard(other.id, {
+      name: "Other user's card", statementDay: 5, dueDay: 25, autoPay: false, isActive: true,
+    });
+    for (let i = 0; i < 5; i++) {
+      await writePreImportSnapshot(user.id, new Date(Date.UTC(2026, 8, 21, 0, 0, i)));
+    }
+    const files = () => Object.fromEntries(
+      fs.readdirSync(snapshotDir()).sort().map((name) => [
+        name, fs.readFileSync(path.join(snapshotDir(), name), "utf8"),
+      ]),
+    );
+    const before = files();
+    const dataBefore = await exportAll(user.id);
+    vi.mocked(getCurrentUserId).mockResolvedValue(user.id);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["Date"] });
+
+    // This passes preview validation but collides with another user's primary
+    // key inside importAll, after the pre-import snapshot has been written.
+    const payload = envelope({
+      creditCards: [{ id: card.id, name: "Collision", statementDay: 5, dueDay: 25 }],
+    });
+    for (let i = 0; i < 6; i++) {
+      vi.setSystemTime(new Date(Date.UTC(2026, 8, 22, 0, 0, i)));
+      const response = await importBackup(new Request("http://localhost/api/backup/import?confirm=1", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }));
+      expect(response.status).toBe(500);
+      expect(files()).toEqual(before);
+      expect(await exportAll(user.id)).toEqual({ ...dataBefore, exportedAt: expect.any(String) });
+    }
+  });
+
+  it("writes the current data and keeps only the newest five per user after success", async () => {
     const user = await makeUser("a@example.com");
     const names: string[] = [];
     for (let i = 0; i < 7; i++) {
       names.push(await writePreImportSnapshot(user.id, new Date(Date.UTC(2026, 8, 21, 0, 0, i))));
+      prunePreImportSnapshots(user.id);
     }
     const kept = fs.readdirSync(snapshotDir()).filter((f) => f.startsWith(user.id)).sort();
     expect(kept).toEqual(names.slice(2));
     const saved = JSON.parse(fs.readFileSync(path.join(snapshotDir(), kept[0]!), "utf8"));
     expect(backupImportSchema.safeParse(saved).success).toBe(true);
+  });
+
+  it("a successful confirm saves the replaced data and prunes only that user's oldest snapshot", async () => {
+    const user = await makeUser("a@example.com");
+    const other = await makeUser("other@example.com");
+    const card = await createCreditCard(user.id, {
+      name: "Before restore", statementDay: 5, dueDay: 25, autoPay: false, isActive: true,
+    });
+    const names: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      names.push(await writePreImportSnapshot(user.id, new Date(Date.UTC(2026, 8, 21, 0, 0, i))));
+    }
+    const otherName = await writePreImportSnapshot(other.id, new Date("2026-09-20T00:00:00Z"));
+    const otherContents = fs.readFileSync(path.join(snapshotDir(), otherName), "utf8");
+    vi.mocked(getCurrentUserId).mockResolvedValue(user.id);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-22T00:00:00Z"));
+
+    const response = await importBackup(new Request("http://localhost/api/backup/import?confirm=1", {
+      method: "POST", body: JSON.stringify(envelope({})),
+    }));
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.applied).toBe(true);
+    expect((await exportAll(user.id)).creditCards).toEqual([]);
+    const saved = JSON.parse(fs.readFileSync(path.join(snapshotDir(), result.snapshot), "utf8"));
+    expect(saved.creditCards.map((c: { id: string }) => c.id)).toEqual([card.id]);
+    expect(fs.readdirSync(snapshotDir()).filter((f) => f.startsWith(`${user.id}-`)).sort())
+      .toEqual([...names.slice(1), result.snapshot]);
+    expect(fs.readFileSync(path.join(snapshotDir(), otherName), "utf8")).toBe(otherContents);
+  });
+
+  it("a snapshot name collision preserves the older file and blocks import writes", async () => {
+    const user = await makeUser("a@example.com");
+    await createCreditCard(user.id, {
+      name: "Keep me", statementDay: 5, dueDay: 25, autoPay: false, isActive: true,
+    });
+    vi.mocked(getCurrentUserId).mockResolvedValue(user.id);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-22T00:00:00Z"));
+    const name = await writePreImportSnapshot(user.id);
+    const contents = fs.readFileSync(path.join(snapshotDir(), name), "utf8");
+    const before = await exportAll(user.id);
+
+    const response = await importBackup(new Request("http://localhost/api/backup/import?confirm=1", {
+      method: "POST", body: JSON.stringify(envelope({})),
+    }));
+    expect(response.status).toBe(500);
+    expect(await exportAll(user.id)).toEqual(before);
+    expect(fs.readdirSync(snapshotDir())).toEqual([name]);
+    expect(fs.readFileSync(path.join(snapshotDir(), name), "utf8")).toBe(contents);
   });
 });
 

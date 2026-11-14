@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveDbPath } from "./db/client";
 import { exportAll } from "./repos";
 
-/** Pre-import snapshots kept per user; older ones are pruned. */
+/** Pre-import snapshots kept per user after a successful import. */
 const KEEP_PER_USER = 5;
 
 export function snapshotDir(): string {
@@ -25,8 +25,13 @@ export async function writePreImportSnapshot(userId: string, now = new Date()): 
   const stamp = now.toISOString().replace(/[:.]/g, "-");
   const name = `${userId}-${stamp}.json`;
   const data = await exportAll(userId);
-  fs.writeFileSync(path.join(dir, name), JSON.stringify(data), { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, name), JSON.stringify(data), { mode: 0o600, flag: "wx" });
+  return name;
+}
 
+/** Only prune after the import commits, so failed attempts preserve undo files. */
+export function prunePreImportSnapshots(userId: string): void {
+  const dir = snapshotDir();
   const mine = fs
     .readdirSync(dir)
     .filter((f) => f.startsWith(`${userId}-`) && f.endsWith(".json"))
@@ -34,5 +39,9 @@ export async function writePreImportSnapshot(userId: string, now = new Date()): 
   for (const old of mine.slice(0, Math.max(0, mine.length - KEEP_PER_USER))) {
     fs.rmSync(path.join(dir, old), { force: true });
   }
-  return name;
+}
+
+/** Discard only the snapshot written for an import that rolled back. */
+export function deletePreImportSnapshot(name: string): void {
+  fs.rmSync(path.join(snapshotDir(), name), { force: true });
 }
