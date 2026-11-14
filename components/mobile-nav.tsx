@@ -54,7 +54,7 @@ export function MobileNav({
         </div>
 
         {/* nav */}
-        <nav className="flex-1 overflow-y-auto py-3">
+        <nav aria-label="Mobile" className="flex-1 overflow-y-auto py-3">
           <SectionLabel>Core</SectionLabel>
           {NAV.filter((n) => n.section === 1).map((item) => (
             <NavItem

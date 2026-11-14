@@ -56,6 +56,12 @@ export function AppShell({
         data-app-shell
         className="flex h-screen w-full overflow-hidden bg-[var(--bg-0)] text-[var(--text-0)]"
       >
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-[2px] focus:border focus:border-[var(--cyan)] focus:bg-[var(--bg-1)] focus:px-4 focus:py-2 focus:text-[13px] focus:font-semibold focus:tracking-[0.12em] focus:text-[var(--text-0)] focus:uppercase focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+        >
+          Skip to main content
+        </a>
         <Sidebar displayName={displayName} role={role} summary={sidebarSummary ?? null} />
         <MobileNav
           open={mobileNavOpen}
@@ -88,7 +94,13 @@ export function AppShell({
               <ThemeToggle />
             </div>
           </header>
-          <main className="min-h-0 flex-1 overflow-auto px-4 pt-7 pb-28 md:px-9 md:pb-16">{children}</main>
+          <main
+            id="main-content"
+            tabIndex={-1}
+            className="min-h-0 flex-1 overflow-auto px-4 pt-7 pb-28 md:px-9 md:pb-16"
+          >
+            {children}
+          </main>
         </div>
         <MobileTabBar />
       </div>

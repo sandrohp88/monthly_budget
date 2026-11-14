@@ -126,7 +126,7 @@ export function Sidebar({
       </div>
 
       {/* nav */}
-      <nav className="flex-1 overflow-y-auto py-3">
+      <nav aria-label="Primary" className="flex-1 overflow-y-auto py-3">
         <SectionLabel>Core</SectionLabel>
         {NAV.filter((n) => n.section === 1).map(renderItem)}
         <SectionLabel className="mt-4">More</SectionLabel>

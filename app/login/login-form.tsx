@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { safeNextPath } from "@/lib/safe-redirect";
 
+const LOGIN_ERROR_ID = "login-error";
+
 export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
   const router = useRouter();
   const [email, setEmail] = React.useState("");
@@ -79,6 +81,8 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? LOGIN_ERROR_ID : undefined}
               />
             </div>
             <div className="space-y-1.5">
@@ -91,10 +95,16 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? LOGIN_ERROR_ID : undefined}
               />
             </div>
             {error ? (
-              <p className="rounded-[10px] border border-[rgba(239,68,68,0.3)] bg-[var(--red-glow)] px-3 py-2 text-[13px] text-[var(--red)]">
+              <p
+                id={LOGIN_ERROR_ID}
+                role="alert"
+                className="rounded-[10px] border border-[rgba(239,68,68,0.3)] bg-[var(--red-glow)] px-3 py-2 text-[13px] text-[var(--red)]"
+              >
                 {error}
               </p>
             ) : null}

@@ -25,7 +25,7 @@ export function MobileTabBar() {
 
   return (
     <nav
-      aria-label="Primary"
+      aria-label="Tab bar"
       className="fixed inset-x-0 bottom-0 z-20 flex border-t border-[var(--border-raw)] bg-[var(--bg-0)]/95 backdrop-blur-md md:hidden"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
