@@ -88,6 +88,53 @@ afterEach(() => {
   }
 });
 
+describe("backup import / legacy posting cutoff timezone", () => {
+  it.each([
+    { source: "backup settings", currentTimezone: "UTC", backupSettings: { timezone: "America/Los_Angeles" } },
+    { source: "current settings", currentTimezone: "America/Los_Angeles", backupSettings: null },
+    { source: "current settings when the backup omits timezone", currentTimezone: "America/Los_Angeles", backupSettings: {} },
+    { source: "default timezone", currentTimezone: null, backupSettings: null },
+  ])("uses $source for the pre-v11 cutoff", async ({ currentTimezone, backupSettings }) => {
+    vi.useFakeTimers();
+    // UTC is Sep 22; Los Angeles and the default New York zone are Sep 21.
+    vi.setSystemTime(new Date("2026-09-22T02:00:00.000Z"));
+    try {
+      const user = await makeUser("a@example.com");
+      if (currentTimezone) {
+        getDb().insert(settings).values({
+          id: newId(),
+          userId: user.id,
+          firstPaydayDate: "2026-09-01",
+          timezone: currentTimezone,
+        }).run();
+      }
+      const payload = backupImportSchema.parse(envelope({
+        schemaVersion: 10,
+        settings: backupSettings,
+        creditCards: [{ id: "card", name: "Card A", statementDay: 5, dueDay: 25 }],
+        creditCardPaymentOverrides: [
+          { cardId: "card", dueDate: "2026-09-08", amountCents: 100 },
+          { cardId: "card", dueDate: "2026-09-09", amountCents: 100 },
+          { cardId: "card", dueDate: "2026-09-10", amountCents: 100 },
+          { cardId: "card", dueDate: "2026-09-21", amountCents: 100 },
+        ],
+      }));
+      await importAll(user.id, payload);
+      const restored = await exportAll(user.id);
+      expect(restored.creditCardPaymentOverrides
+        .map((p) => [p.dueDate, p.trackPosting])
+        .sort()).toEqual([
+        ["2026-09-08", false],
+        ["2026-09-09", true],
+        ["2026-09-10", true],
+        ["2026-09-21", true],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 /** A minimal valid backup envelope; tests override the collections they need. */
 function envelope(partial: Partial<BackupImportInput>): BackupImportInput {
   return {
