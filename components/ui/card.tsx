@@ -31,18 +31,22 @@ export const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<
 );
 CardHeader.displayName = "CardHeader";
 
-export const CardTitle = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => (
-    <div
-      ref={ref}
-      className={cn(
-        "text-[15px] font-semibold tracking-normal text-[var(--text-0)]",
-        className,
-      )}
-      {...props}
-    />
-  ),
-);
+export const CardTitle = React.forwardRef<
+  HTMLHeadingElement,
+  // `as="h1"` is for a page whose card title IS the page title (login, setup).
+  React.HTMLAttributes<HTMLHeadingElement> & { as?: "h1" | "h2" | "h3" }
+>(({ className, as: Heading = "h2", ...props }, ref) => (
+  <Heading
+    ref={ref}
+    className={cn(
+      // Reset the base heading margin, weight and line height (globals.css sets
+      // 1.2 on h1-h6) so the look matches the old div.
+      "m-0 text-[15px] font-semibold leading-normal tracking-normal text-[var(--text-0)]",
+      className,
+    )}
+    {...props}
+  />
+));
 CardTitle.displayName = "CardTitle";
 
 export const CardDescription = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
