@@ -383,7 +383,7 @@ weird gets emitted before merging.
 - **Auth.js v5** with the **Credentials provider** (email + password)
 - Passwords hashed with **Argon2id** (`memoryCost: 19_456, timeCost: 2`)
 - **JWT sessions** (no DB session table) — 30-day max age
-- Login is **rate-limited** with a leaky bucket: 5 attempts per 15 minutes per IP
+- Login is **rate-limited** with a leaky bucket: 5 attempts per 15 minutes per IPv4 address or IPv6 /64
 
 ### Edge vs node split
 - `auth.config.ts` — edge-safe (no `argon2`, no `better-sqlite3`). Used by middleware.
