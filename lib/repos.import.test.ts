@@ -9,6 +9,7 @@ vi.mock("./auth", () => ({
 }));
 vi.mock("server-only", () => ({}));
 
+import { POST } from "../app/api/backup/import/route";
 import { __resetDbCacheForTests, getDb, runMigrations } from "./db/client";
 import {
   users,
@@ -67,7 +68,7 @@ import {
   variableBillCreateSchema,
   type BackupImportInput,
 } from "./validation";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 let dbDir: string;
 beforeEach(() => {
@@ -255,6 +256,88 @@ describe("backup import / graph integrity", () => {
       ],
     });
     await expect(importAll(user.id, payload)).rejects.toThrow(/duplicate creditCard id/);
+  });
+});
+
+describe("backup import / cross-user id collisions", () => {
+  const message = "This backup contains records that belong to another account on this server and cannot be restored here";
+  const collections = [
+    "bills", "billPaymentOverrides", "billPaymentStates", "variableBills",
+    "variableBillCards", "creditCardPaymentOverrides", "paychecks", "extras",
+    "categories", "creditCards", "creditCardStatements", "creditCardPromos",
+    "creditCardPromoPayments", "assets",
+  ] as const;
+
+  // Keep the graph valid while making exactly one collection's id collide.
+  function backup(prefix: string, collision?: typeof collections[number]): BackupImportInput {
+    const id = (collection: typeof collections[number]) =>
+      `${collection === collision ? "owner" : prefix}-${collection}`;
+    return backupImportSchema.parse(envelope({
+      bills: [{ id: id("bills"), name: "Rent", amountCents: 10000, intervalMonths: 1, anchorDate: "2026-05-01" }],
+      billPaymentOverrides: [{ id: id("billPaymentOverrides"), billId: id("bills"), dueDate: "2026-05-01", amountCents: 10000 }],
+      billPaymentStates: [{ id: id("billPaymentStates"), billId: id("bills"), dueDate: "2026-05-01", state: "sent", markedDate: "2026-05-01" }],
+      variableBills: [{ id: id("variableBills"), name: "Groceries", amountCents: 5000, intervalMonths: 1, anchorDate: "2026-05-01" }],
+      variableBillCards: [{ id: id("variableBillCards"), variableBillId: id("variableBills"), cardId: id("creditCards") }],
+      creditCardPaymentOverrides: [{ id: id("creditCardPaymentOverrides"), cardId: id("creditCards"), dueDate: "2026-05-25", amountCents: 100 }],
+      paychecks: [{ id: id("paychecks"), payDate: "2026-05-01", amountCents: 20000 }],
+      extras: [{ id: id("extras"), date: "2026-05-01", description: "Concert", amountCents: 500 }],
+      categories: [{ id: id("categories"), name: "Housing", color: "#2563eb", kind: "expense" }],
+      creditCards: [{ id: id("creditCards"), name: "Card", statementDay: 5, dueDay: 25 }],
+      creditCardStatements: [{ id: id("creditCardStatements"), cardId: id("creditCards"), statementDate: "2026-05-05", dueDate: "2026-05-25", statementBalanceCents: 100 }],
+      creditCardPromos: [{ id: id("creditCardPromos"), cardId: id("creditCards"), description: "Purchase", originalAmountCents: 1000, remainingAmountCents: 1000, startDate: "2026-05-01", endDate: "2026-12-01" }],
+      creditCardPromoPayments: [{ id: id("creditCardPromoPayments"), promoId: id("creditCardPromos"), dueDate: "2026-06-01", amountCents: 100 }],
+      assets: [{ id: id("assets"), name: "Savings", valueCents: 10000, asOfDate: "2026-05-01" }],
+    }));
+  }
+
+  for (const [name, run] of [["preview", previewImport], ["confirmed import", importAll]] as const) {
+    it.each(collections)(`${name} blocks another user's %s id without changing either account`, async (collection) => {
+      const owner = await makeUser("a@example.com");
+      const recipient = await makeUser("b@example.com");
+      await importAll(owner.id, backup("owner"));
+      await importAll(recipient.id, backup("recipient"));
+      const beforeOwner = await exportAll(owner.id);
+      const beforeRecipient = await exportAll(recipient.id);
+
+      await expect(run(recipient.id, backup("incoming", collection))).rejects.toThrow(message);
+
+      expect(await exportAll(owner.id)).toEqual({ ...beforeOwner, exportedAt: expect.any(String) });
+      expect(await exportAll(recipient.id)).toEqual({ ...beforeRecipient, exportedAt: expect.any(String) });
+    });
+  }
+
+  it("returns the same blocking 400 error for preview and confirmation", async () => {
+    const owner = await makeUser("a@example.com");
+    const recipient = await makeUser("b@example.com");
+    await importAll(owner.id, backup("owner"));
+    vi.mocked(getCurrentUserId).mockResolvedValue(recipient.id);
+    const payload = await exportAll(owner.id);
+
+    for (const query of ["", "?confirm=1"]) {
+      const response = await POST(new Request(`http://localhost/api/backup/import${query}`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: message });
+    }
+    expect(fs.existsSync(snapshotDir())).toBe(false);
+  });
+
+  it("still previews and restores the owner's backup with existing ids", async () => {
+    const owner = await makeUser("a@example.com");
+    await importAll(owner.id, backup("owner"));
+    const before = await exportAll(owner.id);
+    const payload = backupImportSchema.parse(before);
+
+    const preview = await previewImport(owner.id, payload);
+    expect(preview.incoming).toEqual(preview.current);
+    await importAll(owner.id, payload);
+
+    for (const collection of collections) {
+      expect((await exportAll(owner.id))[collection].map((row) => row.id))
+        .toEqual(before[collection].map((row) => row.id));
+    }
   });
 });
 
@@ -973,10 +1056,11 @@ describe("backup import / semantic round trip", () => {
 describe("backup import / pre-import snapshot", () => {
   it("failed confirm attempts preserve every older snapshot and its contents", async () => {
     const user = await makeUser("a@example.com");
-    const other = await makeUser("other@example.com");
-    const card = await createCreditCard(other.id, {
-      name: "Other user's card", statementDay: 5, dueDay: 25, autoPay: false, isActive: true,
-    });
+    // Force importAll to fail AFTER the pre-import snapshot is written: a
+    // database fault the preview cannot see. (A cross-account id collision no
+    // longer reaches importAll; the preview rejects it, DATA-4.)
+    getDb().run(sql`CREATE TRIGGER force_import_failure BEFORE INSERT ON credit_cards
+      BEGIN SELECT RAISE(ABORT, 'forced import failure'); END`);
     for (let i = 0; i < 5; i++) {
       await writePreImportSnapshot(user.id, new Date(Date.UTC(2026, 8, 21, 0, 0, i)));
     }
@@ -991,10 +1075,8 @@ describe("backup import / pre-import snapshot", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ["Date"] });
 
-    // This passes preview validation but collides with another user's primary
-    // key inside importAll, after the pre-import snapshot has been written.
     const payload = envelope({
-      creditCards: [{ id: card.id, name: "Collision", statementDay: 5, dueDay: 25 }],
+      creditCards: [{ id: newId(), name: "Forced failure", statementDay: 5, dueDay: 25 }],
     });
     for (let i = 0; i < 6; i++) {
       vi.setSystemTime(new Date(Date.UTC(2026, 8, 22, 0, 0, i)));
