@@ -44,7 +44,7 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
         <CardHeader>
           <div>
             <CardSubTag>Welcome back</CardSubTag>
-            <CardTitle className="mt-0.5">Sign in</CardTitle>
+            <CardTitle as="h1" className="mt-0.5">Sign in</CardTitle>
           </div>
         </CardHeader>
         <CardContent>

@@ -65,7 +65,7 @@ export function SetupForm() {
         <CardHeader>
           <div>
             <CardSubTag>First run</CardSubTag>
-            <CardTitle className="mt-0.5">Create owner account</CardTitle>
+            <CardTitle as="h1" className="mt-0.5">Create owner account</CardTitle>
           </div>
         </CardHeader>
         <CardContent>

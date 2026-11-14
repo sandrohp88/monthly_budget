@@ -33,9 +33,10 @@ CardHeader.displayName = "CardHeader";
 
 export const CardTitle = React.forwardRef<
   HTMLHeadingElement,
-  React.HTMLAttributes<HTMLHeadingElement>
->(({ className, ...props }, ref) => (
-  <h2
+  // `as="h1"` is for a page whose card title IS the page title (login, setup).
+  React.HTMLAttributes<HTMLHeadingElement> & { as?: "h1" | "h2" | "h3" }
+>(({ className, as: Heading = "h2", ...props }, ref) => (
+  <Heading
     ref={ref}
     className={cn(
       // Reset the base heading margin, weight and line height (globals.css sets
