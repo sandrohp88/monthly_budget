@@ -840,6 +840,58 @@ describe("backup import / semantic round trip", () => {
       .run();
   }
 
+  it.each([121, 1000])("restores full Plaid text beyond UI limits (%i characters)", async (length) => {
+    const user = await makeUser("a@example.com");
+    await seedBoundaries(user.id);
+    const description = `Plaid purchase ${"x".repeat(length - 15)}`;
+    const name = `${"Bank account ".repeat(8)} ****1234`;
+    const notes = `Original bank description ${"y".repeat(600)}`;
+    const db = getDb();
+
+    // Plaid write paths bypass the UI schemas: draft approval copies the
+    // description, promo sync copies description + original text, and exchange
+    // creates a card named after the bank account. Seed those stored values.
+    db.update(oneTimeExpenses).set({ description }).where(eq(oneTimeExpenses.id, "big-extra")).run();
+    db.update(creditCardPromos).set({ description, notes }).where(eq(creditCardPromos.id, "promo-hi")).run();
+    db.update(creditCards).set({ name }).where(eq(creditCards.id, "hi")).run();
+    const before = await exportAll(user.id);
+
+    // Read a saved JSON file so existing backups must restore without rewriting.
+    const backupPath = path.join(dbDir, "plaid-text-backup.json");
+    fs.writeFileSync(backupPath, JSON.stringify(before), "utf8");
+    const parsed = backupImportSchema.safeParse(JSON.parse(fs.readFileSync(backupPath, "utf8")));
+    expect(
+      parsed.success ? [] : parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`),
+    ).toEqual([]);
+
+    db.update(oneTimeExpenses).set({ description: "Changed" }).where(eq(oneTimeExpenses.id, "big-extra")).run();
+    db.update(creditCardPromos).set({ description: "Changed", notes: null }).where(eq(creditCardPromos.id, "promo-hi")).run();
+    db.update(creditCards).set({ name: "Changed" }).where(eq(creditCards.id, "hi")).run();
+    await importAll(user.id, parsed.data!);
+
+    const after = await exportAll(user.id);
+    expect(comparable(after)).toEqual(comparable(before));
+    expect(after.extras.find((e) => e.id === "big-extra")?.description).toBe(description);
+    expect(after.creditCardPromos.find((p) => p.id === "promo-hi")).toMatchObject({ description, notes });
+    expect(after.creditCards.find((c) => c.id === "hi")?.name).toBe(name);
+  });
+
+  it("keeps UI text limits for expenses, promos and cards", () => {
+    const extra = { date: "2026-10-03", description: "x".repeat(120), amountCents: 100, category: "Other" };
+    expect(extraCreateSchema.safeParse(extra).success).toBe(true);
+    expect(extraCreateSchema.safeParse({ ...extra, description: "x".repeat(121) }).success).toBe(false);
+    const promo = {
+      description: "x".repeat(120), originalAmountCents: 100,
+      startDate: "2026-09-01", endDate: "2027-09-01", notes: "x".repeat(500),
+    };
+    expect(promoCreateSchema.safeParse(promo).success).toBe(true);
+    expect(promoCreateSchema.safeParse({ ...promo, description: "x".repeat(121) }).success).toBe(false);
+    expect(promoCreateSchema.safeParse({ ...promo, notes: "x".repeat(501) }).success).toBe(false);
+    const card = { name: "x".repeat(80), statementDay: 1, dueDay: 21 };
+    expect(creditCardCreateSchema.safeParse(card).success).toBe(true);
+    expect(creditCardCreateSchema.safeParse({ ...card, name: "x".repeat(81) }).success).toBe(false);
+  });
+
   it("restores every boundary value a write path accepts (one value domain)", async () => {
     const user = await makeUser("a@example.com");
     await seedBoundaries(user.id);
