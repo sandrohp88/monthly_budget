@@ -57,15 +57,17 @@ import {
   createStatement,
   deactivatePlaidItem,
   getCreditCard,
+  getPlaidItem,
   listCreditCardPaymentOverridesForUser,
   listCreditCards,
+  listPlaidAccountsByItem,
   listPromosForCard,
   listStatements,
   upsertCreditCardPaymentOverride,
   upsertPlaidAccount,
   upsertPlaidDraft,
 } from "./repos";
-import { encryptToken } from "./plaid-crypto";
+import { decryptToken, encryptToken } from "./plaid-crypto";
 import { addDaysIso, DEFAULT_TIMEZONE, todayIso } from "./dates";
 import { POST as exchange } from "@/app/api/plaid/exchange/route";
 
@@ -232,6 +234,27 @@ async function unpaidStatements(userId: string) {
 }
 
 describe("POST /api/plaid/exchange — linking a bank again reuses the existing card (PLAID-3)", () => {
+  it("omits token ciphertext, IV and tag from the response but keeps the stored token", async () => {
+    currentUser = await seedUser();
+    mockRelink([{ account_id: "acct_new", name: "Prime Visa", mask: "9873" }]);
+    const res = await runExchange(CHASE);
+    const body = await res.json();
+    const stored = (await getPlaidItem(currentUser, body.item.id))!;
+    const secretKeys = ["accessTokenEnc", "accessTokenIv", "accessTokenTag"];
+    for (const key of secretKeys) {
+      expect(body.item).not.toHaveProperty(key);
+    }
+    expect(body.item).toEqual(Object.fromEntries(
+      Object.entries(stored).filter(([key]) => !secretKeys.includes(key)),
+    ));
+    expect(body.accounts).toEqual(await listPlaidAccountsByItem(stored.id));
+    expect(decryptToken(
+      stored.accessTokenEnc,
+      stored.accessTokenIv,
+      stored.accessTokenTag,
+    )).toBe("new-token");
+  });
+
   it("re-links the user's unlinked card for the same account: one card, one open statement, settings untouched", async () => {
     const userId = await seedUser();
     currentUser = userId;

@@ -2253,6 +2253,31 @@ export async function replacePromoPayments(
 
 // ── plaid ──────────────────────────────────────────────────────────────────
 
+export type PublicPlaidItem = Omit<
+  PlaidItemRow,
+  "accessTokenEnc" | "accessTokenIv" | "accessTokenTag"
+>;
+
+/** Explicit browser-safe shape; full token rows stay available to server code. */
+export function toPublicPlaidItem(item: PlaidItemRow): PublicPlaidItem {
+  return {
+    id: item.id,
+    userId: item.userId,
+    institutionId: item.institutionId,
+    institutionName: item.institutionName,
+    cursor: item.cursor,
+    lastSyncedAt: item.lastSyncedAt,
+    isActive: item.isActive,
+    createdAt: item.createdAt,
+    plaidItemId: item.plaidItemId,
+    balanceRefreshedAt: item.balanceRefreshedAt,
+    transactionsRefreshedAt: item.transactionsRefreshedAt,
+    lastErrorCode: item.lastErrorCode,
+    lastErrorAt: item.lastErrorAt,
+    firstErrorAt: item.firstErrorAt,
+  };
+}
+
 export async function listPlaidItems(userId: string): Promise<PlaidItemRow[]> {
   const db = getDb();
   return db
