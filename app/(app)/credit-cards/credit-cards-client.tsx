@@ -1,8 +1,10 @@
 "use client";
 
 // Wallet-style credit cards overview. Each card shows its face (official
-// issuer art where available), current balance, and last digits — everything
-// else lives on the per-card detail page (/credit-cards/[id]).
+// issuer art where available), current balance, last digits, and the open
+// statement's due date and amount (or the next closing date when nothing is
+// due) — everything else lives on the per-card detail page
+// (/credit-cards/[id]).
 
 import * as React from "react";
 import Link from "next/link";
@@ -36,6 +38,8 @@ export type WalletCard = {
   dueCents: number;
   /** Due date of the current open statement. */
   dueDate: string | null;
+  /** Date the card's open cycle closes (its next statement date). */
+  nextCloseDate: string;
 };
 
 type Tab = "wallet" | "spending";
@@ -182,7 +186,7 @@ export function CreditCardsClient({
 }
 
 function WalletCardEntry({ data, today }: { data: WalletCard; today: string }) {
-  const { card, mask, institution, balanceCents, dueCents, dueDate } = data;
+  const { card, mask, institution, balanceCents, dueCents, dueDate, nextCloseDate } = data;
   const name = cardDisplayName(card.name, institution);
   const digits = cardMaskDigits(card.name, mask);
 
@@ -236,6 +240,34 @@ function WalletCardEntry({ data, today }: { data: WalletCard; today: string }) {
             <div className="text-2xs leading-tight text-[var(--text-3)] sm:text-[11px]">balance</div>
           )}
         </div>
+      </div>
+      {/* What the card needs next, readable without opening it: the open
+          statement's due date and amount, or when the cycle closes. */}
+      <div
+        data-testid="wallet-card-due"
+        className="mt-2 flex flex-wrap items-baseline justify-between gap-x-2 border-t border-[var(--border-raw)] px-0.5 pt-1.5 text-[11px] leading-snug sm:text-[12px]"
+      >
+        {dueCents > 0 && dueDate ? (
+          <>
+            <span
+              className={cn(
+                "text-[var(--text-2)]",
+                status === "overdue" && "font-semibold text-[var(--red)]",
+              )}
+            >
+              {status === "overdue" ? "Was due" : "Due"}{" "}
+              <DateLabel iso={dueDate} format="short" />
+            </span>
+            <Money cents={dueCents} className="font-semibold text-[var(--text-0)]" />
+          </>
+        ) : (
+          <>
+            <span className="text-[var(--text-2)]">Nothing due</span>
+            <span className="text-[var(--text-2)]">
+              Closes <DateLabel iso={nextCloseDate} format="short" />
+            </span>
+          </>
+        )}
       </div>
     </Link>
   );
