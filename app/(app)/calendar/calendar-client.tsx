@@ -1879,7 +1879,11 @@ export function CalendarClient({
               </DialogHeader>
               <div className="space-y-2">
                 {(selectedRow?.events ?? []).length === 0 ? (
-                  <p className="text-[13px] text-[var(--text-2)]">No scheduled events on this day.</p>
+                  // A day that has bank history is not empty: the History list
+                  // below is its content.
+                  selectedHistory && selectedHistory.items.length > 0 ? null : (
+                    <p className="text-[13px] text-[var(--text-2)]">No scheduled events on this day.</p>
+                  )
                 ) : (
                   (selectedRow?.events ?? []).map((ev, i) => {
                     const isPastDay = selectedDate < today;
@@ -2127,7 +2131,12 @@ export function CalendarClient({
                   })
                 )}
                 {selectedHistory && selectedHistory.items.length > 0 ? (
-                  <div className="space-y-2 border-t border-[var(--border-raw)] pt-2">
+                  <div
+                    className={cn(
+                      "space-y-2",
+                      (selectedRow?.events ?? []).length > 0 && "border-t border-[var(--border-raw)] pt-2",
+                    )}
+                  >
                     <div className="flex items-baseline justify-between gap-2">
                       <div className="text-2xs font-semibold tracking-[0.12em] text-[var(--text-2)]">
                         HISTORY
