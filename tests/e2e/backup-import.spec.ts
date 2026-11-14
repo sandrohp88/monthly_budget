@@ -1,19 +1,19 @@
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { ensureAuth } from "./auth";
 
 type BackupFile = { name: string; mimeType: string; buffer: Buffer };
 
-// The file input is hidden; a user reaches it only through the "Import JSON"
-// button, which works only after hydration. setInputFiles bypasses that
-// button. On a slow runner it can fire `change` before React has attached the
-// handler. That event is lost and the preview never opens (reproduced with
-// 10x CPU throttling). So select again until the preview dialog shows.
-// Choosing a file only previews (it writes nothing), so a repeat is safe.
-async function selectBackup(page: Page, picker: Locator, file: BackupFile) {
-  const heading = page.getByRole("dialog").getByRole("heading", { name: /replace your data/i });
+// Opening the chooser through the button proves its React handler is ready.
+// Retry a click lost before hydration; choosing a file only previews data.
+async function selectBackup(page: Page, file: BackupFile) {
+  const dialog = page.getByRole("dialog", { name: /replace your data with this backup/i });
   await expect(async () => {
-    await picker.setInputFiles(file);
-    await expect(heading).toBeVisible({ timeout: 3_000 });
+    const [chooser] = await Promise.all([
+      page.waitForEvent("filechooser", { timeout: 3_000 }),
+      page.getByRole("button", { name: /import json/i }).click(),
+    ]);
+    await chooser.setFiles(file);
+    await expect(dialog).toBeVisible({ timeout: 3_000 });
   }).toPass({ timeout: 20_000 });
 }
 
@@ -50,11 +50,10 @@ test("backup import: rejects non-backups, previews, and only replaces on confirm
   };
 
   await page.goto("/settings");
-  const picker = page.locator("input[type='file'][accept='application/json']");
 
   // Preview, then cancel: the new bill must survive.
-  await selectBackup(page, picker, file);
-  const dialog = page.getByRole("dialog");
+  await selectBackup(page, file);
+  const dialog = page.getByRole("dialog", { name: /replace your data with this backup/i });
   await expect(dialog.getByRole("heading", { name: /replace your data/i })).toBeVisible();
   const billsRow = dialog.getByRole("row", { name: /^bills\b/i });
   await expect(billsRow).toBeVisible();
@@ -65,9 +64,14 @@ test("backup import: rejects non-backups, previews, and only replaces on confirm
 
   // Confirm: data is restored to the exported state.
   await page.goto("/settings");
-  await selectBackup(page, picker, file);
+  await selectBackup(page, file);
+  const restored = page.waitForResponse(
+    (response) => response.url().endsWith("/api/backup/import?confirm=1") &&
+      response.request().method() === "POST",
+  );
   await dialog.getByRole("button", { name: /replace my data/i }).click();
-  await page.waitForLoadState("load");
+  expect((await restored).ok()).toBe(true);
+  await expect(dialog).toBeHidden();
   await page.goto("/bills");
   await expect(page.getByText(billName)).toHaveCount(0);
 });
