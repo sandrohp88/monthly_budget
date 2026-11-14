@@ -103,6 +103,8 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     return NextResponse.json({ ok: true, plaidRevokeFailed: failed });
   } catch (e) {
     const msg = (e as Error).message;
-    return jsonError(msg, msg === "forbidden" ? 403 : 401);
+    if (msg === "forbidden") return jsonError(msg, 403);
+    if (msg === "not authenticated") return jsonError(msg, 401);
+    return jsonError(msg, 500);
   }
 }
