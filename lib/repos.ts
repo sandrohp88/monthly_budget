@@ -3949,6 +3949,9 @@ export async function exportAll(userId: string) {
 import { BACKUP_SCHEMA_VERSION, type BackupImportInput, type CardPaymentOp } from "./validation";
 import type { PaycheckPlanEntry } from "./paycheck-schedule";
 
+export const IMPORT_ACCOUNT_CONFLICT_MESSAGE =
+  "This backup contains records that belong to another account on this server and cannot be restored here";
+
 /** Rows per collection: what a restore would delete vs. insert. */
 export type ImportPreview = {
   schemaVersion: number;
@@ -4089,6 +4092,40 @@ async function validateImportGraph(
   }
   for (const pp of payload.creditCardPromoPayments ?? []) {
     ensurePromo(pp.promoId, "creditCardPromoPayments.promoId");
+  }
+
+  // IDs are preserved on restore and are globally unique within each table.
+  // The import only deletes this user's rows, so another user's ID blocks it.
+  const db = getDb();
+  const collections = [
+    [bills, payload.bills],
+    [billPaymentOverrides, payload.billPaymentOverrides],
+    [billPaymentStates, payload.billPaymentStates],
+    [variableBills, payload.variableBills],
+    [variableBillCards, payload.variableBillCards],
+    [creditCardPaymentOverrides, payload.creditCardPaymentOverrides],
+    [paychecks, payload.paychecks],
+    [oneTimeExpenses, payload.extras],
+    [categories, payload.categories],
+    [creditCards, payload.creditCards],
+    [creditCardPromos, payload.creditCardPromos],
+    [creditCardPromoPayments, payload.creditCardPromoPayments],
+    [assets, payload.assets],
+  ] as const;
+  for (const [table, rows] of collections) {
+    const ids = (rows ?? []).flatMap((row) => row.id ? [row.id] : []);
+    if (ids.length === 0) continue;
+    const collision = db.select({ id: table.id }).from(table)
+      .where(and(ne(table.userId, userId), inArray(table.id, ids))).get();
+    if (collision) throw new Error(IMPORT_ACCOUNT_CONFLICT_MESSAGE);
+  }
+  // Statements have no userId; their card determines the existing owner.
+  const statementIds = (payload.creditCardStatements ?? []).flatMap((row) => row.id ? [row.id] : []);
+  if (statementIds.length > 0) {
+    const collision = db.select({ id: creditCardStatements.id }).from(creditCardStatements)
+      .innerJoin(creditCards, eq(creditCards.id, creditCardStatements.cardId))
+      .where(and(ne(creditCards.userId, userId), inArray(creditCardStatements.id, statementIds))).get();
+    if (collision) throw new Error(IMPORT_ACCOUNT_CONFLICT_MESSAGE);
   }
 
   return { cardIds, billIds, promoIds, variableBillIds };

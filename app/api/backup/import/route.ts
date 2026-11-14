@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError, readJson } from "@/lib/api";
-import { importAll, previewImport } from "@/lib/repos";
+import { importAll, previewImport, IMPORT_ACCOUNT_CONFLICT_MESSAGE } from "@/lib/repos";
 import { deletePreImportSnapshot, prunePreImportSnapshots, writePreImportSnapshot } from "@/lib/backup-snapshot";
 import { backupImportSchema } from "@/lib/validation";
 
@@ -45,7 +45,7 @@ export async function POST(req: Request) {
     // Surface these as a 400 — they're caller-correctable; keep the rest
     // generic so we don't leak internals.
     const msg = (e as Error).message ?? "import failed";
-    if (msg.includes("references unknown") || msg.startsWith("duplicate ")) {
+    if (msg.includes("references unknown") || msg.startsWith("duplicate ") || msg === IMPORT_ACCOUNT_CONFLICT_MESSAGE) {
       return NextResponse.json({ error: msg }, { status: 400 });
     }
     return jsonError(`import failed: ${msg}`);
