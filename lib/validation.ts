@@ -745,7 +745,7 @@ const importPaycheckSchema = z.object({
 const importExtraSchema = z.object({
   id: id.optional(),
   date: isoDate,
-  description: z.string().min(1).max(120),
+  description: z.string().min(1), // Plaid draft names can exceed the UI limit.
   amountCents: cents,
   category: z.string().min(1).max(50).optional(),
   paidViaCardId: id.nullable().optional(),
@@ -763,7 +763,7 @@ const importCategorySchema = z.object({
 
 const importCreditCardSchema = z.object({
   id,
-  name: z.string().min(1).max(80),
+  name: z.string().min(1), // Plaid account name + mask can exceed the UI limit.
   statementDay: z.number().int().min(1).max(31),
   statementCycleMode: z.enum(["calendar_day", "interval_days"]).optional(),
   statementCycleAnchorDate: isoDate.nullable().optional(),
@@ -803,13 +803,13 @@ const importCreditCardStatementSchema = z.object({
 const importCreditCardPromoSchema = z.object({
   id: id.optional(),
   cardId: id,
-  description: z.string().min(1).max(120),
+  description: z.string().min(1), // Plaid merchant/transaction text is stored as-is.
   originalAmountCents: cents.refine((n) => n > 0, "Original amount must be positive"),
   remainingAmountCents: cents.refine((n) => n >= 0, "Remaining cannot be negative"),
   startDate: isoDate,
   endDate: isoDate,
   monthlyPaymentCents: cents.refine((n) => n > 0).nullable().optional(),
-  notes: optionalNotes,
+  notes: z.string().nullable().optional(), // Sync stores the full original bank description.
   isActive: z.boolean().optional(),
   authoritativeSource,
 });
