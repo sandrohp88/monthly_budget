@@ -4411,6 +4411,10 @@ function importInsideTransaction(
       notes: s.notes ?? null,
     }).run();
   }
+  const timezone = payload.settings?.timezone
+    ?? tx.select({ timezone: settings.timezone }).from(settings).where(eq(settings.userId, userId)).get()?.timezone
+    ?? DEFAULT_TIMEZONE;
+  const legacyPostingCutoff = addDaysIso(todayIso(timezone), -12);
   for (const o of payload.creditCardPaymentOverrides ?? []) {
     tx.insert(creditCardPaymentOverrides).values({
       id: o.id ?? newId(),
@@ -4420,7 +4424,7 @@ function importInsideTransaction(
       amountCents: o.amountCents,
       notes: o.notes ?? null,
       // Older JSON backups have no posting metadata: preserve their history.
-      trackPosting: o.trackPosting ?? o.dueDate >= addDaysIso(todayIso("UTC"), -12),
+      trackPosting: o.trackPosting ?? o.dueDate >= legacyPostingCutoff,
     }).run();
   }
   for (const p of payload.paychecks ?? []) {
