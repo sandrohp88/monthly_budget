@@ -34,6 +34,53 @@ describe("clientIp / trusted-proxy semantics", () => {
     expect(clientIp(req)).toBe("5.5.5.5");
   });
 
+  it("groups IPv6 clients by /64 across compressed, expanded and mixed-case forms", () => {
+    process.env.TRUST_PROXY_HOPS = "1";
+    delete process.env.CLIENT_IP_HEADER;
+    for (const ip of [
+      "2001:db8:abcd:1234::1",
+      "2001:0DB8:ABCD:1234:ffff:eeee:dddd:cccc",
+      "2001:db8:abcd:1234::",
+    ]) {
+      const req = makeReq({ headers: { "x-forwarded-for": `9.9.9.9, ${ip}` } });
+      expect(clientIp(req)).toBe("2001:db8:abcd:1234::/64");
+    }
+    const other = makeReq({ headers: { "x-forwarded-for": "2001:db8:abcd:1235::1" } });
+    expect(clientIp(other)).toBe("2001:db8:abcd:1235::/64");
+  });
+
+  it("expands IPv6 compression before taking the first four hextets", () => {
+    process.env.TRUST_PROXY_HOPS = "1";
+    delete process.env.CLIENT_IP_HEADER;
+    for (const ip of ["2001:db8::1", "2001:0DB8:0:0:0:0:0:ffff", "2001:db8:0:0:1::"]) {
+      expect(clientIp(makeReq({ headers: { "x-forwarded-for": ip } }))).toBe("2001:db8:0:0::/64");
+    }
+    for (const ip of ["::1", "::", "0:0:0:0:ffff::1"]) {
+      expect(clientIp(makeReq({ headers: { "x-forwarded-for": ip } }))).toBe("0:0:0:0::/64");
+    }
+  });
+
+  it("uses the IPv4 key for IPv4-mapped IPv6 addresses", () => {
+    process.env.TRUST_PROXY_HOPS = "1";
+    delete process.env.CLIENT_IP_HEADER;
+    for (const ip of ["192.0.2.128", "::ffff:192.0.2.128", "::FFFF:c000:0280", "0:0:0:0:0:ffff:c000:280"]) {
+      expect(clientIp(makeReq({ headers: { "x-forwarded-for": ip } }))).toBe("192.0.2.128");
+    }
+    expect(clientIp(makeReq({ headers: { "x-forwarded-for": "::ffff:192.0.2.129" } }))).toBe("192.0.2.129");
+  });
+
+  it("normalizes IPv6 from the named header and x-real-ip fallback", () => {
+    process.env.TRUST_PROXY_HOPS = "1";
+    process.env.CLIENT_IP_HEADER = "x-client-ip";
+    const req = makeReq({ headers: {
+      "x-client-ip": "2001:DB8::1",
+      "x-forwarded-for": "2001:db8:abcd:1234::1",
+    } });
+    expect(clientIp(req)).toBe("2001:db8:0:0::/64");
+    delete process.env.CLIENT_IP_HEADER;
+    expect(clientIp(makeReq({ headers: { "x-real-ip": "2001:DB8::2" } }))).toBe("2001:db8:0:0::/64");
+  });
+
   it("with two trusted hops, walks two entries from the right", () => {
     process.env.TRUST_PROXY_HOPS = "2";
     const req = makeReq({ headers: { "x-forwarded-for": "9.9.9.9, 5.5.5.5, 6.6.6.6" } });

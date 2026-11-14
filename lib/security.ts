@@ -29,8 +29,34 @@ function clientIpHeader(): string | null {
   return raw && /^[a-z0-9-]+$/.test(raw) ? raw : null;
 }
 
+/** Use one limiter bucket per IPv6 /64; mapped IPv4 keeps its IPv4 key. */
+function clientIpKey(ip: string): string {
+  if (!ip.includes(":")) return ip;
+  try {
+    // URL validates and canonicalizes IPv6 without Node-only imports (Edge).
+    const host = new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+    const [head, tail] = host.split("::");
+    const left = head ? head.split(":") : [];
+    const right = tail ? tail.split(":") : [];
+    const hextets = tail === undefined
+      ? left
+      : [...left, ...Array<string>(8 - left.length - right.length).fill("0"), ...right];
+
+    if (hextets.slice(0, 5).every((part) => part === "0") && hextets[5] === "ffff") {
+      // A valid IPv6 URL expands to exactly eight hextets.
+      const high = Number.parseInt(hextets[6]!, 16);
+      const low = Number.parseInt(hextets[7]!, 16);
+      return [high >>> 8, high & 255, low >>> 8, low & 255].join(".");
+    }
+    return `${hextets.slice(0, 4).join(":")}::/64`;
+  } catch {
+    return ip;
+  }
+}
+
 /**
- * Pull the originating client IP out of the request. With one trusted proxy
+ * Pull the originating client IP out of the request and normalize its limiter
+ * key (IPv4 address or IPv6 /64). With one trusted proxy
  * hop (the default — Caddy in our deploy), we take the rightmost entry of
  * `x-forwarded-for` (the IP the trusted proxy observed). With N trusted
  * hops, we walk N entries from the right. With zero hops, we ignore
@@ -54,7 +80,7 @@ export function clientIp(req: Request): string {
     const named = clientIpHeader();
     if (named) {
       const value = req.headers.get(named)?.split(",")[0]?.trim();
-      if (value) return value;
+      if (value) return clientIpKey(value);
     }
 
     // Caddy strips/rewrites x-forwarded-for; we trust only the rightmost
@@ -66,11 +92,11 @@ export function clientIp(req: Request): string {
       if (parts.length > 0) {
         const idx = Math.max(0, parts.length - hops);
         const candidate = parts[idx];
-        if (candidate) return candidate;
+        if (candidate) return clientIpKey(candidate);
       }
     }
     const real = req.headers.get("x-real-ip")?.trim();
-    if (real) return real;
+    if (real) return clientIpKey(real);
   }
   return "unknown";
 }
