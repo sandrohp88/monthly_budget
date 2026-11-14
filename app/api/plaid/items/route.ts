@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureUser, jsonError } from "@/lib/api";
-import { listPlaidItems, listPlaidAccountsByItem } from "@/lib/repos";
+import { listPlaidItems, listPlaidAccountsByItem, toPublicPlaidItem } from "@/lib/repos";
 
 export async function GET() {
   const auth = await ensureUser();
@@ -10,7 +10,7 @@ export async function GET() {
     const items = await listPlaidItems(auth.userId);
     const data = await Promise.all(
       items.map(async (item) => ({
-        ...item,
+        ...toPublicPlaidItem(item),
         accounts: await listPlaidAccountsByItem(item.id),
       })),
     );

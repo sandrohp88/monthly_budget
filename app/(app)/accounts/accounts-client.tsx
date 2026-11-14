@@ -35,15 +35,15 @@ import {
   type BankItemHealth,
 } from "@/lib/plaid-item-health";
 import type { SyncItemError } from "@/lib/plaid-sync";
+import type { PublicPlaidItem } from "@/lib/repos";
 import type {
-  PlaidItemRow,
   PlaidAccountRow,
   CreditCardRow,
   CreditCardPromoRow,
   CreditCardStatementRow,
 } from "@/lib/db/schema";
 
-type ItemWithAccounts = PlaidItemRow & { accounts: PlaidAccountRow[] };
+type ItemWithAccounts = PublicPlaidItem & { accounts: PlaidAccountRow[] };
 type CardWithStatements = {
   card: CreditCardRow;
   statements: CreditCardStatementRow[];

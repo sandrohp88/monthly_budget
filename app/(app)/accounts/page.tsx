@@ -2,6 +2,7 @@ import { requirePageUser } from "@/lib/auth";
 import {
   getSettings,
   listPlaidItems,
+  toPublicPlaidItem,
   listPlaidAccountsByItem,
   listCreditCards,
   listPromosForCard,
@@ -23,7 +24,7 @@ export default async function AccountsPage() {
 
   const itemsWithAccounts = await Promise.all(
     items.map(async (item) => ({
-      ...item,
+      ...toPublicPlaidItem(item),
       accounts: await listPlaidAccountsByItem(item.id),
     })),
   );

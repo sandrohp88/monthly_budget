@@ -5,6 +5,7 @@ import { getPlaidClient } from "@/lib/plaid-client";
 import { encryptToken } from "@/lib/plaid-crypto";
 import {
   createPlaidItem,
+  toPublicPlaidItem,
   upsertPlaidAccount,
   listPlaidAccountsByItem,
   getCreditCardByPlaidAccountId,
@@ -152,7 +153,7 @@ export async function POST(req: Request) {
     }
 
     const accounts = await listPlaidAccountsByItem(item.id);
-    return NextResponse.json({ item, accounts }, { status: 201 });
+    return NextResponse.json({ item: toPublicPlaidItem(item), accounts }, { status: 201 });
   } catch (err) {
     // Undo a half-linked item: revoke it at Plaid (so it isn't billed or left
     // live) and deactivate it here. Best-effort — the original error is what
