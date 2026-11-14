@@ -198,7 +198,11 @@ export function SettingsClient({
       toast.error(json.error ?? "delete failed");
       return;
     }
-    toast.success(`${deleteTarget.displayName} removed`);
+    if (json.plaidRevokeFailed > 0) {
+      toast.warning(`${deleteTarget.displayName} removed. One or more bank connections could not be revoked at Plaid. You may need to remove them in the Plaid dashboard.`);
+    } else {
+      toast.success(`${deleteTarget.displayName} removed`);
+    }
     setDeleteTarget(null);
     await refreshUsers();
   };

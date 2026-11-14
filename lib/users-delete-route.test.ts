@@ -8,9 +8,13 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 
+let adminError: Error | null = null;
 vi.mock("./auth", () => ({
   hashPassword: async (p: string) => `mock-hash-${p}`,
-  requireAdmin: async () => "admin-id",
+  requireAdmin: async () => {
+    if (adminError) throw adminError;
+    return "admin-id";
+  },
   requireUserId: async () => "admin-id",
   getCurrentUserRole: async () => "admin",
 }));
@@ -59,6 +63,7 @@ beforeEach(() => {
   plaidConfigured = true;
   fakeListUsers = null;
   deleteUserError = null;
+  adminError = null;
   __plaidMock.itemRemove.mockReset();
   __plaidMock.itemRemove.mockResolvedValue({ data: {} });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -198,5 +203,47 @@ describe("DELETE /api/users/[id] revokes Plaid items", () => {
     expect(res.status).not.toBe(200);
     expect(__plaidMock.itemRemove).not.toHaveBeenCalled();
     expect(await getUserById(m)).toBeDefined();
+  });
+
+  it("returns a generic 500 for a delete DB error and logs the raw message", async () => {
+    const m = await mkUser("m@x.test", "member");
+    deleteUserError = new Error("disk I/O error");
+
+    const res = await call(m);
+
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body).toEqual({ error: "internal error", requestId: expect.any(String) });
+    expect(body.requestId).not.toBe("");
+    expect(console.error).toHaveBeenCalledWith("[error]", "server_error", {
+      requestId: body.requestId, status: 500, message: "disk I/O error",
+    });
+    expect(__plaidMock.itemRemove).not.toHaveBeenCalled();
+    expect(await getUserById(m)).toBeDefined();
+  });
+
+  it("returns a generic 500 for a DB error before the delete transaction", async () => {
+    const target = await mkUser("other-admin@x.test", "admin");
+    fakeListUsers = async () => { throw new Error("SQLITE_BUSY: database is locked"); };
+
+    const res = await call(target);
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "internal error", requestId: expect.any(String) });
+    expect(__plaidMock.itemRemove).not.toHaveBeenCalled();
+    expect(await getUserById(target)).toBeDefined();
+  });
+
+  it.each([
+    ["not authenticated", 401],
+    ["forbidden", 403],
+  ])("keeps the %s auth response", async (message, status) => {
+    adminError = new Error(message);
+
+    const res = await call("member-id");
+
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual({ error: message });
+    expect(__plaidMock.itemRemove).not.toHaveBeenCalled();
   });
 });
