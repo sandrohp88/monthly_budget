@@ -31,6 +31,7 @@ export default async function CreditCardsPage() {
   const timezone = settings?.timezone ?? DEFAULT_TIMEZONE;
   const accountById = new Map(accounts.map((a) => [a.id, a]));
   const institutionByItemId = new Map(items.map((i) => [i.id, i.institutionName]));
+  const today = todayIso(timezone);
 
   const data: WalletCard[] = await Promise.all(
     cards.map(async (card) => {
@@ -73,6 +74,7 @@ export default async function CreditCardsPage() {
         balanceCents,
         dueCents,
         dueDate,
+        nextCloseDate: currentCycleWindow(card, today).end,
       };
     }),
   );
@@ -86,7 +88,6 @@ export default async function CreditCardsPage() {
   // ── Current-cycle spending, from real posted transactions ─────────────────
   // Each card's open cycle starts the day after its last statement closed, so
   // one query spanning the earliest window start covers every card.
-  const today = todayIso(timezone);
   const spendingCards = data.map((wc) => ({
     cardId: wc.card.id,
     cardName: cardNames.get(wc.card.id) ?? wc.card.name,
