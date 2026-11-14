@@ -407,6 +407,7 @@ export const statementCreateSchema = z.object({
   dueDate: isoDate,
   statementBalanceCents: cents.refine((n) => n >= 0, "Balance must be non-negative"),
   minimumPaymentCents: cents.refine((n) => n >= 0).nullable().optional(),
+  paidAmountCents: cents.refine((n) => n >= 0, "Paid amount must be non-negative").nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
 });
 
@@ -415,7 +416,7 @@ export const statementUpdateSchema = z.object({
   dueDate: isoDate.optional(),
   statementBalanceCents: cents.optional(),
   minimumPaymentCents: cents.refine((n) => n >= 0).nullable().optional(),
-  paidAmountCents: cents.nullable().optional(),
+  paidAmountCents: cents.refine((n) => n >= 0, "Paid amount must be non-negative").nullable().optional(),
   paidDate: isoDate.nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
 });
@@ -791,7 +792,7 @@ const importCreditCardStatementSchema = z.object({
   // treat it as nothing due (statementCashDueCents).
   statementBalanceCents: cents,
   minimumPaymentCents: cents.nullable().optional(),
-  paidAmountCents: cents.nullable().optional(),
+  paidAmountCents: cents.refine((n) => n >= 0, "Paid amount must be non-negative").nullable().optional(),
   paidDate: isoDate.nullable().optional(),
   notes: optionalNotes,
   // Plaid transaction_id of the draft that settled this statement. Must
