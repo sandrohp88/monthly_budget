@@ -39,6 +39,11 @@ import { BillForm, type BillFormValues } from "../bills/bill-form";
 import { cardPaymentLateWarning, cardPaymentMoveError } from "@/lib/card-payments";
 import type { ProjectionEvent, ProjectionRow } from "@/lib/projection";
 import { paydayDates } from "@/lib/projection-insights";
+import {
+  groupCalendarHistory,
+  type CalendarHistoryDay,
+  type CalendarHistoryItem,
+} from "@/lib/calendar-history";
 import type { CardPaymentOp } from "@/lib/validation";
 import { useRefreshAfterMutation } from "@/lib/refresh-after-mutation";
 
@@ -329,6 +334,7 @@ function BlankCell({ minHeightClass }: { minHeightClass: string }) {
 function DayCell({
   iso,
   row,
+  history,
   today,
   maxChips,
   minHeightClass,
@@ -346,6 +352,8 @@ function DayCell({
 }: {
   iso: string;
   row: ProjectionRow | undefined;
+  /** Posted bank history for days before the projection window (no balance). */
+  history?: CalendarHistoryDay | undefined;
   today: string;
   maxChips: number | null;
   minHeightClass: string;
@@ -371,17 +379,24 @@ function DayCell({
   // only way to reschedule a hidden payment was the edit dialog).
   const [expanded, setExpanded] = React.useState(false);
   const events = row?.events ?? [];
+  const historyItems = history?.items ?? [];
+  // History never overlaps projection rows by construction; prefer events if both.
+  const showHistory = events.length === 0 && historyItems.length > 0;
+  const chipCount = showHistory ? historyItems.length : events.length;
   const isToday = iso === today;
   const isPast = iso < today;
   const capped = maxChips != null && !expanded;
   const shown = capped ? events.slice(0, maxChips) : events;
-  const overflow = capped ? events.length - maxChips! : 0;
-  const canCollapse = expanded && maxChips != null && events.length > maxChips;
+  const shownHistory = capped ? historyItems.slice(0, maxChips) : historyItems;
+  const overflow = capped ? chipCount - maxChips! : 0;
+  const canCollapse = expanded && maxChips != null && chipCount > maxChips;
   const isDropHover = dragActive && dragOverDate === iso;
+  const dayNum = Number(iso.slice(8, 10));
   return (
     <div
       role="button"
       tabIndex={0}
+      aria-label={showHistory ? `${dayNum}, bank history` : undefined}
       onClick={(e) => {
         // A click on a child control (expand / collapse "+N MORE") must not also
         // open the day detail — those buttons manage their own inline state.
@@ -434,7 +449,7 @@ function DayCell({
               : "text-[var(--text-2)]",
           )}
         >
-          {Number(iso.slice(8, 10))}
+          {dayNum}
         </span>
         {row ? (
           <span className="flex items-baseline gap-1" title={balanceTitle(row, today, currency)}>
@@ -458,60 +473,62 @@ function DayCell({
         ) : null}
       </div>
       <div className="space-y-1">
-        {shown.map((ev, j) => {
-          const tone = toneOf(ev, isPast);
-          const credit = isCredit(ev);
-          const onCard = Boolean(ev.chargedToCardName);
-          const cardDue =
-            ev.sourceType === "creditCardPayment" && (ev.paymentDueCents ?? 0) > 0;
-          const draggable = Boolean(canDrag?.(ev, iso));
-          return (
-            <div
-              key={`${iso}-${j}`}
-              draggable={draggable || undefined}
-              onDragStart={
-                draggable
-                  ? (e) => {
-                      e.stopPropagation();
-                      // Payload rides in React state; dataTransfer is set so the
-                      // drag is recognized across browsers (Firefox needs it).
-                      e.dataTransfer.effectAllowed = "move";
-                      e.dataTransfer.setData("text/plain", ev.sourceId ?? "card-payment");
-                      onPaymentDragStart?.(ev, iso);
-                    }
-                  : undefined
-              }
-              onDragEnd={draggable ? () => onPaymentDragEnd?.() : undefined}
-              className={cn(
-                "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-2xs leading-tight",
-                TONE_CLASSES[tone],
-                draggable ? "cursor-grab active:cursor-grabbing" : "",
-              )}
-              title={
-                [
-                  draggable ? "Drag to reschedule" : null,
-                  onCard ? `Charged to ${ev.chargedToCardName}` : null,
-                  utilizationTitleOf(cardCreditOf(ev, cards), currency),
-                ]
-                  .filter(Boolean)
-                  .join(" · ") || undefined
-              }
-            >
-              <div className="flex min-w-0 flex-1 flex-col">
-                <div className="flex items-center justify-between gap-1">
-                  <span className="min-w-0 truncate">
-                    {cardDue ? `Card due · ${ev.label}` : ev.label}
-                  </span>
-                  <span className="tabular shrink-0">
-                    {onCard ? "" : credit ? "+" : "−"}
-                    <Money cents={displayCents(ev)} />
-                  </span>
+        {showHistory
+          ? shownHistory.map((item) => <HistoryChip key={item.id} item={item} />)
+          : shown.map((ev, j) => {
+              const tone = toneOf(ev, isPast);
+              const credit = isCredit(ev);
+              const onCard = Boolean(ev.chargedToCardName);
+              const cardDue =
+                ev.sourceType === "creditCardPayment" && (ev.paymentDueCents ?? 0) > 0;
+              const draggable = Boolean(canDrag?.(ev, iso));
+              return (
+                <div
+                  key={`${iso}-${j}`}
+                  draggable={draggable || undefined}
+                  onDragStart={
+                    draggable
+                      ? (e) => {
+                          e.stopPropagation();
+                          // Payload rides in React state; dataTransfer is set so the
+                          // drag is recognized across browsers (Firefox needs it).
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/plain", ev.sourceId ?? "card-payment");
+                          onPaymentDragStart?.(ev, iso);
+                        }
+                      : undefined
+                  }
+                  onDragEnd={draggable ? () => onPaymentDragEnd?.() : undefined}
+                  className={cn(
+                    "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-2xs leading-tight",
+                    TONE_CLASSES[tone],
+                    draggable ? "cursor-grab active:cursor-grabbing" : "",
+                  )}
+                  title={
+                    [
+                      draggable ? "Drag to reschedule" : null,
+                      onCard ? `Charged to ${ev.chargedToCardName}` : null,
+                      utilizationTitleOf(cardCreditOf(ev, cards), currency),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || undefined
+                  }
+                >
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="min-w-0 truncate">
+                        {cardDue ? `Card due · ${ev.label}` : ev.label}
+                      </span>
+                      <span className="tabular shrink-0">
+                        {onCard ? "" : credit ? "+" : "−"}
+                        <Money cents={displayCents(ev)} />
+                      </span>
+                    </div>
+                    <InlineCardUtilization card={cardCreditOf(ev, cards)} />
+                  </div>
                 </div>
-                <InlineCardUtilization card={cardCreditOf(ev, cards)} />
-              </div>
-            </div>
-          );
-        })}
+              );
+            })}
         {overflow > 0 ? (
           <button
             type="button"
@@ -520,7 +537,11 @@ function DayCell({
               setExpanded(true);
             }}
             className="w-full rounded-[2px] px-1 py-0.5 text-left text-2xs text-[var(--text-3)] transition-colors hover:bg-[var(--bg-2)] hover:text-[var(--text-1)]"
-            title="Show all — reveals hidden payments so they can be dragged"
+            title={
+              showHistory
+                ? "Show all history"
+                : "Show all — reveals hidden payments so they can be dragged"
+            }
           >
             +{overflow} more
           </button>
@@ -538,6 +559,26 @@ function DayCell({
           </button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** Grayed posted-tone chip for a bank history item (read-only, never draggable). */
+function HistoryChip({ item }: { item: CalendarHistoryItem }) {
+  const moneyIn = item.amountCents < 0;
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-1 rounded-[2px] border px-1 py-0.5 text-2xs leading-tight",
+        TONE_CLASSES.posted,
+      )}
+      title="Bank history"
+    >
+      <span className="min-w-0 truncate">{item.description}</span>
+      <span className="tabular shrink-0">
+        {moneyIn ? "+" : "−"}
+        <Money cents={Math.abs(item.amountCents)} />
+      </span>
     </div>
   );
 }
@@ -744,6 +785,7 @@ export function CalendarClient({
   today,
   startDate,
   endDate,
+  history = [],
   categories,
   cards,
   overrides,
@@ -753,6 +795,8 @@ export function CalendarClient({
   today: string;
   startDate: string;
   endDate: string;
+  /** Posted bank drafts for days before `startDate` (read-only history layer). */
+  history?: ReadonlyArray<CalendarHistoryItem>;
   categories: ReadonlyArray<string>;
   cards: ReadonlyArray<{
     id: string;
@@ -793,6 +837,11 @@ export function CalendarClient({
     for (const row of rows) map.set(row.date, row);
     return map;
   }, [rows]);
+
+  const historyByDate = React.useMemo(
+    () => groupCalendarHistory(history, startDate),
+    [history, startDate],
+  );
 
   const activeCards = React.useMemo(() => cards.filter((c) => c.isActive), [cards]);
   const cardById = React.useMemo(() => new Map(cards.map((c) => [c.id, c])), [cards]);
@@ -939,8 +988,15 @@ export function CalendarClient({
   const monthIncome = monthRows.reduce((s, r) => s + r.incomeCents, 0);
   const monthExpense = monthRows.reduce((s, r) => s + r.expenseCents, 0);
   const outsideWindow = monthRows.length === 0;
+  const monthHasHistory = React.useMemo(() => {
+    for (const date of historyByDate.keys()) {
+      if (date.startsWith(monthPrefix)) return true;
+    }
+    return false;
+  }, [historyByDate, monthPrefix]);
 
   const selectedRow = selectedDate ? rowByDate.get(selectedDate) : undefined;
+  const selectedHistory = selectedDate ? historyByDate.get(selectedDate) : undefined;
 
   // ---- Paycheck-cycle view -------------------------------------------------
   // Each payday opens a cycle that runs until the day before the next payday
@@ -1568,10 +1624,20 @@ export function CalendarClient({
       {view === "month" ? (
         <>
           {outsideWindow ? (
-            <p className="text-[12px] text-[var(--text-3)]">
-              This month is outside the projection window (
-              <DateLabel iso={startDate} format="short" /> – <DateLabel iso={endDate} format="short" />
-              ) — no scheduled events to show, but you can still click a day to add a bill or plan a card payment.
+            <p className="text-[12px] text-[var(--text-2)]">
+              {monthHasHistory ? (
+                <>
+                  Days before <DateLabel iso={startDate} format="short" /> show bank history
+                  only, with no projected balance.
+                </>
+              ) : (
+                <>
+                  This month is outside the projection window (
+                  <DateLabel iso={startDate} format="short" /> –{" "}
+                  <DateLabel iso={endDate} format="short" />
+                  ). Click a day to add a bill or plan a card payment.
+                </>
+              )}
             </p>
           ) : null}
 
@@ -1585,6 +1651,7 @@ export function CalendarClient({
                       key={iso}
                       iso={iso}
                       row={rowByDate.get(iso)}
+                      history={historyByDate.get(iso)}
                       today={today}
                       maxChips={MAX_CHIPS_PER_DAY}
                       minHeightClass="min-h-[104px]"
@@ -1812,7 +1879,11 @@ export function CalendarClient({
               </DialogHeader>
               <div className="space-y-2">
                 {(selectedRow?.events ?? []).length === 0 ? (
-                  <p className="text-[13px] text-[var(--text-2)]">No scheduled events on this day.</p>
+                  // A day that has bank history is not empty: the History list
+                  // below is its content.
+                  selectedHistory && selectedHistory.items.length > 0 ? null : (
+                    <p className="text-[13px] text-[var(--text-2)]">No scheduled events on this day.</p>
+                  )
                 ) : (
                   (selectedRow?.events ?? []).map((ev, i) => {
                     const isPastDay = selectedDate < today;
@@ -2059,6 +2130,60 @@ export function CalendarClient({
                     );
                   })
                 )}
+                {selectedHistory && selectedHistory.items.length > 0 ? (
+                  <div
+                    className={cn(
+                      "space-y-2",
+                      (selectedRow?.events ?? []).length > 0 && "border-t border-[var(--border-raw)] pt-2",
+                    )}
+                  >
+                    <div className="flex items-baseline justify-between gap-2">
+                      <div className="text-2xs font-semibold tracking-[0.12em] text-[var(--text-2)]">
+                        HISTORY
+                      </div>
+                      <div className="flex gap-3 text-2xs text-[var(--text-2)]">
+                        {selectedHistory.moneyInCents > 0 ? (
+                          <span>
+                            IN{" "}
+                            <span className="tabular font-semibold">
+                              +<Money cents={selectedHistory.moneyInCents} />
+                            </span>
+                          </span>
+                        ) : null}
+                        {selectedHistory.moneyOutCents > 0 ? (
+                          <span>
+                            OUT{" "}
+                            <span className="tabular font-semibold">
+                              −<Money cents={selectedHistory.moneyOutCents} />
+                            </span>
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    {selectedHistory.items.map((item) => {
+                      const moneyIn = item.amountCents < 0;
+                      return (
+                        <div
+                          key={item.id}
+                          className="flex flex-wrap items-center justify-between gap-3 border border-[var(--border-raw)] bg-[var(--bg-2)] px-3 py-2"
+                        >
+                          <div className="min-w-0 flex-1 basis-40">
+                            <div className="break-words text-[13px] text-[var(--text-0)]">
+                              {item.description}
+                            </div>
+                            <div className="text-2xs text-[var(--text-2)]">bank history</div>
+                          </div>
+                          <span
+                            className={cn("tabular text-[13px] font-semibold", TONE_TEXT.posted)}
+                          >
+                            {moneyIn ? "+" : "−"}
+                            <Money cents={Math.abs(item.amountCents)} />
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
                 {selectedRow ? (
                   <div className="border-t border-[var(--border-raw)] pt-2 text-[12px] text-[var(--text-2)]">
                     <div className="flex items-center justify-between">

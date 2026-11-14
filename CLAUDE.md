@@ -90,7 +90,8 @@ app/
     accounts/              ← linked-bank accounts (Plaid) + link-card chooser
     assets/                ← manual net-worth line items
     bills/                 ← recurring + variable bills, payment overrides
-    calendar/              ← month-grid of projection events; day click adds a bill
+    calendar/              ← month-grid of projection events; days before startDate
+                             show read-only posted bank history (no balance); day click adds a bill
     credit-cards/          ← two tabs. WALLET: official card art grid (balance + last digits
                              only). SPENDING (spending-client.tsx): current-cycle charges from
                              POSTED TRANSACTIONS + utilization vs credit line, from

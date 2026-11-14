@@ -7,8 +7,10 @@ import {
   listCreditCards,
   listCreditCardPaymentOverridesForUser,
   listPlaidAccounts,
+  listStartingBalanceDraftsInRange,
 } from "@/lib/repos";
-import { DEFAULT_TIMEZONE } from "@/lib/dates";
+import { addDaysIso, DEFAULT_TIMEZONE } from "@/lib/dates";
+import { MAX_LOOKBACK_DAYS } from "@/lib/projection";
 import { CalendarClient } from "./calendar-client";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +27,22 @@ export default async function CalendarPage() {
     listPlaidAccounts(userId),
   ]);
   if (!projection) redirect("/setup");
+
+  // Posted drafts on cash accounts for days strictly BEFORE projection.startDate.
+  // Inclusive repo range → end at the day before startDate. Never overlaps rows.
+  const historyFloor = addDaysIso(projection.today, -MAX_LOOKBACK_DAYS);
+  const historyEndInclusive =
+    historyFloor < projection.startDate ? addDaysIso(projection.startDate, -1) : null;
+  const historyDrafts =
+    historyEndInclusive != null
+      ? await listStartingBalanceDraftsInRange(userId, historyFloor, historyEndInclusive)
+      : [];
+  const history = historyDrafts.map((d) => ({
+    id: d.id,
+    date: d.date,
+    description: (d.merchantName?.trim() || d.description).trim() || d.description,
+    amountCents: d.amountCents,
+  }));
 
   // Credit line + balance per card, for the utilization bar on card events.
   // Balance resolves the same way the wallet's first two fallbacks do
@@ -66,6 +84,7 @@ export default async function CalendarPage() {
         today={projection.today}
         startDate={projection.startDate}
         endDate={projection.endDate}
+        history={history}
         categories={categories.filter((c) => c.kind === "expense").map((c) => c.name)}
         cards={cardCredit}
         overrides={overrides.map((o) => ({ cardId: o.cardId, dueDate: o.dueDate }))}
