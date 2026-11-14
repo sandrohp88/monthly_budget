@@ -810,7 +810,7 @@ describe("backup import / semantic round trip", () => {
           minimumPaymentCents: MAX,
           notes: long(500),
         }),
-        ...ok(statementUpdateSchema, { paidAmountCents: -MAX, paidDate: "2026-10-30" }),
+        ...ok(statementUpdateSchema, { paidAmountCents: MAX, paidDate: "2026-10-30" }),
       })
       .run();
 

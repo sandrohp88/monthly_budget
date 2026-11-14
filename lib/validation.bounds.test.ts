@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  BACKUP_SCHEMA_VERSION,
+  backupImportSchema,
   billCreateSchema,
   isRealIsoDate,
   isSupportedTimeZone,
   MAX_ABS_CENTS,
   settingsUpdateSchema,
   setupSchema,
+  statementCreateSchema,
+  statementUpdateSchema,
 } from "./validation";
 
 // Review 2026-09-21 R08: the date validator checked format only, settings
@@ -76,5 +80,52 @@ describe("money bounds", () => {
   it("still allows legitimate negative values where the domain does", () => {
     expect(settingsUpdateSchema.safeParse({ ...settings, startingBalanceCents: -250_00 }).success).toBe(true);
     expect(settingsUpdateSchema.safeParse({ ...settings, startingBalanceCents: -MAX_ABS_CENTS - 1 }).success).toBe(false);
+  });
+});
+
+describe("statement paid amounts", () => {
+  const statement = {
+    statementDate: "2026-09-01",
+    dueDate: "2026-09-25",
+    statementBalanceCents: 100,
+  };
+  const paths = [
+    {
+      name: "create",
+      parse: (paidAmountCents?: number | null) =>
+        statementCreateSchema.safeParse({ ...statement, paidAmountCents }),
+    },
+    {
+      name: "update",
+      parse: (paidAmountCents?: number | null) =>
+        statementUpdateSchema.safeParse({ ...statement, paidAmountCents }),
+    },
+    {
+      name: "backup import",
+      parse: (paidAmountCents?: number | null) =>
+        backupImportSchema.safeParse({
+          schemaVersion: BACKUP_SCHEMA_VERSION,
+          exportedAt: "2026-09-21T00:00:00.000Z",
+          settings: null,
+          bills: [],
+          paychecks: [],
+          extras: [],
+          creditCards: [],
+          creditCardStatements: [{ ...statement, cardId: "card", paidAmountCents }],
+        }),
+    },
+  ];
+
+  describe.each(paths)("$name", ({ parse }) => {
+    it.each([-1, -MAX_ABS_CENTS])("rejects negative paid amount %s", (amount) => {
+      expect(parse(amount).success).toBe(false);
+    });
+
+    it.each([undefined, null, 0, 1, 101, MAX_ABS_CENTS])(
+      "accepts paid amount %s, including overpayments",
+      (amount) => {
+        expect(parse(amount).success).toBe(true);
+      },
+    );
   });
 });
