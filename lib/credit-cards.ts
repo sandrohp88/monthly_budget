@@ -181,6 +181,116 @@ export function statementCashDueCents(s: CreditCardStatementRow): number {
   return s.statementBalanceCents > 0 ? s.statementBalanceCents : (s.minimumPaymentCents ?? 0);
 }
 
+/** The promo fields the Interest Saving Balance reads. */
+export type PromoForInterestSaving = Pick<
+  CreditCardPromoRow,
+  | "remainingAmountCents"
+  | "monthlyPaymentCents"
+  | "startDate"
+  | "endDate"
+  | "isActive"
+  | "authoritativeSource"
+>;
+
+/** The statement fields the "inside this statement" rule reads. */
+type StatementForInterestSaving = Pick<
+  CreditCardStatementRow,
+  "statementBalanceCents" | "minimumPaymentCents" | "dueDate" | "statementDate"
+> &
+  Partial<Pick<CreditCardStatementRow, "paidAmountCents" | "paidDate">>;
+
+/**
+ * The day the PROJ-2 rule took effect. A payment recorded with an earlier
+ * `paidDate` was made against the amount the OLD rule showed (every active
+ * promo subtracted), so that statement keeps the old view for promos typed in
+ * the app. Every later payment is judged by the strict rule.
+ */
+export const PROMO_INSIDE_STATEMENT_RULE_FROM = "2026-11-15";
+
+/**
+ * Did this promo exist when the statement closed? (PROJ-2)
+ *
+ * - A promo taken from the issuer's own plan list (`chase_flex_plan_list`,
+ *   `paypal_promo_list`) always counts. Its `startDate` is the day the list
+ *   was pasted, not the day of the purchase, so the date says nothing; and the
+ *   usual source of that list is the statement itself.
+ * - Any other promo counts only when it started on or before the close. A
+ *   purchase made after the close cannot be in that balance, so subtracting
+ *   it would ask for too little and cost interest. This covers promos
+ *   auto-created from a card purchase (`startDate` = purchase date) and promos
+ *   typed or edited in the app (`manual_reconciliation`; the dialog's start
+ *   date defaults to today).
+ */
+function promoStartedByClose(
+  p: Pick<CreditCardPromoRow, "startDate" | "authoritativeSource">,
+  statementDate: string,
+): boolean {
+  return (
+    p.authoritativeSource === "chase_flex_plan_list" ||
+    p.authoritativeSource === "paypal_promo_list" ||
+    p.startDate <= statementDate
+  );
+}
+
+/** The ISB arithmetic for an already-chosen set of promos (see the doc below). */
+function interestSavingFromIncluded(
+  s: StatementForInterestSaving,
+  included: ReadonlyArray<PromoForInterestSaving>,
+): number {
+  const base =
+    s.statementBalanceCents > 0 ? s.statementBalanceCents : (s.minimumPaymentCents ?? 0);
+  if (s.statementBalanceCents <= 0) return base;
+  if (included.length === 0) return base;
+  const remaining = included.reduce((sum, p) => sum + p.remainingAmountCents, 0);
+  if (remaining > s.statementBalanceCents) return base;
+  // The plan payment the issuer bills this cycle — promoMonthlyChunkAt at the
+  // due date (an expired promo returns its full remaining: that principal IS
+  // exposed to interest now, so it stays inside the ISB).
+  const chunks = included.reduce((sum, p) => sum + promoMonthlyChunkAt(p, s.dueDate), 0);
+  const isb = s.statementBalanceCents - remaining + chunks;
+  return Math.min(base, Math.max(s.minimumPaymentCents ?? 0, isb, 0));
+}
+
+/**
+ * The promos whose principal counts as inside this statement's balance — the
+ * ONE place that decides it (the Interest Saving Balance, the open-cycle
+ * estimate and the promo cash schedule all use this). Inactive and
+ * zero-remaining rows never count.
+ *
+ * The rule is `promoStartedByClose`, with one exception that keeps history
+ * stable: on a statement that was due AND whose payment was recorded BEFORE
+ * `PROMO_INSIDE_STATEMENT_RULE_FROM`, a `manual_reconciliation` promo that
+ * started after the close still counts, as it did under the old rule. Its
+ * typed start date cannot show whether the purchase was on that statement,
+ * and a statement the user paid at the amount the app showed then must not
+ * turn "overdue" now. The exception looks only at the payment DATE, never at
+ * its amount: a payment made after the rule changed (also $0 or a partial
+ * one) is always judged by the strict rule.
+ *
+ * When the app cannot tell (a plan typed late for a purchase that IS on the
+ * statement) it asks for the full balance, which costs no interest. Setting
+ * the plan's start date to the purchase date makes it count.
+ */
+export function promosInsideStatement<P extends PromoForInterestSaving>(
+  s: StatementForInterestSaving,
+  promos: ReadonlyArray<P>,
+): P[] {
+  const live = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);
+  const paidUnderOldRule =
+    s.paidAmountCents != null &&
+    s.paidDate != null &&
+    s.paidDate < PROMO_INSIDE_STATEMENT_RULE_FROM &&
+    // A statement still due after the rule changed can still be paid in full
+    // without interest, so it gets the strict rule even if a payment was
+    // recorded earlier.
+    s.dueDate < PROMO_INSIDE_STATEMENT_RULE_FROM;
+  return live.filter(
+    (p) =>
+      promoStartedByClose(p, s.statementDate) ||
+      (paidUnderOldRule && p.authoritativeSource === "manual_reconciliation"),
+  );
+}
+
 /**
  * Cash needed by the due date to avoid interest when the card carries active
  * flexible-financing promos (Chase "Interest Saving Balance", and the same
@@ -197,6 +307,9 @@ export function statementCashDueCents(s: CreditCardStatementRow): number {
  * interest too, but prematurely pays off the 0% plans; this is the smaller
  * number that still avoids interest.
  *
+ * Only promos that can be inside this statement count (see
+ * `promosInsideStatement`): a purchase made after the close is not in it.
+ *
  * Pass the card's promos; inactive/zero-remaining rows are ignored. With no
  * qualifying promos (or a $0-balance statement, the PayPal minimum-payment
  * shape) this is exactly `statementCashDueCents`.
@@ -208,24 +321,10 @@ export function statementCashDueCents(s: CreditCardStatementRow): number {
  * unreconciled promo rows) falls back to the full statement cash due.
  */
 export function interestSavingCashDueCents(
-  s: Pick<CreditCardStatementRow, "statementBalanceCents" | "minimumPaymentCents" | "dueDate">,
-  promos: ReadonlyArray<
-    Pick<CreditCardPromoRow, "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive">
-  >,
+  s: StatementForInterestSaving,
+  promos: ReadonlyArray<PromoForInterestSaving>,
 ): number {
-  const base =
-    s.statementBalanceCents > 0 ? s.statementBalanceCents : (s.minimumPaymentCents ?? 0);
-  if (s.statementBalanceCents <= 0) return base;
-  const active = promos.filter((p) => p.isActive && p.remainingAmountCents > 0);
-  if (active.length === 0) return base;
-  const remaining = active.reduce((sum, p) => sum + p.remainingAmountCents, 0);
-  if (remaining > s.statementBalanceCents) return base;
-  // The plan payment the issuer bills this cycle — promoMonthlyChunkAt at the
-  // due date (an expired promo returns its full remaining: that principal IS
-  // exposed to interest now, so it stays inside the ISB).
-  const chunks = active.reduce((sum, p) => sum + promoMonthlyChunkAt(p, s.dueDate), 0);
-  const isb = s.statementBalanceCents - remaining + chunks;
-  return Math.min(base, Math.max(s.minimumPaymentCents ?? 0, isb, 0));
+  return interestSavingFromIncluded(s, promosInsideStatement(s, promos));
 }
 
 /**
@@ -238,19 +337,14 @@ export function interestSavingCashDueCents(
 export function interestSavingOwedCents(
   s: Pick<
     CreditCardStatementRow,
-    "statementBalanceCents" | "minimumPaymentCents" | "dueDate" | "paidAmountCents"
+    "statementBalanceCents" | "minimumPaymentCents" | "dueDate" | "statementDate" | "paidAmountCents"
   >,
-  promos: ReadonlyArray<
-    Pick<CreditCardPromoRow, "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive">
-  >,
+  promos: ReadonlyArray<PromoForInterestSaving>,
 ): number {
   return Math.max(0, interestSavingCashDueCents(s, promos) - (s.paidAmountCents ?? 0));
 }
 
-type PromoForOwed = Pick<
-  CreditCardPromoRow,
-  "cardId" | "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive"
->;
+type PromoForOwed = PromoForInterestSaving & Pick<CreditCardPromoRow, "cardId">;
 
 /**
  * What each statement still owes to avoid interest, as the dashboard, wallet
@@ -319,9 +413,7 @@ export type OpenStatementObligation = {
  */
 export function openStatementObligation(
   statements: ReadonlyArray<CreditCardStatementRow>,
-  promos: ReadonlyArray<
-    Pick<CreditCardPromoRow, "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive">
-  >,
+  promos: ReadonlyArray<PromoForInterestSaving>,
 ): OpenStatementObligation {
   let cents = 0;
   let count = 0;
@@ -343,9 +435,7 @@ export function openStatementObligation(
  */
 export function paidWithoutInterest(
   s: CreditCardStatementRow,
-  promos: ReadonlyArray<
-    Pick<CreditCardPromoRow, "remainingAmountCents" | "monthlyPaymentCents" | "endDate" | "isActive">
-  > = [],
+  promos: ReadonlyArray<PromoForInterestSaving> = [],
 ): boolean {
   const dueCents = interestSavingCashDueCents(s, promos);
   if (dueCents <= 0) return true;

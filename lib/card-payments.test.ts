@@ -1830,3 +1830,136 @@ describe("projectCardPayments — past payments cover a manual card's closed-cyc
     expect(june(unposted)?.scheduledCoverCents).toBe(150_00);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// PROJ-2: a promo that starts after the statement closed
+// ────────────────────────────────────────────────────────────────────────────
+describe("projectCardPayments — a promo that starts after the statement closed (PROJ-2)", () => {
+  // $3,000 statement closed 07-10 (due 08-07). On 07-15 a $1,000 purchase goes
+  // on a 12-month plan, $84 a month. Live balance: $4,000.
+  const run = (
+    promoOver: Partial<CreditCardPromoRow> = {},
+    stmtOver: Partial<StatementWithCardName> = {},
+    liveBalanceCents = 4000_00,
+  ) =>
+    projectCardPayments({
+      ...EMPTY,
+      today: "2026-07-20",
+      endDate: "2027-09-01",
+      activeCards: [card({ statementDay: 10, dueDay: 7, currentBalanceCents: liveBalanceCents })],
+      statements: [
+        stmt({
+          statementDate: "2026-07-10",
+          dueDate: "2026-08-07",
+          statementBalanceCents: 3000_00,
+          minimumPaymentCents: 40_00,
+          ...stmtOver,
+        }),
+      ],
+      promos: [
+        promo({
+          originalAmountCents: 1000_00,
+          remainingAmountCents: 1000_00,
+          monthlyPaymentCents: 84_00,
+          startDate: "2026-07-15",
+          endDate: "2027-07-15",
+          ...promoOver,
+        }),
+      ],
+    });
+  const owedOn = (r: Result, date: string) =>
+    markersOf(r)
+      .filter((m) => m.date === date)
+      .reduce((sum, m) => sum + (m.paymentDueCents ?? 0), 0);
+  const owedTotal = (r: Result) =>
+    markersOf(r).reduce((sum, m) => sum + (m.paymentDueCents ?? 0), 0);
+
+  it("the statement marker asks for the full $3,000", () => {
+    expect(owedOn(run(), "2026-08-07")).toBe(3000_00);
+  });
+
+  it("the open-cycle estimate does not count the plan a second time", () => {
+    // Live $4,000 = $3,000 statement + $1,000 plan. Nothing else is owed, so
+    // the markers must add up to the statement alone.
+    expect(owedTotal(run())).toBe(3000_00);
+  });
+
+  it("the plan's cash schedule keeps every payment: $1,000 in total", () => {
+    // The statement amount no longer carries this plan's payment for the
+    // 08-07 cycle, so the schedule must not skip that cycle.
+    expect(cashTotal(run())).toBe(1000_00);
+  });
+
+  it("a plan inside the statement is unchanged: marker $2,084, cash $916 + nothing lost", () => {
+    // The plan's purchase is ON the statement, so the live balance is $3,000.
+    const r = run({ startDate: "2026-07-01" }, {}, 3000_00);
+    expect(owedOn(r, "2026-08-07")).toBe(2084_00);
+    // The 08-07 payment rides inside the statement amount; the rest is cash.
+    expect(cashTotal(r)).toBe(916_00);
+    expect(owedTotal(r)).toBe(2084_00);
+  });
+
+  it("a typed plan on a statement that already has a payment does not reopen it", () => {
+    // The user paid the $2,084 the app showed. The plan row was typed on 07-15.
+    const r = run(
+      { authoritativeSource: "manual_reconciliation" },
+      { paidAmountCents: 2084_00, paidDate: "2026-08-01" },
+    );
+    expect(owedOn(r, "2026-08-07")).toBe(0);
+  });
+
+  // The same scenario one year later, so payments fall after the rule change.
+  const runNextYear = (
+    promoOver: Partial<CreditCardPromoRow> = {},
+    stmtOver: Partial<StatementWithCardName> = {},
+    liveBalanceCents = 4000_00,
+  ) =>
+    projectCardPayments({
+      ...EMPTY,
+      today: "2027-07-20",
+      endDate: "2028-09-01",
+      activeCards: [card({ statementDay: 10, dueDay: 7, currentBalanceCents: liveBalanceCents })],
+      statements: [
+        stmt({
+          statementDate: "2027-07-10",
+          dueDate: "2027-08-07",
+          statementBalanceCents: 3000_00,
+          minimumPaymentCents: 40_00,
+          ...stmtOver,
+        }),
+      ],
+      promos: [
+        promo({
+          originalAmountCents: 1000_00,
+          remainingAmountCents: 1000_00,
+          monthlyPaymentCents: 84_00,
+          startDate: "2027-07-15",
+          endDate: "2028-07-15",
+          authoritativeSource: "manual_reconciliation",
+          ...promoOver,
+        }),
+      ],
+    });
+
+  it("a partial payment with a typed late plan: strict amounts everywhere", () => {
+    // After the $1,000 payment the live balance is $3,000.
+    const r = runNextYear({}, { paidAmountCents: 1000_00, paidDate: "2027-07-18" }, 3000_00);
+    // $3,000 − $1,000 paid = $2,000 still owed on the statement.
+    expect(owedOn(r, "2027-08-07")).toBe(2000_00);
+    expect(owedTotal(r)).toBe(2000_00);
+    // The plan is not inside the statement, so no payment of it is skipped.
+    expect(cashTotal(r)).toBe(1000_00);
+  });
+
+  it("paying the full $3,000 the app asked for loses no plan payment", () => {
+    // After the $3,000 payment only the plan's $1,000 is left on the card.
+    const r = runNextYear({}, { paidAmountCents: 3000_00, paidDate: "2027-07-18" }, 1000_00);
+    expect(owedTotal(r)).toBe(0);
+    expect(cashTotal(r)).toBe(1000_00);
+  });
+
+  it("the same typed plan on an UNPAID statement is not subtracted", () => {
+    const r = run({ authoritativeSource: "manual_reconciliation" });
+    expect(owedOn(r, "2026-08-07")).toBe(3000_00);
+  });
+});

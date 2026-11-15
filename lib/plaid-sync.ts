@@ -1478,6 +1478,7 @@ export async function syncCreditCardLiabilitiesForItem(
               statementBalanceCents: stmtBalCents,
               minimumPaymentCents,
               dueDate: resolvedDue,
+              statementDate: stmtDate,
             },
             activePromos,
           ),

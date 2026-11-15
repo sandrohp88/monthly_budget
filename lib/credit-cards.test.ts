@@ -14,6 +14,8 @@ import {
   nextStatementDateOnOrAfter,
   openStatementObligation,
   paidWithoutInterest,
+  promosInsideStatement,
+  PROMO_INSIDE_STATEMENT_RULE_FROM,
   previousStatementDateOnOrBefore,
   projectPromoSchedule,
   promoFullBalancePayment,
@@ -678,6 +680,175 @@ describe("promoMonthlyChunkAt", () => {
 // ISB = New Balance − Σ flex remaining + Σ plan payments this cycle,
 // floored at the minimum payment.
 // ────────────────────────────────────────────────────────────────────────────
+describe("interestSavingCashDueCents — a promo that starts after the close (PROJ-2)", () => {
+  // $3,000 statement closed 2026-07-10. Five days later a $1,000 purchase goes
+  // on a 12-month plan ($84/month). That principal is not in the statement.
+  const s = () =>
+    statement({
+      statementDate: "2026-07-10",
+      dueDate: "2026-08-07",
+      statementBalanceCents: 3000_00,
+      minimumPaymentCents: 40_00,
+    });
+  const latePlan = (over: Partial<CreditCardPromoRow> = {}) =>
+    promo({
+      remainingAmountCents: 1000_00,
+      monthlyPaymentCents: 84_00,
+      startDate: "2026-07-15",
+      endDate: "2027-07-15",
+      ...over,
+    });
+
+  it("asks for the full $3,000, not $2,084", () => {
+    expect(interestSavingCashDueCents(s(), [latePlan()])).toBe(3000_00);
+    expect(interestSavingOwedCents(s(), [latePlan()])).toBe(3000_00);
+  });
+
+  it("a $2,084 payment is not 'paid without interest'", () => {
+    const paid = { ...s(), paidAmountCents: 2084_00, paidDate: "2026-08-05" };
+    expect(paidWithoutInterest(paid, [latePlan()])).toBe(false);
+    expect(interestSavingOwedCents(paid, [latePlan()])).toBe(916_00);
+  });
+
+  it("a promo that started on or before the close still lowers the amount", () => {
+    for (const startDate of ["2026-07-10", "2026-06-20"]) {
+      expect(interestSavingCashDueCents(s(), [latePlan({ startDate })])).toBe(2084_00);
+    }
+  });
+
+  it("a plan from the issuer's own list counts whatever its start date", () => {
+    // Its startDate is the day the list was pasted, after the close.
+    for (const authoritativeSource of ["chase_flex_plan_list", "paypal_promo_list"] as const) {
+      expect(
+        interestSavingCashDueCents(s(), [latePlan({ authoritativeSource })]),
+      ).toBe(2084_00);
+    }
+  });
+
+  it("a plan typed or edited in the app follows the date rule on an unpaid statement", () => {
+    // The promo dialog tags every row it saves `manual_reconciliation`.
+    const typed = latePlan({ authoritativeSource: "manual_reconciliation" });
+    expect(interestSavingCashDueCents(s(), [typed])).toBe(3000_00);
+    expect(
+      interestSavingCashDueCents(s(), [latePlan({ authoritativeSource: "manual_reconciliation", startDate: "2026-07-01" })]),
+    ).toBe(2084_00);
+  });
+
+  it("a typed plan does not reopen a statement that already has a payment", () => {
+    const typed = latePlan({ authoritativeSource: "manual_reconciliation" });
+    const paid = { ...s(), paidAmountCents: 2084_00, paidDate: "2026-08-05" };
+    expect(interestSavingOwedCents(paid, [typed])).toBe(0);
+    expect(paidWithoutInterest(paid, [typed])).toBe(true);
+    // An auto-created promo (purchase date known) still shows the shortfall.
+    expect(interestSavingOwedCents(paid, [latePlan()])).toBe(916_00);
+  });
+
+  it("the closing date itself is inside; the next day is not", () => {
+    expect(interestSavingCashDueCents(s(), [latePlan({ startDate: "2026-07-10" })])).toBe(2084_00);
+    expect(interestSavingCashDueCents(s(), [latePlan({ startDate: "2026-07-11" })])).toBe(3000_00);
+    expect(promosInsideStatement(s(), [latePlan({ startDate: "2026-07-11" })])).toEqual([]);
+  });
+
+  // A payment recorded after the rule changed is judged by the strict rule.
+  const AFTER = "2026-11-20";
+  // A payment recorded before it keeps the view the old rule gave.
+  const BEFORE = "2026-08-05";
+  const typedPlan = (over: Partial<CreditCardPromoRow> = {}) =>
+    latePlan({ authoritativeSource: "manual_reconciliation", ...over });
+  const withPaid = (paidAmountCents: number, paidDate: string | null) => ({
+    ...s(),
+    paidAmountCents,
+    paidDate,
+  });
+
+  it("a typed late plan gives no relief to any payment made under the new rule", () => {
+    const owed = (paid: number) => interestSavingOwedCents(withPaid(paid, AFTER), [typedPlan()]);
+    expect(owed(0)).toBe(3000_00);
+    expect(owed(1000_00)).toBe(2000_00);
+    expect(owed(2084_00)).toBe(916_00);
+    expect(owed(2500_00)).toBe(500_00);
+    expect(owed(3000_00)).toBe(0);
+    expect(paidWithoutInterest(withPaid(2500_00, AFTER), [typedPlan()])).toBe(false);
+  });
+
+  it("two typed late plans: a partial payment above the old amount is still partial", () => {
+    // Old rule: 3,000 − 2,000 + 168 = 1,168. A $1,200 payment is NOT enough.
+    const plans = [typedPlan({ id: "a" }), typedPlan({ id: "b" })];
+    expect(interestSavingOwedCents(withPaid(1200_00, AFTER), plans)).toBe(1800_00);
+    expect(paidWithoutInterest(withPaid(1200_00, AFTER), plans)).toBe(false);
+  });
+
+  it("the minimum-payment floor gives no shortcut either", () => {
+    // $1,100 statement, $100 minimum, one typed late $1,000 plan.
+    const small = {
+      ...s(),
+      statementBalanceCents: 1100_00,
+      minimumPaymentCents: 100_00,
+      paidAmountCents: 184_00,
+      paidDate: AFTER,
+    };
+    expect(interestSavingOwedCents(small, [typedPlan()])).toBe(916_00);
+    expect(paidWithoutInterest(small, [typedPlan()])).toBe(false);
+  });
+
+  it("a payment recorded before the rule changed keeps the old view", () => {
+    // The app showed $2,084 then; the user paid it. It must not turn overdue.
+    expect(interestSavingOwedCents(withPaid(2084_00, BEFORE), [typedPlan()])).toBe(0);
+    expect(paidWithoutInterest(withPaid(2084_00, BEFORE), [typedPlan()])).toBe(true);
+    // The old view of an old partial payment is unchanged too.
+    expect(interestSavingOwedCents(withPaid(1000_00, BEFORE), [typedPlan()])).toBe(1084_00);
+    // The day the rule starts is already strict.
+    expect(
+      interestSavingOwedCents(withPaid(2084_00, PROMO_INSIDE_STATEMENT_RULE_FROM), [typedPlan()]),
+    ).toBe(916_00);
+    // A paid amount with no date gets the strict rule.
+    expect(interestSavingOwedCents(withPaid(2084_00, null), [typedPlan()])).toBe(916_00);
+  });
+
+  it("a statement still due after the rule changed is strict, even if paid before it", () => {
+    // Closed 11-01, due 11-28. Typed plan started 11-05. $2,084 paid on 11-12.
+    const stillDue = {
+      ...s(),
+      statementDate: "2026-11-01",
+      dueDate: "2026-11-28",
+      paidAmountCents: 2084_00,
+      paidDate: "2026-11-12",
+    };
+    const plan = typedPlan({ startDate: "2026-11-05", endDate: "2027-11-05" });
+    // $916 can still be paid before 11-28 to avoid interest.
+    expect(interestSavingOwedCents(stillDue, [plan])).toBe(916_00);
+    expect(paidWithoutInterest(stillDue, [plan])).toBe(false);
+  });
+
+  it("an auto-created late promo never gets the old view", () => {
+    expect(interestSavingOwedCents(withPaid(2084_00, BEFORE), [latePlan()])).toBe(916_00);
+  });
+
+  it("mixes: only the promo inside the statement is subtracted", () => {
+    const inside = promo({
+      id: "in", remainingAmountCents: 500_00, monthlyPaymentCents: 50_00,
+      startDate: "2026-05-01", endDate: "2027-05-01",
+    });
+    // 3,000 − 500 + 50 = 2,550; the late $1,000 plan changes nothing.
+    expect(interestSavingCashDueCents(s(), [inside, latePlan()])).toBe(2550_00);
+  });
+
+  it("the wallet/dashboard number follows the same rule", () => {
+    const owed = interestSavingOwedByStatement([s()], [latePlan()]);
+    expect(owed.get(s().id)).toBe(3000_00);
+    expect(openStatementObligation([s()], [latePlan()]).cents).toBe(3000_00);
+  });
+
+  it("the next statement, which closes after the plan started, subtracts it", () => {
+    const next = statement({
+      id: "s2", statementDate: "2026-08-10", dueDate: "2026-09-07",
+      statementBalanceCents: 1500_00, minimumPaymentCents: 40_00,
+    });
+    // 1,500 − 1,000 + 84 = 584.
+    expect(interestSavingCashDueCents(next, [latePlan()])).toBe(584_00);
+  });
+});
+
 describe("interestSavingCashDueCents", () => {
   // The four Equal Pay plans exactly as printed on the 07/10/26 statement.
   const equalPayPlans = [
@@ -694,7 +865,7 @@ describe("interestSavingCashDueCents", () => {
     const s = statement({
       statementBalanceCents: 1220_11,
       minimumPaymentCents: 143_16,
-      dueDate: "2026-08-07",
+      statementDate: "2026-07-10", dueDate: "2026-08-07",
     });
     expect(interestSavingCashDueCents(s, equalPayPlans)).toBe(832_26);
   });
@@ -704,7 +875,7 @@ describe("interestSavingCashDueCents", () => {
     const s = statement({
       statementBalanceCents: 653_13,
       minimumPaymentCents: 59_46,
-      dueDate: "2026-05-07",
+      statementDate: "2026-04-10", dueDate: "2026-05-07",
     });
     const plan = promo({
       remainingAmountCents: 146_75,
@@ -715,12 +886,12 @@ describe("interestSavingCashDueCents", () => {
   });
 
   it("is the plain cash due when there are no promos", () => {
-    const s = statement({ statementBalanceCents: 1220_11, dueDate: "2026-08-07" });
+    const s = statement({ statementBalanceCents: 1220_11, statementDate: "2026-07-10", dueDate: "2026-08-07" });
     expect(interestSavingCashDueCents(s, [])).toBe(1220_11);
   });
 
   it("ignores inactive and zero-remaining promos", () => {
-    const s = statement({ statementBalanceCents: 1220_11, dueDate: "2026-08-07" });
+    const s = statement({ statementBalanceCents: 1220_11, statementDate: "2026-07-10", dueDate: "2026-08-07" });
     expect(
       interestSavingCashDueCents(s, [
         promo({ isActive: false, remainingAmountCents: 500_00 }),
@@ -733,7 +904,7 @@ describe("interestSavingCashDueCents", () => {
     const s = statement({
       statementBalanceCents: 0,
       minimumPaymentCents: 35_00,
-      dueDate: "2026-08-07",
+      statementDate: "2026-07-10", dueDate: "2026-08-07",
     });
     expect(interestSavingCashDueCents(s, equalPayPlans)).toBe(35_00);
   });
@@ -751,7 +922,7 @@ describe("interestSavingCashDueCents", () => {
     const s = statement({
       statementBalanceCents: 210_00,
       minimumPaymentCents: 40_00,
-      dueDate: "2026-08-07",
+      statementDate: "2026-07-10", dueDate: "2026-08-07",
     });
     const plan = promo({ remainingAmountCents: 205_00, monthlyPaymentCents: 5_00, endDate: "2027-06-07" });
     // raw ISB = 210.00 − 205.00 + 5.00 = 10.00 → floored to $40.00.
@@ -761,7 +932,7 @@ describe("interestSavingCashDueCents", () => {
   it("an expired unreconciled promo keeps its full remaining inside the ISB", () => {
     // Past endDate the chunk is the full remaining (it IS interest-exposed
     // now), so the ISB equals the full balance again.
-    const s = statement({ statementBalanceCents: 500_00, dueDate: "2026-08-07" });
+    const s = statement({ statementBalanceCents: 500_00, statementDate: "2026-07-10", dueDate: "2026-08-07" });
     const expired = promo({ remainingAmountCents: 200_00, endDate: "2026-07-01" });
     expect(interestSavingCashDueCents(s, [expired])).toBe(500_00);
   });
@@ -770,7 +941,7 @@ describe("interestSavingCashDueCents", () => {
     const s = statement({
       statementBalanceCents: 1220_11,
       minimumPaymentCents: 143_16,
-      dueDate: "2026-08-07",
+      statementDate: "2026-07-10", dueDate: "2026-08-07",
       paidAmountCents: 832_26,
       paidDate: "2026-08-05",
     });
@@ -1122,7 +1293,7 @@ describe("openStatementObligation", () => {
     const s = statement({
       statementBalanceCents: 1220_11,
       paidAmountCents: 832_26,
-      dueDate: "2026-08-07",
+      statementDate: "2026-07-10", dueDate: "2026-08-07",
     });
     // A recorded payment makes it "not open", yet $387.85 is still owed.
     expect(isStatementOpen(s)).toBe(false);
@@ -1149,7 +1320,7 @@ describe("openStatementObligation", () => {
     const s = statement({
       statementBalanceCents: 1220_11,
       minimumPaymentCents: 143_16,
-      dueDate: "2026-08-07",
+      statementDate: "2026-07-10", dueDate: "2026-08-07",
     });
     const plans = [
       promo({ id: "ep1", remainingAmountCents: 73_37, endDate: "2026-10-07", monthlyPaymentCents: null }),
@@ -1177,7 +1348,7 @@ describe("interestSavingOwedCents", () => {
     statement({
       statementBalanceCents: 1220_11,
       minimumPaymentCents: 143_16,
-      dueDate: "2026-08-07",
+      statementDate: "2026-07-10", dueDate: "2026-08-07",
       ...over,
     });
 
@@ -1414,7 +1585,7 @@ describe("interestSavingOwedByStatement", () => {
 // "nothing due" — never a negative amount due.
 describe("negative statement balance (card carries a credit)", () => {
   const credit = (over: Partial<CreditCardStatementRow> = {}) =>
-    statement({ statementBalanceCents: -25_00, dueDate: "2026-08-07", ...over });
+    statement({ statementBalanceCents: -25_00, statementDate: "2026-07-10", dueDate: "2026-08-07", ...over });
 
   it("has no cash due and is not open", () => {
     expect(statementCashDueCents(credit())).toBe(0);
