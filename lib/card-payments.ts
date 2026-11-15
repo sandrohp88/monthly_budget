@@ -35,6 +35,7 @@
 import {
   dueDateFromStatement,
   interestSavingCashDueCents,
+  promosInsideStatement,
   nextDayOfMonthOnOrAfter,
   nextStatementDateOnOrAfter,
   previousStatementDateOnOrBefore,
@@ -248,6 +249,33 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
     list.push(p);
     promosByCard.set(p.cardId, list);
   }
+  // Which promos are inside which statement (PROJ-2): one rule, shared with the
+  // Interest Saving Balance.
+  const promoIdsInsideStatement = new Map<string, Set<string>>();
+  for (const s of statements) {
+    promoIdsInsideStatement.set(
+      s.id,
+      new Set(promosInsideStatement(s, promosByCard.get(s.cardId) ?? []).map((p) => p.id)),
+    );
+  }
+  // Promo principal that is inside at least one statement with an unpaid
+  // portion. Only this part of the promo total is contained in `unpaidByCard`;
+  // a promo that started after those statements closed is not.
+  const promoInsideUnpaidByCard = new Map<string, number>();
+  for (const p of promos) {
+    const inside = statements.some(
+      (s) =>
+        s.cardId === p.cardId &&
+        s.statementBalanceCents - (s.paidAmountCents ?? 0) > 0 &&
+        promoIdsInsideStatement.get(s.id)?.has(p.id) === true,
+    );
+    if (inside) {
+      promoInsideUnpaidByCard.set(
+        p.cardId,
+        (promoInsideUnpaidByCard.get(p.cardId) ?? 0) + p.remainingAmountCents,
+      );
+    }
+  }
   const liveBalanceForCard = (cardId: string): number | null => {
     const card = cardById.get(cardId);
     if (!card) return null;
@@ -335,7 +363,16 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
   for (const promo of promos) {
     const card = cardById.get(promo.cardId);
     if (!card) continue;
-    const skip = recordedDueDatesByCard.get(promo.cardId) ?? new Set<string>();
+    // A recorded statement covers this promo's plan payment for its cycle only
+    // when the promo is inside that statement (its Interest Saving Balance then
+    // carries the payment). A promo that started after the close is in no
+    // statement amount, so its payment must stay in the cash schedule (PROJ-2).
+    const skip = new Set<string>();
+    for (const s of statements) {
+      if (s.cardId === promo.cardId && promoIdsInsideStatement.get(s.id)?.has(promo.id)) {
+        skip.add(s.dueDate);
+      }
+    }
     const sched = promoPaymentsByPromoId.get(promo.id) ?? [];
     const schedule = projectPromoScheduleWithBalances(promo, card, today, skip, sched);
     for (const chunk of schedule) {
@@ -505,7 +542,10 @@ export function projectCardPayments(input: ProjectCardPaymentsInput): ProjectCar
       // collapses to $0 with a phantom "drift". Only when the unpaid total can
       // actually contain the principal (unpaid ≥ remaining) — a smaller total
       // is the PayPal shape, where statements bill only the cycle's cash.
-      const unpaid = unpaidRaw >= promoRemainingRaw ? unpaidRaw - promoRemainingRaw : unpaidRaw;
+      // Only the principal that is inside those unpaid statements is removed
+      // (PROJ-2): a promo that started after they closed is not in them.
+      const promoInsideUnpaid = promoInsideUnpaidByCard.get(card.id) ?? 0;
+      const unpaid = unpaidRaw >= promoInsideUnpaid ? unpaidRaw - promoInsideUnpaid : unpaidRaw;
       // Cap the promo subtraction at the live-balance headroom so a drifted
       // promo total can't wipe the estimate to $0; record the overflow.
       const headroom = Math.max(0, liveBalance - unpaid);

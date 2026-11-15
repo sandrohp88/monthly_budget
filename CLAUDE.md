@@ -1313,6 +1313,17 @@ due. `interestSavingCashDueCents(statement, promos)` in `lib/credit-cards.ts`
 owns this; the due markers, dashboard/wallet/detail dues, `paidWithoutInterest`,
 `looksLikePaid`, and `settleStatementWithDraft` matching all run through it, so
 paying the ISB reads as "paid, no interest" and auto-reconciles.
+Only promos that can be INSIDE the statement are subtracted (PROJ-2):
+`promosInsideStatement(statement, promos)` is the one decision point, also used
+by the open-cycle estimate and the promo cash schedule in `lib/card-payments.ts`.
+A promo counts when it comes from an issuer list (`chase_flex_plan_list`,
+`paypal_promo_list`; its `startDate` is the paste date) or when its `startDate`
+is on or before the statement's closing date. A later promo (a purchase after
+the close, or a plan typed/edited in the app, tagged `manual_reconciliation`)
+is not subtracted: asking for too much costs no interest, too little does. One
+exception keeps history stable: a `manual_reconciliation` promo still counts on
+a statement that was due and paid before `PROMO_INSIDE_STATEMENT_RULE_FROM`
+(the day the rule changed). Never judge that exception by the paid AMOUNT.
 The pages' "still due" numbers, next-due pick, overdue flags and
 `currentStatementOf` use `interestSavingOwedByStatement`: no payment recorded →
 full ISB if `isStatementOpen`; payment recorded on the card's NEWEST statement →
